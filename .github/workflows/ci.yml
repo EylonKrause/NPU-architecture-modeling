@@ -1,0 +1,50 @@
+name: build-and-test
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  compilers:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - cc: gcc
+            cxx: g++
+          - cc: clang
+            cxx: clang++
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build -j2
+      - name: Tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Architecture sweep
+        run: python3 scripts/sweep.py --binary build/npu-sim
+      - name: Timing-mode agreement
+        run: python3 scripts/compare_modes.py --binary build/npu-sim --repeats 2
+      - name: Two-layer inference
+        run: python3 scripts/mlp_demo.py --binary build/npu-sim
+
+  undefined-behavior:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure core sanitizer build
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNPU_ENABLE_SANITIZERS=ON
+      - name: Build
+        run: cmake --build build -j2
+      - name: Tests
+        env:
+          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
