@@ -1,23 +1,41 @@
 # Validation and experiment method
 
-The test suite and experiment tools address different claims. A matching output does not validate timing, and matching architecture cycles do not establish a faster host simulator or physical hardware.
+Numerical correctness, agreement with a scheduling contract, simulator runtime and hardware accuracy are separate claims. A matching output does not validate timing, and agreement between execution modes does not calibrate a device.
 
-## Required checks
+## Build and regression suite
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
 ctest --test-dir build --output-on-failure
-python3 scripts/sweep.py --binary build/npu-sim --output-dir results/sweep
-python3 scripts/compare_modes.py --binary build/npu-sim --output-dir results/modes
-python3 scripts/mlp_demo.py --binary build/npu-sim
 ```
 
-The core arithmetic tests cover signed zero-point correction, bias, rounding ties, saturation, ReLU, tile edges, deterministic generation, invalid parameters, and overflow handling. Independent Python checks should calculate expected values directly rather than reproduce only the C++ call graph. Compare full accumulators and quantized outputs; a hash is convenient evidence of identity but is not a substitute for a direct correctness comparison inside the executable.
+The standard suite covers the following evidence boundaries:
 
-Timing checks should include a single tile, one-slot serialization, overlapped tiles, memory-dominated and compute-dominated cases, non-divisible dimensions, and DMA arbitration. An independent event scheduler can validate the stated scheduling contract. The cycle and event implementations must also agree on final cycles, results, traffic, and stage spans. Agreement between two modes sharing scheduling code is a regression check, not independent proof of that code.
+| Area | Checks |
+| --- | --- |
+| C++ arithmetic and validation | Hand-calculated dense/per-channel results, INT4 fixtures, rounding modes, extreme products, saturation, ReLU, global tile indexing, overflow/cancellation, exact resource limits and deterministic randomized tiled workloads. |
+| Independent integration | Python integer arithmetic/hash oracle, timestamp-based DMA/compute scheduler, real tensors, default timing traces, malformed input, resource scaling and mode agreement. |
+| Quantization and INT4 | External tensor files, manual nearest-even examples, asymmetric channel parameters, independent unbounded-integer reference, signed INT4 endpoints and invalid channel/storage values. |
+| Extended architecture contract | Exact one-slot panel/array/burst timing oracle, panel acknowledgment ordering, shared-resource exclusion, INT4 padding, channel metadata, cache LRU/capacity behavior, SRAM boundaries and event/cycle trace identity. |
+| Graph inference | CNN/residual golden outputs, direct convolution reference versus lowered execution, padding/stride/dilation, depthwise channel mapping, host placement, scale validation, dependency scheduling and tensor liveness. |
+| Energy analysis | Hand-calculated units/components, required coefficients, latency consistency, strict result schema, overflow/nonfinite rejection and create-only output. |
+| Mapping search | Resource-constrained selection, latency/SRAM objectives, infeasible candidates, bounded search and unexpected-error propagation. |
 
-## Sanitizers
+The executable compares full accumulators and outputs; hashes are additional identity evidence. Python tests derive expected values independently rather than calling the C++ reference. The extended architecture test uses exact serial sums plus multi-slot causal/resource invariants; the original default-model scheduler additionally checks concurrent timestamps exactly. Event/cycle agreement shares implementation and therefore supplements, rather than replaces, independent checks.
+
+Optional ONNX import has a separate pinned dependency/test boundary. Its tests construct actual ONNX models and compare outputs with ONNX Runtime for the supported signed-INT8 subset, including nearest-even ties and convolution layout conversion. Unsupported operators, types, shapes, grouping and scale ratios are rejected. Do not infer general framework conformance from a supported fixture; consult [the import contract](ONNX.md).
+
+```sh
+python3 -m venv .venv-onnx
+.venv-onnx/bin/python -m pip install -r requirements-onnx.txt
+cmake -S . -B build-onnx -DCMAKE_BUILD_TYPE=Release \
+  -DNPU_ENABLE_ONNX_TESTS=ON -DPython3_EXECUTABLE="$PWD/.venv-onnx/bin/python"
+cmake --build build-onnx -j2
+ctest --test-dir build-onnx --output-on-failure
+```
+
+## Sanitizers and compilers
 
 ```sh
 cmake -S . -B build-ubsan -DCMAKE_BUILD_TYPE=Debug -DNPU_ENABLE_SANITIZERS=ON
@@ -25,32 +43,39 @@ cmake --build build-ubsan -j2
 ctest --test-dir build-ubsan --output-on-failure
 ```
 
-The sanitizer option instruments the project's arithmetic, SystemC model, CLI and test code. SystemC is a separately built dependency; passing these checks does not certify every dependency or eliminate all possible C++ lifetime errors. Continuous integration builds with GCC and Clang and runs the sanitizer configuration.
+The sanitizer option instruments project arithmetic, scheduling, CLI and C++ test code. SystemC is a separate dependency. GCC/Clang builds and sanitizer checks catch important regressions but do not certify every dependency or eliminate all lifetime, threading or portability bugs. CI configuration and the latest run determine which environments have actually passed.
 
-## Architecture sweep
+## Reproducible experiments
 
-The sweep uses deterministic workload fixtures and pairs each alternative with a baseline for the same shape, seed, and quantization. It reports individual cycle counts, output hashes, correctness, configuration, and cycle ratios. Positive integer cycles are required. A modeled speedup ratio is
+```sh
+python3 scripts/sweep.py --binary build/npu-sim --output-dir results/sweep
+python3 scripts/compare_modes.py --binary build/npu-sim --output-dir results/modes
+python3 scripts/autotune.py --binary build/npu-sim --output-dir results/search
+python3 scripts/graph_runtime.py examples/cnn.json --binary build/npu-sim
+python3 scripts/graph_runtime.py examples/residual_mlp.json --binary build/npu-sim
+```
+
+Hold tensor values, shapes and quantization fixed when changing architecture. Inspect SRAM feasibility, external bytes, busy cycles, slot pressure, cache statistics and output identity. One slot supplies the serial timing baseline. Reduction tiling should preserve outputs while changing SRAM and panel overhead. Cache capacity should alter traffic only when the specified access pattern reuses resident panels. Array geometry should expose ragged-wave inefficiency rather than create useful throughput above its area budget.
+
+Mapping search reports every enumerated candidate, skips only recognized SRAM infeasibility, and propagates other failures. It is not a global optimum across unsearched dataflows or devices. Report the objective, candidate set and constraints with the winning result.
+
+For paired cycle ratios,
 
 $$
-r_i=\frac{C_{\mathrm{baseline},i}}{C_{\mathrm{candidate},i}}.
-$$
-
-For a complete set of comparable pairs, the aggregate is
-
-$$
+r_i=\frac{C_{\mathrm{baseline},i}}{C_{\mathrm{candidate},i}},\qquad
 G=\exp\left(\frac{1}{N}\sum_{i=1}^{N}\log r_i\right).
 $$
 
-Never average unrelated workload results into an unsupported headline. These are modeled cycle ratios under one timing contract, not measured hardware speedups. Inspect memory and compute busy cycles and traffic when explaining a result. The script does not require every resource increase to improve performance; unchanged results can be the expected outcome when a different resource is limiting.
+Keep individual cases alongside the geometric mean. Do not aggregate unrelated comparisons into a hardware-speedup claim. A resource increase can legitimately leave elapsed cycles unchanged when another resource dominates.
 
-## Timing-mode experiment
+## Timing-mode and energy boundaries
 
-`compare_modes.py` runs the same deterministic configurations in event and cycle modes, verifies architecture-result agreement, and repeats host measurements. It uses median subprocess wall time for each mode and case, retaining every measurement. Subprocess wall time includes process startup and is affected by host load, compiler settings, CPU scheduling, and system libraries. The executable's own host simulation duration, when available, has a narrower boundary and is retained separately.
+`compare_modes.py` verifies identical architecture results and repeats host measurements. Median subprocess wall time includes startup, scheduling and library effects. The executable's simulation wall time has a narrower boundary. Small cases can be dominated by startup noise. Neither host metric changes modeled accelerator cycles.
 
-Use sufficiently large simulated workloads when investigating event-versus-cycle overhead. Small cases can be dominated by startup noise. A host-runtime ratio says how quickly this executable simulates a case on this machine; it does not alter the modeled accelerator latency.
+Energy analysis requires declared coefficients and a valid simulator result. Keep coefficient provenance, units and omitted components with each report. Synthetic test coefficients verify arithmetic; they are not technology measurements. Graph host fallbacks and lowering are excluded from NPU cycles and from the single-invocation energy tool's action counts.
 
 ## Evidence and limits
 
-Save the JSON and CSV reports alongside the exact executable build, compiler version, host, and command when publishing measurements. Report failed cases and regressions. Generated results are ignored by Git by default so results are not mistaken for portable guarantees.
+Retain commands, model revision, compiler/build settings, workload identity, configuration and JSON/CSV when publishing results. Record failures and regressions. Generated reports remain outside tracked source by default.
 
-The arithmetic follows the repository's explicit contract. There is no ONNX or TFLite conformance claim. Timing has no supplied RTL or silicon ground truth. Memory requests model service latency and bandwidth without physical bank conflicts, DRAM refresh, bus topology, or cache coherence. Real workload performance needs model calibration and validation against the target hardware before architectural decisions can be treated as hardware predictions.
+No supplied RTL/silicon timing reference validates transfer startup, array fill/drain, physical memory behavior or energy. A capacity bound does not model SRAM bank conflicts, DRAM refresh, NoC routing or coherence. Standard-model import, when supported for a strict subset, does not establish complete ONNX/TFLite runtime conformance. Calibrate and independently validate against a selected implementation before treating architectural predictions as hardware results.

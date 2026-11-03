@@ -87,6 +87,35 @@ void check_requantization() {
     rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "output zero is not INT8");
 }
 
+void check_even_rounding() {
+    npu::Quantization q;
+    q.input_zero = q.weight_zero = q.output_zero = 0;
+    q.rounding = "even";
+    q.multiplier = 1;
+    q.shift = 1;
+    const std::vector<std::int32_t> inputs = {-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5};
+    const std::vector<int> expected = {-2, -2, -2, -1, 0, 0, 0, 1, 2, 2, 2};
+    for (std::size_t i = 0; i < inputs.size(); ++i)
+        require(npu::requantize(inputs[i], q) == expected[i], "nearest ties to even");
+    q.output_zero = 7;
+    require(npu::requantize(-1, q) == 7 && npu::requantize(1, q) == 7 &&
+                npu::requantize(-3, q) == 5 && npu::requantize(3, q) == 9,
+            "even rounding precedes output zero point");
+    q.output_zero = 0;
+    q.multiplier = INT32_MAX;
+    q.shift = 0;
+    require(npu::requantize(INT32_MAX, q) == 127 && npu::requantize(INT32_MIN, q) == -128,
+            "even extreme products saturate without overflow");
+    q.multipliers = {1, 1, 1};
+    q.shifts = {1, 2, 3};
+    require(npu::requantize(5, q, 0) == 2 && npu::requantize(-5, q, 0) == -2 &&
+                npu::requantize(6, q, 1) == 2 && npu::requantize(-6, q, 1) == -2 &&
+                npu::requantize(20, q, 2) == 2 && npu::requantize(-20, q, 2) == -2,
+            "per-channel nearest-even at different scales");
+    q.rounding = "floor";
+    rejects<std::invalid_argument>([&] { npu::requantize(1, q); }, "unsupported rounding mode");
+}
+
 void check_known_dense() {
     npu::Problem p;
     p.m = p.n = 2;
@@ -112,6 +141,100 @@ void check_known_dense() {
     npu::compute_tile(p, q, {1, 0, 1, 2, 1}, tiled);
     require(tiled.accumulators == result.accumulators, "tiled known accumulator");
     require(tiled.quantized == std::vector<std::int8_t>{8, 5, 3, 3}, "tiled known output");
+}
+
+void check_per_channel_quantization() {
+    npu::Problem p;
+    p.m = 2;
+    p.n = 3;
+    p.k = 2;
+    p.activations = {1, 3, -2, 4};
+    p.weights = {2, -3, 7, -4, 6, -8};
+    p.bias = {5, -7, 3};
+    npu::Quantization q;
+    q.input_zero = 1;
+    q.weight_zero = 0;
+    q.weight_zero_points = {1, -2, 3};
+    q.output_zero = 5;
+    q.multipliers = {1, 3, 2};
+    q.shifts = {1, 2, 0};
+    const auto result = npu::reference(p, q);
+    // Row0: [5 + 0*1 + 2*(-5), -7 + 0*(-1) + 2*8,
+    //        3 + 0*4 + 2*(-11)] = [-5, 9, -19].
+    // Row1: [5 - 3*1 - 3*5, -7 + 3 + 24, 3 - 12 - 33].
+    require(result.accumulators == std::vector<std::int32_t>{-5, 9, -19, -13, 20, -42},
+            "hand-calculated per-channel weight zero points");
+    require(result.quantized == std::vector<std::int8_t>{2, 12, -33, -2, 20, -79},
+            "hand-calculated per-channel scales and rounding");
+    npu::Output tiled;
+    // Nonzero global tile column must index channel1, not local channel0.
+    npu::compute_tile(p, q, {1, 0, 1, 2, 2}, tiled);
+    npu::compute_tile(p, q, {0, 0, 0, 2, 1}, tiled);
+    require(tiled.accumulators == result.accumulators && tiled.quantized == result.quantized,
+            "per-channel tiled global-column indexing");
+    q.relu = true;
+    require(npu::reference(p, q).quantized == std::vector<std::int8_t>{5, 12, 5, 5, 20, 5},
+            "per-channel fused ReLU clamps at output zero");
+    q.weight_zero_points.clear();
+    q.multipliers.clear();
+    q.shifts = {0, 1, 2};
+    q.relu = false;
+    require(npu::requantize(-1, q, 1) == 4 && npu::requantize(-2, q, 2) == 4,
+            "independently optional per-channel shifts and negative ties");
+    q.multipliers = {0, static_cast<std::uint32_t>(INT32_MAX), 2};
+    q.shifts = {0, 0, 31};
+    require(npu::requantize(INT32_MIN, q, 0) == 5 &&
+                npu::requantize(INT32_MAX, q, 1) == 127 &&
+                npu::requantize(INT32_MIN, q, 1) == -128 &&
+                npu::requantize(INT32_MIN, q, 2) == 3,
+            "per-channel zero multiplier, extreme products and saturation");
+    rejects<std::out_of_range>([&] { npu::requantize(1, q, 3); },
+                               "per-channel requantization channel bounds");
+    q.multipliers = {1};
+    rejects<std::invalid_argument>([&] { npu::reference(p, q); },
+                                   "per-channel parameter count is N");
+    q.multipliers.clear();
+    q.shifts = {0, 32, 0};
+    rejects<std::invalid_argument>([&] { npu::reference(p, q); },
+                                   "per-channel shift exceeds31");
+    q.shifts.clear();
+    q.weight_zero_points = {0, 128, 0};
+    rejects<std::invalid_argument>([&] { npu::reference(p, q); },
+                                   "per-channel zero point is INT8");
+}
+
+void check_int4() {
+    npu::Config c;
+    c.m = c.n = c.k = 2;
+    c.weight_bits = 4;
+    c.quant.weight_zero = 0;
+    const auto p = npu::make_problem(c);
+    require(p.weights == std::vector<std::int8_t>{-8, 7, -6, 1},
+            "signed INT4 fixture uses exact two's-complement range");
+    require(std::all_of(p.weights.begin(), p.weights.end(), [](std::int8_t w) {
+        return w >= -8 && w <= 7;
+    }), "INT4 fixture legal weights");
+    npu::Problem known;
+    known.m = 1; known.n = 2; known.k = 2;
+    known.activations = {127, -128};
+    known.weights = {-8, 7, 7, -8};
+    known.bias = {1, -1};
+    npu::Quantization q;
+    q.input_zero = q.weight_zero = q.output_zero = 0;
+    q.shift = 0;
+    const auto result = npu::reference(known, q);
+    require(result.accumulators == std::vector<std::int32_t>{-1911, 1912} &&
+                result.quantized == std::vector<std::int8_t>{-128, 127},
+            "INT4 negative endpoints and saturated INT8 output");
+    c.quant.weight_zero = -9;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "INT4 scalar zero outside range");
+    c.quant.weight_zero = 0;
+    c.quant.weight_zero_points = {-8, 8};
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "INT4 channel zero outside range");
+    c.quant.weight_zero_points = {-8, 7};
+    npu::validate(c);
+    c.weight_bits = 3;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be4 or8");
 }
 
 void check_fixture() {
@@ -172,6 +295,55 @@ void check_tiles_and_timing() {
             "oversized mapping allocates actual extents");
 }
 
+void check_reduction_panels_and_systolic() {
+    npu::Config c;
+    c.m = 5; c.n = 7; c.k = 5;
+    c.tile_m = 3; c.tile_n = 4; c.tile_k = 2;
+    c.weight_bits = 4;
+    c.macs_per_cycle = 7;
+    c.pipeline_cycles = 2;
+    c.quant.weight_zero_points.assign(7, 0);
+    c.quant.multipliers.assign(7, 1);
+    c.quant.shifts.assign(7, 0);
+    const npu::Tile tile{0, 0, 0, 3, 4};
+    npu::validate(c);
+    require(npu::reduction_blocks(c) == 3 && npu::panel_k(c, 0) == 2 &&
+                npu::panel_k(c, 2) == 1, "K panels include final edge");
+    require(npu::panel_read_bytes(c, tile, 0) == 74 &&
+                npu::panel_read_bytes(c, tile, 1) == 10 &&
+                npu::panel_read_bytes(c, tile, 2) == 5 &&
+                npu::tile_read_bytes(c, tile) == 89,
+            "INT4 panel traffic includes first-panel bias and quant metadata");
+    require(npu::scratchpad_bytes(c) == 268,
+            "SRAM fits one Kpanel plus persistent accumulators and metadata per slot");
+    require(npu::panel_compute_cycles(c, tile, 0) == 6 &&
+                npu::panel_compute_cycles(c, tile, 2) == 4 &&
+                npu::tile_compute_cycles(c, tile) == 16,
+            "vector pipeline charged for every Kpanel");
+    c.array_rows = 2; c.array_cols = 3;
+    require(npu::peak_macs_per_cycle(c) == 6 &&
+                npu::panel_compute_cycles(c, tile, 0) == 22 &&
+                npu::panel_compute_cycles(c, tile, 2) == 18 &&
+                npu::tile_compute_cycles(c, tile) == 62,
+            "systolic fold waves and fill/drain including edge Kpanel");
+    rejects<std::invalid_argument>([&] { npu::panel_k(c, 3); }, "K block bounds");
+    c.array_rows = 0;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "both array dimensions required");
+    c.array_rows = 257;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
+    c.array_rows = c.array_cols = 0;
+    c.tile_k = 4097;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "Ktile bound");
+    c = npu::Config{};
+    c.m = 1; c.n = 3; c.k = 3;
+    c.tile_m = 1; c.tile_n = 3; c.tile_k = 1; c.weight_bits = 4;
+    require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 21,
+            "odd INT4 nibble is padded separately in each DMApanel");
+    c.tile_k = 0;
+    require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 20,
+            "fullK uses only one INT4 pad nibble");
+}
+
 void check_random_edges() {
     std::uint32_t state = 0x361c1eU;
     const auto next = [&state]() {
@@ -192,6 +364,13 @@ void check_random_edges() {
         c.quant.multiplier = next() % 257;
         c.quant.shift = next() % 18;
         c.quant.relu = next() % 2 != 0;
+        if (trial % 2) {
+            for (std::uint64_t col = 0; col < c.n; ++col) {
+                c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 256) - 128);
+                c.quant.multipliers.push_back(next() % 257);
+                c.quant.shifts.push_back(next() % 18);
+            }
+        }
         const auto p = npu::make_problem(c);
         const auto original_a = p.activations;
         const auto original_b = p.weights;
@@ -317,9 +496,13 @@ int main() {
     try {
         check_arithmetic();
         check_requantization();
+        check_even_rounding();
         check_known_dense();
+        check_per_channel_quantization();
+        check_int4();
         check_fixture();
         check_tiles_and_timing();
+        check_reduction_panels_and_systolic();
         check_random_edges();
         check_overflow_and_shapes();
         check_validation();

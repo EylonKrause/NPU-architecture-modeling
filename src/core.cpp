@@ -29,6 +29,32 @@ void validate_quant(const Quantization& quant) {
                 std::numeric_limits<std::int32_t>::max()),
             "requantization multiplier must be at most INT32_MAX");
     require(quant.shift <= 31, "requantization shift must be in 0..31");
+    require(quant.rounding == "away" || quant.rounding == "even",
+            "requantization rounding must be away or even");
+    for (const auto value : quant.weight_zero_points)
+        require(value >= -128 && value <= 127,
+                "per-channel weight zero points must be signed INT8");
+    for (const auto value : quant.multipliers)
+        require(value <= static_cast<std::uint32_t>(
+                    std::numeric_limits<std::int32_t>::max()),
+                "per-channel multipliers must be at most INT32_MAX");
+    for (const auto value : quant.shifts)
+        require(value <= 31, "per-channel shifts must be in 0..31");
+}
+
+void validate_quant_channels(const Quantization& quant, std::uint64_t channels) {
+    validate_quant(quant);
+    require(quant.weight_zero_points.empty() || quant.weight_zero_points.size() == channels,
+            "per-channel weight zero point count must equal N");
+    require(quant.multipliers.empty() || quant.multipliers.size() == channels,
+            "per-channel multiplier count must equal N");
+    require(quant.shifts.empty() || quant.shifts.size() == channels,
+            "per-channel shift count must equal N");
+}
+
+std::int32_t weight_zero(const Quantization& quant, std::uint64_t channel) {
+    return quant.weight_zero_points.empty() ? quant.weight_zero :
+        quant.weight_zero_points.at(static_cast<std::size_t>(channel));
 }
 
 void validate_shape(std::uint64_t m, std::uint64_t n, std::uint64_t k) {
@@ -63,17 +89,93 @@ std::int32_t checked_accumulator(std::int64_t value) {
     return static_cast<std::int32_t>(value);
 }
 
-std::uint64_t read_bytes(std::uint64_t k, std::uint64_t rows,
-                         std::uint64_t cols) {
-    return checked_add(checked_add(checked_mul(rows, k), checked_mul(k, cols)),
-                       checked_mul(4, cols));
+void validate_mapping(const Config& config) {
+    require(config.weight_bits == 4 || config.weight_bits == 8,
+            "weight bits must be 4 or 8");
+    require(config.tile_k <= max_dimension,
+            "reduction tile dimension must be zero (full K) or in 1..4096");
+    require((config.array_rows == 0 && config.array_cols == 0) ||
+                (config.array_rows >= 1 && config.array_rows <= 256 &&
+                 config.array_cols >= 1 && config.array_cols <= 256),
+            "systolic array dimensions must both be zero or in 1..256");
+}
+
+std::uint64_t channel_metadata_bytes(const Config& config, std::uint64_t cols) {
+    const auto vectors = static_cast<std::uint64_t>(!config.quant.weight_zero_points.empty()) +
+        static_cast<std::uint64_t>(!config.quant.multipliers.empty()) +
+        static_cast<std::uint64_t>(!config.quant.shifts.empty());
+    return checked_mul(checked_mul(4, cols), vectors);
+}
+
+std::uint64_t panel_bytes(const Config& config, std::uint64_t k,
+                          std::uint64_t rows, std::uint64_t cols, bool first) {
+    const auto activations = checked_mul(rows, k);
+    const auto weights = ceil_div(checked_mul(checked_mul(k, cols), config.weight_bits), 8);
+    const auto metadata = first ? checked_add(checked_mul(4, cols),
+                                               channel_metadata_bytes(config, cols)) : 0;
+    return checked_add(checked_add(activations, weights), metadata);
+}
+
+std::uint64_t compute_panel_cycles(const Config& config, std::uint64_t rows,
+                                   std::uint64_t cols, std::uint64_t k) {
+    std::uint64_t work = 0;
+    if (config.array_rows != 0) {
+        const auto waves = checked_mul(ceil_div(rows, config.array_rows),
+                                        ceil_div(cols, config.array_cols));
+        const auto fill_drain = checked_add(config.array_rows, config.array_cols) - 2;
+        work = checked_mul(waves, checked_add(k, fill_drain));
+    } else {
+        work = ceil_div(checked_mul(checked_mul(rows, cols), k), config.macs_per_cycle);
+    }
+    return checked_add(work, config.pipeline_cycles);
+}
+
+std::uint64_t all_read_bytes(const Config& config, std::uint64_t rows,
+                             std::uint64_t cols) {
+    std::uint64_t total = 0;
+    for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
+        total = checked_add(total, panel_bytes(config, panel_k(config, block), rows, cols, block == 0));
+    return total;
 }
 
 std::uint64_t compute_cycles(const Config& config, std::uint64_t rows,
                              std::uint64_t cols) {
-    return checked_add(ceil_div(checked_mul(checked_mul(rows, cols), config.k),
-                                 config.macs_per_cycle),
-                       config.pipeline_cycles);
+    std::uint64_t total = 0;
+    for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
+        total = checked_add(total, compute_panel_cycles(config, rows, cols, panel_k(config, block)));
+    return total;
+}
+
+std::int8_t requantize_unchecked(std::int32_t accumulator, const Quantization& quant,
+                       std::uint64_t channel) {
+    if ((!quant.multipliers.empty() && channel >= quant.multipliers.size()) ||
+        (!quant.shifts.empty() && channel >= quant.shifts.size()))
+        throw std::out_of_range("requantization channel is outside parameter vectors");
+    const auto index = static_cast<std::size_t>(channel);
+    const auto multiplier = quant.multipliers.empty() ? quant.multiplier :
+        quant.multipliers.at(index);
+    const auto shift = quant.shifts.empty() ? quant.shift : quant.shifts.at(index);
+    // INT32 * at most INT32_MAX fits in INT64, including INT32_MIN.
+    const auto product = static_cast<std::int64_t>(accumulator) * multiplier;
+    const auto magnitude = static_cast<std::uint64_t>(product < 0 ? -product : product);
+    auto rounded_magnitude = magnitude;
+    if (shift != 0) {
+        const auto half = UINT64_C(1) << (shift - 1);
+        if (quant.rounding == "even") {
+            const auto quotient = magnitude >> shift;
+            const auto remainder = magnitude & ((UINT64_C(1) << shift) - 1);
+            const bool increment = remainder > half ||
+                (remainder == half && (quotient & UINT64_C(1)) != 0);
+            rounded_magnitude = quotient + static_cast<std::uint64_t>(increment);
+        } else {
+            rounded_magnitude = (magnitude + half) >> shift;
+        }
+    }
+    auto scaled = product < 0 ? -static_cast<std::int64_t>(rounded_magnitude) :
+                               static_cast<std::int64_t>(rounded_magnitude);
+    scaled += quant.output_zero;
+    if (quant.relu) scaled = std::max(scaled, static_cast<std::int64_t>(quant.output_zero));
+    return static_cast<std::int8_t>(std::clamp<std::int64_t>(scaled, -128, 127));
 }
 
 }  // namespace
@@ -95,22 +197,44 @@ std::uint64_t ceil_div(std::uint64_t a, std::uint64_t b) {
     return a / b + static_cast<std::uint64_t>(a % b != 0);
 }
 
+std::uint64_t dma_transfer_cycles(const Config& config, std::uint64_t bytes) {
+    if (!bytes) return 0;
+    if (!config.dma_burst_bytes)
+        return checked_add(config.memory_latency, ceil_div(bytes, config.memory_bytes_per_cycle));
+    const auto full = bytes / config.dma_burst_bytes;
+    const auto tail = bytes % config.dma_burst_bytes;
+    auto cycles = checked_mul(full, checked_add(config.memory_latency,
+        ceil_div(config.dma_burst_bytes, config.memory_bytes_per_cycle)));
+    if (tail) cycles = checked_add(cycles, checked_add(config.memory_latency,
+        ceil_div(tail, config.memory_bytes_per_cycle)));
+    return cycles;
+}
+
 std::uint64_t scratchpad_bytes(const Config& config) {
     validate_shape(config.m, config.n, config.k);
+    validate_mapping(config);
     require(config.tile_m >= 1 && config.tile_m <= max_dimension &&
                 config.tile_n >= 1 && config.tile_n <= max_dimension &&
                 config.buffer_slots >= 1 && config.buffer_slots <= 64,
             "scratchpad tile dimensions must be in 1..4096 and slots in 1..64");
     const auto rows = std::min(config.tile_m, config.m);
     const auto cols = std::min(config.tile_n, config.n);
-    const auto per_slot = checked_add(read_bytes(config.k, rows, cols),
+    const auto per_slot = checked_add(panel_bytes(config, std::min(config.k, config.tile_k ? config.tile_k : config.k), rows, cols, true),
                                       checked_mul(5, checked_mul(rows, cols)));
-    return checked_mul(per_slot, config.buffer_slots);
+    return checked_add(checked_mul(per_slot, config.buffer_slots), config.weight_cache_bytes);
 }
 
 void validate(const Config& config) {
     validate_shape(config.m, config.n, config.k);
-    validate_quant(config.quant);
+    validate_quant_channels(config.quant, config.n);
+    validate_mapping(config);
+    if (config.weight_bits == 4) {
+        require(config.quant.weight_zero >= -8 && config.quant.weight_zero <= 7,
+                "INT4 weight zero point must be in -8..7");
+        for (const auto value : config.quant.weight_zero_points)
+            require(value >= -8 && value <= 7,
+                    "INT4 per-channel weight zero points must be in -8..7");
+    }
     require(config.tile_m >= 1 && config.tile_m <= max_dimension &&
                 config.tile_n >= 1 && config.tile_n <= max_dimension,
             "tile dimensions must be in 1..4096");
@@ -124,6 +248,8 @@ void validate(const Config& config) {
     require(config.memory_latency <= max_timing_value &&
                 config.pipeline_cycles <= max_timing_value,
             "latency and pipeline cycles must be at most 1000000000");
+    require(config.dma_burst_bytes <= max_timing_value && config.weight_cache_bytes <= max_timing_value,
+            "DMA burst and weight cache sizes must be at most 1000000000 bytes");
     require(std::isfinite(config.frequency_mhz) && config.frequency_mhz >= 1e-6 &&
                 config.frequency_mhz <= static_cast<double>(max_timing_value),
             "frequency MHz must be finite and in 0.000001..1000000000 (at least 1 Hz)");
@@ -134,7 +260,7 @@ void validate(const Config& config) {
 
     // Account for both reference and simulated outputs, INT64 tile scratch,
     // inputs, tile metadata and trace storage before any allocation. The
-    // conservative per tile trace and sort budget is 512 bytes, inclusive of
+    // conservative per reduction-panel trace and sort budget is 512 bytes, inclusive of
     // Tile, three Span records (including their strings), and three pointers
     // for chronological trace sorting. Keeping this bound here avoids a
     // dependency from the arithmetic library to the SystemC model headers.
@@ -148,7 +274,8 @@ void validate(const Config& config) {
     host_bytes = checked_add(host_bytes, checked_mul(10, outputs));
     host_bytes = checked_add(host_bytes, checked_mul(8, checked_mul(
         std::min(config.m, config.tile_m), std::min(config.n, config.tile_n))));
-    host_bytes = checked_add(host_bytes, checked_mul(512, tile_count));
+    host_bytes = checked_add(host_bytes, checked_mul(512, checked_mul(tile_count, reduction_blocks(config))));
+    host_bytes = checked_add(host_bytes, channel_metadata_bytes(config, config.n));
     require(host_bytes <= max_host_bytes,
             "estimated simulator working storage exceeds 256 MiB");
 
@@ -165,14 +292,16 @@ void validate(const Config& config) {
         for (unsigned c = 0; c < 2; ++c) {
             const auto count = checked_mul(row_counts[r], col_counts[c]);
             if (!count) continue;
-            auto cycles = checked_add(config.memory_latency,
-                ceil_div(read_bytes(config.k, row_sizes[r], col_sizes[c]),
-                         config.memory_bytes_per_cycle));
+            std::uint64_t cycles = 0;
+            for (std::uint64_t block = 0; block < reduction_blocks(config); ++block) {
+                const auto bytes = panel_bytes(config, panel_k(config, block),
+                                                row_sizes[r], col_sizes[c], block == 0);
+                cycles = checked_add(cycles, dma_transfer_cycles(config, bytes));
+            }
             cycles = checked_add(cycles,
                 compute_cycles(config, row_sizes[r], col_sizes[c]));
-            cycles = checked_add(cycles, checked_add(config.memory_latency,
-                ceil_div(checked_mul(row_sizes[r], col_sizes[c]),
-                         config.memory_bytes_per_cycle)));
+            cycles = checked_add(cycles, dma_transfer_cycles(config,
+                checked_mul(row_sizes[r], col_sizes[c])));
             serial_cycles = checked_add(serial_cycles, checked_mul(count, cycles));
         }
     }
@@ -201,7 +330,9 @@ Problem make_problem(const Config& config) {
     for (auto& value : problem.activations)
         value = static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
     for (auto& value : problem.weights)
-        value = static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
+        value = config.weight_bits == 4 ?
+            static_cast<std::int8_t>(static_cast<int>(next() % 16) - 8) :
+            static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
     for (auto& value : problem.bias)
         value = static_cast<std::int32_t>(next() % 127) - 63;
     return problem;
@@ -223,22 +354,18 @@ std::vector<Tile> make_tiles(const Config& config) {
 }
 
 std::int8_t requantize(std::int32_t accumulator, const Quantization& quant) {
+    return requantize(accumulator, quant, 0);
+}
+
+std::int8_t requantize(std::int32_t accumulator, const Quantization& quant,
+                       std::uint64_t channel) {
     validate_quant(quant);
-    // INT32 * at most INT32_MAX fits in INT64, including INT32_MIN.
-    const auto product = static_cast<std::int64_t>(accumulator) * quant.multiplier;
-    const auto magnitude = static_cast<std::uint64_t>(product < 0 ? -product : product);
-    const auto rounded_magnitude = quant.shift == 0 ? magnitude :
-        (magnitude + (UINT64_C(1) << (quant.shift - 1))) >> quant.shift;
-    auto scaled = product < 0 ? -static_cast<std::int64_t>(rounded_magnitude) :
-                               static_cast<std::int64_t>(rounded_magnitude);
-    scaled += quant.output_zero;
-    if (quant.relu) scaled = std::max(scaled, static_cast<std::int64_t>(quant.output_zero));
-    return static_cast<std::int8_t>(std::clamp<std::int64_t>(scaled, -128, 127));
+    return requantize_unchecked(accumulator, quant, channel);
 }
 
 Output reference(const Problem& problem, const Quantization& quant) {
     validate_problem(problem);
-    validate_quant(quant);
+    validate_quant_channels(quant, problem.n);
     Output result;
     const auto size = static_cast<std::size_t>(problem.m * problem.n);
     result.accumulators.resize(size);
@@ -251,12 +378,12 @@ Output reference(const Problem& problem, const Quantization& quant) {
                 const auto a = static_cast<std::int32_t>(
                     problem.activations[static_cast<std::size_t>(row * problem.k + k)]) - quant.input_zero;
                 const auto b = static_cast<std::int32_t>(
-                    problem.weights[static_cast<std::size_t>(k * problem.n + col)]) - quant.weight_zero;
+                    problem.weights[static_cast<std::size_t>(k * problem.n + col)]) - weight_zero(quant, col);
                 accumulator += static_cast<std::int64_t>(a) * b;
             }
             const auto index = static_cast<std::size_t>(row * problem.n + col);
             result.accumulators[index] = checked_accumulator(accumulator);
-            result.quantized[index] = requantize(result.accumulators[index], quant);
+            result.quantized[index] = requantize_unchecked(result.accumulators[index], quant, col);
         }
     }
     return result;
@@ -265,7 +392,7 @@ Output reference(const Problem& problem, const Quantization& quant) {
 void compute_tile(const Problem& problem, const Quantization& quant,
                   const Tile& tile, Output& output) {
     validate_problem(problem);
-    validate_quant(quant);
+    validate_quant_channels(quant, problem.n);
     validate_tile(tile, problem.m, problem.n);
     const auto output_size = static_cast<std::size_t>(problem.m * problem.n);
     if (output.accumulators.empty() && output.quantized.empty()) {
@@ -288,7 +415,7 @@ void compute_tile(const Problem& problem, const Quantization& quant,
                 static_cast<std::size_t>((tile.row + row) * problem.k + k)]) - quant.input_zero;
             for (std::uint64_t col = 0; col < tile.cols; ++col) {
                 const auto b = static_cast<std::int32_t>(problem.weights[
-                    static_cast<std::size_t>(k * problem.n + tile.col + col)]) - quant.weight_zero;
+                    static_cast<std::size_t>(k * problem.n + tile.col + col)]) - weight_zero(quant, tile.col + col);
                 sums[static_cast<std::size_t>(row * tile.cols + col)] +=
                     static_cast<std::int64_t>(a) * b;
             }
@@ -300,15 +427,53 @@ void compute_tile(const Problem& problem, const Quantization& quant,
                 sums[static_cast<std::size_t>(row * tile.cols + col)]);
             const auto index = static_cast<std::size_t>((tile.row + row) * problem.n + tile.col + col);
             output.accumulators[index] = accumulator;
-            output.quantized[index] = requantize(accumulator, quant);
+            output.quantized[index] = requantize_unchecked(accumulator, quant, tile.col + col);
         }
     }
+}
+
+std::uint64_t reduction_blocks(const Config& config) {
+    validate_shape(config.m, config.n, config.k);
+    validate_mapping(config);
+    return ceil_div(config.k, config.tile_k ? config.tile_k : config.k);
+}
+
+std::uint64_t panel_k(const Config& config, std::uint64_t block) {
+    const auto blocks = reduction_blocks(config);
+    require(block < blocks, "reduction block is outside K");
+    const auto size = config.tile_k ? config.tile_k : config.k;
+    return std::min(size, config.k - checked_mul(block, size));
+}
+
+std::uint64_t panel_read_bytes(const Config& config, const Tile& tile,
+                               std::uint64_t block) {
+    validate_shape(config.m, config.n, config.k);
+    validate_tile(tile, config.m, config.n);
+    validate_mapping(config);
+    return panel_bytes(config, panel_k(config, block), tile.rows, tile.cols, block == 0);
+}
+
+std::uint64_t panel_compute_cycles(const Config& config, const Tile& tile,
+                                   std::uint64_t block) {
+    validate_shape(config.m, config.n, config.k);
+    validate_tile(tile, config.m, config.n);
+    validate_mapping(config);
+    require(config.macs_per_cycle >= 1 && config.macs_per_cycle <= max_timing_value &&
+                config.pipeline_cycles <= max_timing_value,
+            "compute rate or pipeline timing is outside supported limits");
+    return compute_panel_cycles(config, tile.rows, tile.cols, panel_k(config, block));
+}
+
+std::uint64_t peak_macs_per_cycle(const Config& config) {
+    validate_mapping(config);
+    return config.array_rows ? checked_mul(config.array_rows, config.array_cols) : config.macs_per_cycle;
 }
 
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile) {
     validate_shape(config.m, config.n, config.k);
     validate_tile(tile, config.m, config.n);
-    return read_bytes(config.k, tile.rows, tile.cols);
+    validate_mapping(config);
+    return all_read_bytes(config, tile.rows, tile.cols);
 }
 
 std::uint64_t tile_write_bytes(const Tile& tile) {
@@ -324,6 +489,7 @@ std::uint64_t tile_compute_cycles(const Config& config, const Tile& tile) {
                 config.pipeline_cycles <= max_timing_value,
             "compute rate or pipeline timing is outside supported limits");
     validate_tile(tile, config.m, config.n);
+    validate_mapping(config);
     return compute_cycles(config, tile.rows, tile.cols);
 }
 

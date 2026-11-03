@@ -35,6 +35,12 @@ jobs:
         run: python3 scripts/compare_modes.py --binary build/npu-sim --repeats 2
       - name: Two-layer inference
         run: python3 scripts/mlp_demo.py --binary build/npu-sim
+      - name: CNN and residual graph inference
+        run: |
+          python3 scripts/graph_runtime.py examples/cnn.json --binary build/npu-sim
+          python3 scripts/graph_runtime.py examples/residual_mlp.json --binary build/npu-sim
+      - name: SRAM-constrained mapping search
+        run: python3 scripts/autotune.py --binary build/npu-sim
 
   undefined-behavior:
     runs-on: ubuntu-latest
@@ -47,4 +53,22 @@ jobs:
       - name: Tests
         env:
           UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
+        run: ctest --test-dir build --output-on-failure
+
+  onnx-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: requirements-onnx.txt
+      - name: Install optional model-format dependencies
+        run: python -m pip install -r requirements-onnx.txt
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNPU_ENABLE_ONNX_TESTS=ON -DPython3_EXECUTABLE="$(which python)"
+      - name: Build
+        run: cmake --build build -j2
+      - name: Tests and ONNX Runtime comparison
         run: ctest --test-dir build --output-on-failure

@@ -1,11 +1,12 @@
 cmake_minimum_required(VERSION 3.24)
-project(NPUArchitectureModeling VERSION 0.1.0 LANGUAGES CXX)
+project(NPUArchitectureModeling VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(NPU_FETCH_SYSTEMC "Fetch the pinned SystemC dependency" ON)
 option(NPU_ENABLE_SANITIZERS "Enable undefined-behavior checks in project code" OFF)
+option(NPU_ENABLE_ONNX_TESTS "Test optional ONNX importer against ONNX Runtime" OFF)
 
 if(NPU_FETCH_SYSTEMC)
   include(FetchContent)
@@ -53,5 +54,30 @@ if(BUILD_TESTING)
   add_test(NAME independent-integration
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py
             --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME per-channel-and-int4
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/quantization_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME graph-inference
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_runtime_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME architecture-contract
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME energy-analysis
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/energy_tests.py)
+  add_test(NAME mapping-search
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/autotune_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  if(NPU_ENABLE_ONNX_TESTS)
+    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import onnx, onnxruntime"
+      RESULT_VARIABLE NPU_ONNX_IMPORT_RESULT OUTPUT_QUIET ERROR_QUIET)
+    if(NOT NPU_ONNX_IMPORT_RESULT EQUAL 0)
+      message(FATAL_ERROR "ONNX tests require pip install -r requirements-onnx.txt in the selected Python interpreter")
+    endif()
+    add_test(NAME onnx-runtime-conformance
+      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/onnx_import_tests.py
+              --binary $<TARGET_FILE:npu-sim>)
+    set_tests_properties(onnx-runtime-conformance PROPERTIES TIMEOUT 180)
+  endif()
   set_tests_properties(independent-integration PROPERTIES TIMEOUT 180)
 endif()

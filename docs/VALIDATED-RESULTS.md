@@ -1,6 +1,6 @@
 # Verified results
 
-Validated on November 3, 2026 with GCC 13.3.0, CMake 3.28.3, Python 3.12.3, and hash-verified SystemC 3.0.2 on Linux x86-64. A clean default build downloaded its dependency using the checked-in CMake configuration. Both Release and undefined-behavior-sanitized Debug builds passed CTest.
+The original default-contract baseline was validated on November 3, 2026 with GCC 13.3.0, CMake 3.28.3, Python 3.12.3, and hash-verified SystemC 3.0.2 on Linux x86-64. A clean default build downloaded its dependency using the checked-in CMake configuration. Both Release and undefined-behavior-sanitized Debug builds passed CTest.
 
 The core suite covers hand-computed outputs, integer boundary cases, exact resource limits, and 64 deterministic randomized tiled workloads. The twelve independent Python test groups include 20 timestamp-based concurrent scheduling cases, exact trace comparisons, numerical and hash comparisons, real tensor inputs, malformed inputs, runtime bounds, resource scaling, and event/cycle agreement. The scheduler oracle uses no SystemC code.
 
@@ -32,6 +32,48 @@ python3 scripts/sweep.py --binary build/npu-sim
 
 The event/cycle comparison also passed five repetitions per mode for each of three workloads. It checks identical architecture outcomes while measuring host execution separately. Host timing ratios vary with the machine and load; run `scripts/compare_modes.py` to obtain the local measurements rather than treating one host's ratio as a portable guarantee.
 
+## Expanded-feature checks
+
+Additional checks on November 3 exercised the extended arithmetic and architecture contract. The C++ numerical suite passed after adding per-channel parameters, signed INT4 and nearest-even rounding. Six independent quantization groups and six extended architecture groups passed against the updated Release executable. These include manual positive/negative rounding ties, external-tensor integer oracles, exact single-slot panel timing, multi-slot resource/acknowledgment invariants, cache LRU behavior, burst costs and timing-mode trace agreement. Thirty-two additional irregular systolic cases kept useful MAC utilization within its modeled array-area budget, including very small workloads and oversized arrays. These are model-consistency checks, not silicon measurements.
+
+### Weight reuse
+
+The following cases use a generated workload with sixteen rows, eight output columns and sixteen reduction elements; output tiles have four rows and four columns, reduction panels have four elements, and there are two slots. Other parameters retain defaults. All three produced output hash `1589211671334775273`.
+
+| Weight-cache reservation, bytes | Elapsed cycles | External read bytes | Hits | Misses | Saved weight bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 0, disabled | 650 | 1152 | 0 | 0 | 0 |
+| 16 | 650 | 1152 | 0 | 32 | 0 |
+| 128 | 626 | 768 | 24 | 8 | 384 |
+
+The small cache cannot retain this access pattern's working set. The larger cache saves external traffic, while elapsed cycles improve by less because the remaining traffic, compute and scheduling still contribute.
+
+```sh
+build/npu-sim --m 16 --n 8 --k 16 --tile-m 4 --tile-n 4 --tile-k 4 \
+  --buffer-slots 2 --weight-cache-bytes 128
+```
+
+### Reduction tiling and SRAM
+
+A workload with four rows, four columns and a reduction length of 128, mapped as one output tile with two slots and a 500-byte SRAM limit, rejects a full-reduction mapping. Reduction panels of eight elements require 320 bytes and complete in 366 modeled cycles with numerical agreement.
+
+```sh
+build/npu-sim --m 4 --n 4 --k 128 --tile-m 4 --tile-n 4 \
+  --buffer-slots 2 --sram-bytes 500 --tile-k 8
+```
+
+This demonstrates a bounded-memory mapping that preserves the numerical result. The extra panel loads and compute overhead are charged explicitly; there is no implicit spill.
+
+### Mapping search
+
+The default exhaustive search evaluated 54 tile/slot candidates successfully. For its default workload and objective, the selected mapping used eight-row/eight-column tiles, full reduction and two slots: 268 modeled cycles and 1728 reserved SRAM bytes. The result is optimal within that enumerated candidate set, not across all architectures or mappings.
+
+```sh
+python3 scripts/autotune.py --binary build/npu-sim
+```
+
+The expanded Release and undefined-behavior-sanitized Debug builds both passed all seven standard CTest suites. Those suites include the C++ core and 74 Python tests: 12 legacy integration, six quantization, six extended architecture, 34 graph inference, 12 energy and four mapping-search tests. CNN/residual fixtures, malformed graphs, liveness and preallocation bounds are included. Eighteen additional optional ONNX tests passed, including full-output comparisons against ONNX Runtime 1.23.2 with ONNX 1.19.1; the optional configuration runs all eight CTest suites. See [validation](VALIDATION.md) for reproducible commands. These results apply to the tested environments, without an all-platform certification claim.
+
 ## Verification boundary
 
-This validates the documented numerical and scheduling model. There is no supplied silicon or RTL timing reference, proprietary NPU specification, ONNX importer, convolution frontend, or cross-layer on-chip scheduling. Those are separate extensions with their own validation requirements.
+The model now includes convolution/depthwise graph lowering, explicit host fallbacks and the extended memory/compute mechanisms documented in the [feature matrix](FEATURE-MATRIX.md). It still has no supplied silicon or RTL timing reference, proprietary NPU specification, physical memory-system calibration or cross-layer on-chip scheduling. The optional [ONNX importer](ONNX.md) has a strict supported-subset and independent backend-validation boundary; it does not imply general framework conformance.

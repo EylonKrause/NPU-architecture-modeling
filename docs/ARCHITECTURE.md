@@ -1,90 +1,109 @@
 # Architecture and arithmetic
 
-This model answers a bounded question: for a dense INT8 workload and the stated resource and scheduling assumptions, what arithmetic result, cycle count, traffic, and utilization should we expect? It does not infer undocumented hardware behaviour from a cycle counter.
+The simulator answers a defined question: under the selected workload, numerical contract, mapping and resource assumptions, what result, cycles, traffic and utilization should occur? Arithmetic correctness and hardware timing accuracy require different evidence. The [production research](PRODUCTION-NPU-RESEARCH.md) and [feature matrix](FEATURE-MATRIX.md) explain the scope.
 
-## Dense layer
+## Integer datapath
 
-Activations, weights, and outputs use row-major storage. Each output element is defined by
-
-$$
-a_{m,n}=b_n+\sum_{k=0}^{K-1}(x_{m,k}-z_x)(w_{k,n}-z_w).
-$$
-
-The input and weight zero points describe the integer representation of real zero. A final accumulator must fit INT32. The implementation uses an INT64 intermediate and rejects an overflowing final accumulator, avoiding C++ signed-overflow undefined behaviour.
-
-For a nonnegative integer multiplier and a power-of-two denominator, output requantization is
+Activations are signed INT8. Weights are signed INT8 or signed INT4, held in sign-extended INT8 host storage. Bias and final accumulators are INT32. With row-major operands, output-channel weight zero points give
 
 $$
-q_{m,n}=\operatorname{sat}_{[-128,127]}\left(z_y+\operatorname{round}_{\mathrm{ties\ away\ from\ zero}}\left(\frac{a_{m,n}\,\mathrm{multiplier}}{2^{\mathrm{shift}}}\right)\right).
+a_{r,c}=b_c+\sum_{j=0}^{K-1}(x_{r,j}-z_x)(w_{j,c}-z_{w,c}).
 $$
 
-In a real quantized layer, the multiplier approximates the ratio of activation and weight scales to output scale:
+INT64 intermediate storage avoids signed-overflow undefined behavior, permits intermediate cancellation, and rejects a final value outside INT32. Bias enters once. Requantization and saturation occur only after the complete reduction, never at a reduction-panel boundary.
 
 $$
-\frac{\mathrm{multiplier}}{2^{\mathrm{shift}}}\approx\frac{s_xs_w}{s_y}.
+q_{r,c}=\operatorname{sat}_{[-128,127]}\left(z_y+\operatorname{round}_{R}\left(\frac{a_{r,c}M_c}{2^{s_c}}\right)\right).
 $$
 
-This executable accepts the integer multiplier and shift directly; it does not estimate scales, calibrate a model, or promise framework-specific rounding. Optional ReLU clamps output values below the output zero point. Saturation and rounding are tested separately from the matrix product.
+The tie policy is nearest-away by default, or nearest-even when selected. Optional ReLU clamps below the output zero point. Each channel may use its own weight zero point, multiplier and shift; omitted vectors use scalar parameters. INT4 zero points and weights must fit their selected signed range. See [quantization](QUANTIZATION.md) for boundaries and interchange details.
 
-The input fixture uses a specified 32-bit linear congruential sequence rather than an implementation-dependent random distribution. Shape, seed, and quantization must match when comparing numerical outputs. Host allocation and scalar-reference execution do not consume accelerator SRAM or modeled accelerator cycles.
+In a quantized inference system, integer scale ratios approximate tensor scales:
 
-## Mapping and traffic
+$$
+\frac{M_c}{2^{s_c}}\approx\frac{s_xs_{w,c}}{s_y}.
+$$
 
-An output tile has a row extent, a column extent, and the entire reduction dimension. Partial edge tiles use their actual dimensions. For tile dimensions and reduction length, the memory and compute requirements are
+The C++ engine accepts integer parameters directly. The graph frontend additionally validates declared tensor/bias scales and the represented ratio. Neither layer silently calibrates a floating-point model. Host fixture/reference storage does not consume modeled accelerator SRAM.
+
+## Output tiles and reduction panels
+
+An output tile has actual edge-clipped extents. Its reduction dimension is split by `tile_k`, with zero meaning the entire reduction. Let a panel have reduction extent $K_p$, an output tile have extents $M_t,N_t$, weight width be $b_w$, and the number of provided channel parameter vectors be $Q$.
 
 $$
 \begin{aligned}
-B_\mathrm{read}&=M_tK+KN_t+4N_t,\\
-B_\mathrm{write}&=M_tN_t,\\
-C_\mathrm{compute}&=\left\lceil\frac{M_tN_tK}{P}\right\rceil+C_\mathrm{pipeline},\\
-C_\mathrm{DMA}(B)&=L+\left\lceil\frac{B}{W}\right\rceil.
+B_{w,p}&=\left\lceil\frac{K_pN_tb_w}{8}\right\rceil,\\
+B_{r,p}&=M_tK_p+B_{w,p}+\mathbf{1}_{p=0}\,4N_t(1+Q),\\
+B_{\mathrm{output}}&=M_tN_t.
 \end{aligned}
 $$
 
-Here the compute budget is MACs per cycle, DMA bandwidth is bytes per cycle, and the memory latency applies to each tile read or write request. Bias is INT32; outputs written off-chip are INT8. Every tile reloads its activations, weights, and bias. There is no inter-tile cache, burst-size limit, or compression model.
+Each panel pads an incomplete INT4 byte independently. Bias and provided channel vectors are loaded on the first panel only. Scalar parameters are treated as configuration state, without a separate metadata DMA charge. Output writes are INT8; accumulator storage remains on chip.
 
-The conservative scratchpad reservation is
-
-$$
-B_\mathrm{SRAM}=S\left(M_\max K+KN_\max+4N_\max+4M_\max N_\max+M_\max N_\max\right),
-$$
-
-where the maximum tile dimensions are clipped by the matrix dimensions and the slot count bounds in-flight tiles. The bound reserves space for input, weight, bias, accumulator, and output storage per slot. It can overestimate storage if a more sophisticated lifetime-aware allocator could share buffers. Configurations exceeding capacity are rejected; there is no implicit spill implementation.
-
-## Timing, arbitration, and backpressure
-
-SystemC has a load process, a compute process, and a store process. A tile acquires a buffer slot before loading. It releases that slot only after its output write completes. One slot therefore serializes tile lifetimes. More slots permit load, compute, and store overlap within the limits of the shared DMA and compute engine.
-
-The single DMA server handles read and write queues. Requests run to completion. Arbitration alternates between ready request classes at request boundaries, initially preferring loads. If only one class is pending, it proceeds. Simultaneously pending requests are considered together; completion notifications wake requesters in a later delta cycle. These ordering details affect pipeline timing and are part of the contract.
-
-FIFO tile issue and bounded slots make stalls and overlap observable. A tile waiting for a slot is backpressure, not free execution. Pipeline fill, drain, DMA queuing, transaction latency, compute overhead, and tile edges contribute beyond an ideal throughput bound.
-
-Each SystemC tick denotes one architecture cycle. Event mode advances by an entire stage duration; cycle mode executes a one-cycle wait repeatedly inside the same stage. Both modes must produce the same architecture cycles, stage traces, and outputs. Neither mode models individual multiplier registers, physical SRAM banks, cache coherence, instruction scheduling, or RTL signal propagation. Calling cycle mode “cycle accurate” would require additional validation against a specified implementation.
-
-## Bounds and baselines
-
-An optimistic compute and memory lower bound is
+The aggregate vector engine charges
 
 $$
-C_\mathrm{ideal}\geq\max\left(\left\lceil\frac{MNK}{P}\right\rceil,\left\lceil\frac{B_\mathrm{read,total}+B_\mathrm{write,total}}{W}\right\rceil\right).
+C_{p,\mathrm{vector}}=\left\lceil\frac{M_tN_tK_p}{P}\right\rceil+C_{\mathrm{pipeline}}.
 $$
 
-This omits transaction latency, per-tile rounding, pipeline overhead, arbitration, fill/drain, and limited buffering. The sum of actual compute service times and the sum of actual DMA service times provide tighter resource bounds; total elapsed cycles must cover both. They are bounds, not an independently validated timing prediction.
-
-For reporting target latency at a configured clock,
+An alternative analytical output-stationary array with dimensions $A_r,A_c$ charges
 
 $$
-t_\mathrm{target,\mu s}=\frac{C_\mathrm{elapsed}}{f_\mathrm{MHz}}.
+C_{p,\mathrm{array}}=\left\lceil\frac{M_t}{A_r}\right\rceil\left\lceil\frac{N_t}{A_c}\right\rceil(K_p+A_r+A_c-2)+C_{\mathrm{pipeline}}.
 $$
 
-Changing frequency rescales reported time without changing modeled cycle counts. Actual silicon might also require latency and bandwidth changes at a different clock, which this model does not infer.
+This includes full-array fill/drain and output folds, including inefficient ragged waves. The peak useful MAC budget is the array area. It is an analytical service-time model, without PE/register-level simulation or independent RTL calibration. Pipeline overhead is charged per panel in both compute modes.
 
-Resource occupancy and useful throughput are distinct. `compute_utilization` includes pipeline overhead in compute busy time, and `memory_utilization` includes transaction latency in DMA busy time. The additional `mac_utilization` measures useful MACs against the total MAC budget, and `dma_payload_utilization` measures transferred bytes against the total bandwidth budget. `arithmetic_intensity_macs_per_byte` includes all modeled reads and writes, including repeated loads; `resource_lower_bound_cycles` is the larger of the actual compute and DMA service sums.
+## SRAM and weight reuse
 
-Use one buffer slot as a serial architecture baseline. Compare extra slots, MAC budgets, memory bandwidth, and tile shapes independently with the same arithmetic fixture. Compare event and cycle modes only for simulator host runtime. Report individual cases alongside aggregate ratios so a geometric mean cannot hide a regression.
+Each in-flight output tile reserves a maximum-sized activation panel, packed weight panel, first-panel bias/channel metadata, INT32 accumulator tile and INT8 output tile. With maximum clipped panel/tile extents and cache reservation $B_{\mathrm{cache}}$,
 
-## What the experiments can explain
+$$
+B_{\mathrm{SRAM}}=S\left(M_{\max}K_{\max}+\left\lceil\frac{K_{\max}N_{\max}b_w}{8}\right\rceil+4N_{\max}(1+Q)+5M_{\max}N_{\max}\right)+B_{\mathrm{cache}}.
+$$
 
-A useful architecture discussion connects workload assumptions to an objective, constraints, baselines, and measured evidence. For example, a tile-shape change alters SRAM capacity and reload traffic; extra MACs reduce compute service time only until another resource dominates. If arithmetic agrees but timing differs, inspect the timing contract, queue arbitration, pipeline fill/drain, memory latency, backpressure, and overlap before changing the numerical kernel.
+Over-capacity configurations are rejected; there is no implicit spill. Partial-sum allocation persists across reduction panels. The numerical kernel evaluates the full dot product once at the final panel; this is a functional abstraction of resident partial sums, not an implementation of per-panel accumulator register updates.
 
-The repository offers executable examples of that method. It does not substantiate CV performance claims, recommend a particular commercial NPU, or replace compiler, RTL, or hardware validation.
+The optional fully associative LRU cache keys packed weight panels by output-column tile and reduction block, enabling reuse across output-row tiles. A hit removes only the weight bytes from that load. Activations, bias and channel metadata follow their normal rules. Oversized panels bypass insertion; eviction frees least-recently-used panels until the new panel fits. Reports expose hits, misses, saved external bytes and peak stored weight bytes. The entire configured cache capacity is included in SRAM even if it remains partly unused.
+
+The cache adds no lookup delay, physical bank contention or coherence cost. Its host implementation stores architectural cache metadata rather than another numerical copy of the tensors.
+
+## DMA, scheduling and backpressure
+
+One non-preemptive DMA engine services read and write requests. Unlimited requests cost startup latency plus bandwidth service. A configured burst size splits the byte count into burst lengths $B_i$ and charges
+
+$$
+C_{\mathrm{DMA}}(B)=\sum_i\left(L+\left\lceil\frac{B_i}{W}\right\rceil\right).
+$$
+
+The engine holds the whole request until all its bursts complete. Read/write arbitration occurs at request boundaries, not between bursts. Ready request classes alternate round-robin, initially preferring reads; a sole pending class proceeds. Simultaneous pending work is coalesced before arbitration. There are no multiple outstanding independently serviced memory transactions.
+
+A tile acquires a slot before its first load and releases it after its output store. Each nonfinal panel's next load waits for compute completion acknowledgment, preventing reuse of the panel buffer before consumption. The final panel permits the next output tile's load to overlap computation if another slot is available. Compute and store process FIFO output-tile order. More slots allow overlap, subject to the single compute engine and shared DMA.
+
+One SystemC tick denotes one architecture cycle. Event mode advances across a whole stage; cycle mode performs the same duration as individual cycle waits. Both must agree on cycles, traffic, traces and outputs. Stage traces include `tile_id` and `block_id`; stores carry the final reduction block. Neither execution mode establishes RTL cycle accuracy.
+
+## Graphs and operator placement
+
+The graph frontend topologically executes declared dependencies, validates shapes and quantization, retains skip tensors through their final consumer, and reports logical tensor liveness. Dense/MatMul and materialized Conv2D/depthwise lowering invoke the C++ accelerator. Padding uses the activation's quantized zero. Add, ReLU, pooling and Flatten are explicit host fallbacks.
+
+Invocations are sequential, including separate depthwise channel mappings. Every layer materializes outputs off chip, and no cache/SRAM state persists across invocations. Lowering cost, host fallback latency, independent references and process launches are excluded from NPU cycle totals. Logical tensor storage and lowering workspace are separate from Python RSS and accelerator SRAM. See [graph runtime](GRAPH-RUNTIME.md).
+
+## Metrics, baselines and energy
+
+Elapsed cycles must cover both actual compute service and actual DMA service:
+
+$$
+C_{\mathrm{elapsed}}\geq\max(C_{\mathrm{compute,total}},C_{\mathrm{DMA,total}}).
+$$
+
+Resource occupancy includes pipeline/startup overhead. Useful `mac_utilization` divides MAC count by peak MAC budget and elapsed cycles; `dma_payload_utilization` similarly uses bytes and bandwidth. Arithmetic intensity includes actual external traffic after cache savings. `resource_lower_bound_cycles` reports the larger measured service sum.
+
+Target time is a reporting conversion:
+
+$$
+t_{\mathrm{target},\mu s}=\frac{C_{\mathrm{elapsed}}}{f_{\mathrm{MHz}}}.
+$$
+
+Changing frequency does not alter stage cycle counts or infer voltage/bandwidth changes. The [energy tool](ENERGY.md) applies explicit user coefficients to MACs, external bytes and optional constant static power; it does not model uncounted SRAM, clock, interconnect or thermal effects.
+
+Use one slot as a serial timing baseline. Preserve numerical tensors and quantization while comparing mapping, compute, SRAM or bandwidth. Mapping search is exhaustive only over its declared candidates. Event/cycle host-runtime ratios measure simulator speed, not hardware improvement. Physical memory systems, sparse formats, attention, commercial command streams and target calibration remain separate scope.

@@ -205,7 +205,7 @@ def timing_oracle(c: dict) -> dict:
         time = min(next_events)
     return {
         "cycles": time, "peak_inflight_tiles": peak, "slot_wait_cycles": wait_cycles,
-        "trace": sorted(spans, key=lambda x: (x["start_cycle"], x["stage"], x["tile_id"])),
+        "trace": [{**entry, "block_id": 0} for entry in sorted(spans, key=lambda x: (x["start_cycle"], x["stage"], x["tile_id"]))],
     }
 
 
@@ -247,7 +247,7 @@ class SimulatorIntegration(unittest.TestCase):
         records = list(csv.DictReader(text.splitlines()))
         self.assertEqual(len(records), 3 * len(tiles(c)))
         self.assertEqual(
-            set(records[0]), {"stage", "tile_id", "start_cycle", "end_cycle", "bytes"}
+            set(records[0]), {"stage", "tile_id", "start_cycle", "end_cycle", "bytes", "block_id"}
         )
         stages: dict[tuple[str, int], tuple[int, int, int]] = {}
         for record in records:
