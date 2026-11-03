@@ -113,6 +113,10 @@ if(BUILD_TESTING)
   add_test(NAME live-dashboard
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/live_dashboard_tests.py
             --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME one-command-launcher
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  set_tests_properties(one-command-launcher PROPERTIES TIMEOUT 90)
   set_tests_properties(live-dashboard live-control-protocol PROPERTIES TIMEOUT 90)
   if(NPU_ENABLE_ONNX_TESTS)
     execute_process(COMMAND ${Python3_EXECUTABLE} -c "import onnx, onnxruntime"

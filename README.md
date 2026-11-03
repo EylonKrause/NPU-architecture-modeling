@@ -8,7 +8,30 @@ The C++ engine compares every complete accumulator and output with a scalar refe
 
 This is a generic architectural model. It is not a commercial NPU ISA emulator or an independently calibrated RTL/silicon timing model. Supported operations and remaining limits are listed in the [feature matrix](docs/FEATURE-MATRIX.md); [production NPU research](docs/PRODUCTION-NPU-RESEARCH.md) explains the design priorities with primary sources.
 
-## Build and launch the live model
+## Run the live simulator
+
+From the downloaded or cloned repository, run:
+
+```sh
+python3 run.py
+```
+
+On Windows use `py -3 run.py`. The launcher builds the native model, checks its
+numerical output, opens the local browser dashboard and **starts continuous
+inference automatically**. Leave the terminal open; Ctrl+C stops it. Later runs
+reuse the build and downloaded dependency. No Python packages or API keys are
+needed.
+
+One-time prerequisites are Python 3.10+, CMake 3.24+ and a C++17 build toolchain.
+The first build needs internet to download pinned SystemC. Follow the
+**[step-by-step guide for Windows, macOS and Linux](docs/QUICKSTART.md)** for
+installation, headless use, ports and troubleshooting.
+
+```sh
+python3 run.py --no-browser --port 8766 --profile palette-weights
+```
+
+## Manual build and launch
 
 Requirements: a C++17 compiler, CMake 3.24 or newer, a build tool, and Python 3.10 or newer. CMake fetches hash-verified [SystemC 3.0.2](https://github.com/accellera-official/systemc/releases/tag/3.0.2), so initial configuration needs internet access. An installed package can be selected with `-DNPU_FETCH_SYSTEMC=OFF -DCMAKE_PREFIX_PATH=/path/to/systemc`.
 

@@ -343,23 +343,50 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(403, {"error": "Cross-origin access is disabled."})
 
 
-def main() -> int:
+def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--binary", type=Path, default=ROOT / "build" / "npu-sim")
     parser.add_argument("--port", type=int, default=8765)
-    args = parser.parse_args()
+    parser.add_argument("--profile", choices=PROFILES, default="balanced")
+    parser.add_argument("--autostart", action="store_true", help="start continuous inference immediately")
+    parser.add_argument("--open-browser", action="store_true", help="open the local dashboard if a browser is available")
+    args = parser.parse_args(argv)
     if not 0 <= args.port <= 65535:
         parser.error("Port must be from 0 to 65535.")
     controller = Controller(args.binary)
-    server = DashboardServer(("127.0.0.1", args.port), controller)
-    for signum in (signal.SIGINT, signal.SIGTERM):
-        signal.signal(signum, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
-    print(f"Live SystemC NPU simulator: http://127.0.0.1:{server.server_address[1]}", flush=True)
+    server = None
+    browser_timer = None
+    previous_signals = {}
     try:
+        server = DashboardServer(("127.0.0.1", args.port), controller)
+        if args.autostart:
+            controller.control({"action": "start", "profile": args.profile})
+        url = f"http://127.0.0.1:{server.server_address[1]}"
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            previous_signals[signum] = signal.signal(
+                signum, lambda *_: threading.Thread(target=server.shutdown, daemon=True).start())
+        print(f"Live SystemC NPU simulator: {url}", flush=True)
+        if args.open_browser:
+            def open_browser():
+                import webbrowser
+                try:
+                    if not webbrowser.open(url, new=2):
+                        print(f"Open {url} in your browser.", flush=True)
+                except (OSError, webbrowser.Error):
+                    print(f"Open {url} in your browser.", flush=True)
+            # Let serve_forever begin before launching an external browser.
+            browser_timer = threading.Timer(0.3, open_browser)
+            browser_timer.daemon = True
+            browser_timer.start()
         server.serve_forever(poll_interval=0.2)
     finally:
-        server.server_close()
+        if browser_timer is not None:
+            browser_timer.cancel()
+        if server is not None:
+            server.server_close()
         controller.close()
+        for signum, handler in previous_signals.items():
+            signal.signal(signum, handler)
     return 0
 
 

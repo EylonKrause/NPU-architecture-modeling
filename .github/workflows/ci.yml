@@ -89,3 +89,25 @@ jobs:
         run: cmake --build build -j2
       - name: Tests and ONNX Runtime comparison
         run: ctest --test-dir build --output-on-failure
+
+  native-launcher:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Build through the Python launcher
+        run: python run.py --build-only --jobs 2
+      - name: Exercise native launcher lifecycle
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python tests/launcher_tests.py --binary build-live/Release/npu-sim.exe
+          else
+            python tests/launcher_tests.py --binary build-live/npu-sim
+          fi

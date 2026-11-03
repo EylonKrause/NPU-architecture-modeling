@@ -6,7 +6,19 @@ requantizes outputs, and compares the complete accumulator and output vectors
 with the scalar reference. It is a running **architectural simulator**, not a
 physical NPU device or a commercial NPU ISA emulator.
 
-## Run
+## One-command launch
+
+```sh
+python3 run.py
+```
+
+On Windows use `py -3 run.py`. This builds and checks the native model, starts
+continuous inference and opens the dashboard. One-time compiler/CMake setup and
+the initial SystemC download are explained in the [quick-start guide](QUICKSTART.md).
+Use `--no-browser` on a headless machine or `--port 8766` if the default port is
+busy. The launcher uses a separate `build-live` tree.
+
+## Manual build and launch
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
