@@ -103,6 +103,8 @@ jobs:
           python-version: '3.12'
       - name: Build through the Python launcher
         run: python run.py --build-only --jobs 2
+      - name: Reuse the existing native build
+        run: python run.py --build-only --jobs 2
       - name: Exercise native launcher lifecycle
         shell: bash
         run: |

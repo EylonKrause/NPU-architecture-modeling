@@ -89,8 +89,14 @@ def find_binary(build_dir):
 
 
 def verify_binary(binary):
-    result = subprocess.run([str(binary), "--m", "4", "--n", "4", "--k", "8"],
-                            capture_output=True, text=True, timeout=30, check=False)
+    try:
+        result = subprocess.run([str(binary), "--m", "4", "--n", "4", "--k", "8"],
+                                capture_output=True, text=True, timeout=30, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(
+            f"Cannot run simulator binary {binary}: {error}. "
+            "Run without --skip-build to rebuild for this computer."
+        ) from error
     try:
         data = json.loads(result.stdout)
     except (ValueError, TypeError) as error:
