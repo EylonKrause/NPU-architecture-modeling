@@ -10,6 +10,7 @@ from pathlib import Path
 import threading
 import time
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,7 +132,11 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.controller.snapshot()["state"], "idle")
 
     def test_http_assets_control_and_browser_boundaries(self):
-        server = dashboard.DashboardServer(("127.0.0.1", 0), self.controller)
+        # Startup must work even if the machine's reverse resolver is broken.
+        # HTTPServer's default bind performs this unnecessary lookup and can
+        # otherwise hang before the launcher can announce its loopback URL.
+        with mock.patch("socket.getfqdn", side_effect=OSError("DNS unavailable")) as reverse_dns:
+            server = dashboard.DashboardServer(("127.0.0.1", 0), self.controller)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         port = server.server_address[1]
@@ -146,6 +151,10 @@ class DashboardTests(unittest.TestCase):
                 connection.close()
 
         try:
+            reverse_dns.assert_not_called()
+            self.assertEqual(server.server_name, "127.0.0.1")
+            self.assertEqual(server.server_port, port)
+            self.assertGreater(port, 0)
             for path in ("/", "/app.js", "/style.css", "/api/state", "/api/profiles"):
                 status, headers, content = request("GET", path)
                 self.assertEqual(status, 200, path)

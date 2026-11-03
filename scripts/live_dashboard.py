@@ -15,6 +15,7 @@ from pathlib import Path
 import queue
 import random
 import signal
+from socketserver import TCPServer
 import subprocess
 import sys
 import threading
@@ -260,6 +261,13 @@ class Controller:
 class DashboardServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
+
+    def server_bind(self) -> None:
+        # HTTPServer normally performs synchronous reverse DNS here. This
+        # loopback-only dashboard needs no host lookup; a slow/offline resolver
+        # must not delay startup before it can announce its local URL.
+        TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
     def __init__(self, address: tuple[str, int], controller: Controller):
         self.controller = controller

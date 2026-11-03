@@ -68,7 +68,12 @@ class LauncherProcess:
             if match:
                 self.url = match.group(0)
                 return self.url
-        raise AssertionError(f"Launcher did not announce its URL: {''.join(output)}\n{self.diagnostics()}")
+        raise AssertionError(
+            "Launcher did not announce its URL "
+            f"(pid={self.process.pid}, returncode={self.process.poll()}, "
+            f"stdout_reader_alive={self.reader.is_alive()}):\n"
+            f"{''.join(output)}\nstderr:\n{self.diagnostics()}"
+        )
 
     def close(self) -> None:
         if self.process.poll() is None:

@@ -93,13 +93,15 @@ explains the compiler setup.
    [Build Tools installation guide](https://learn.microsoft.com/en-us/cpp/build/building-on-the-command-line?view=msvc-170).
 4. Open a new terminal in the repository and run `py -3 run.py`.
 
-The launcher handles the native `.exe` name and Release build directory. These
-instructions do not imply that native Windows or macOS execution was verified
-by a Linux-only local run; see the repository's CI results for platform evidence.
+The launcher handles the native `.exe` name and Release build directory.
+The [automated checks](https://github.com/EylonKrause/NPU-architecture-modeling/actions/workflows/ci.yml)
+include native Windows and macOS builds, build reuse and live launcher checks,
+alongside the Linux regression suites.
 For current MSVC compilers, the fetched SystemC dependency receives the
 [official upstream integer-stream compatibility fix](https://github.com/accellera-official/systemc/commit/3570c374f3c98e060d6267183ccb8de51aab5129).
-The build checks the original and patched file hashes, preserves dependency
-copyrights and refuses to overwrite unexpected local modifications.
+The build checks newline-normalized original and patched content hashes,
+preserves dependency copyrights and refuses to overwrite unexpected local
+modifications.
 
 ## Useful options
 
