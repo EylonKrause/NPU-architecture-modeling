@@ -1,5 +1,6 @@
 #include "npu/core.hpp"
 #include "npu/model.hpp"
+#include "npu/paths.hpp"
 #include <algorithm>
 #include <charconv>
 #include <chrono>
@@ -51,6 +52,10 @@ void usage() {
         "  --tile-m N --tile-n N          output tile shape (default 8,8)\n"
         "  --tile-k N                    reduction panel size (0 means full K)\n"
         "  --weight-bits 4|8             signed weight precision and packed traffic\n"
+        "  --weight-encoding dense|palette|sparse  lossless packed weight representation\n"
+        "  --palette-bits 1|2|4|8        packed LUT index width (default 4)\n"
+        "  --sparse-block N              bitmap block length (default 8)\n"
+        "  --weight-decode-values-per-cycle N    decoder throughput (default 16)\n"
         "  --array-rows N --array-cols N  output-stationary systolic timing\n"
         "  --macs-per-cycle N            compute throughput (default 64)\n"
         "  --memory-bytes-per-cycle N    shared DMA bandwidth (default 16)\n"
@@ -108,6 +113,10 @@ Arguments parse(int argc, char* argv[]) {
         else if (flag == "--tile-n") c.tile_n = unsigned_value(value);
         else if (flag == "--tile-k") c.tile_k = unsigned_value(value);
         else if (flag == "--weight-bits") c.weight_bits = unsigned_value(value);
+        else if (flag == "--weight-encoding") c.weight_encoding = value;
+        else if (flag == "--palette-bits") c.palette_bits = unsigned_value(value);
+        else if (flag == "--sparse-block") c.sparse_block = unsigned_value(value);
+        else if (flag == "--weight-decode-values-per-cycle") c.weight_decode_values_per_cycle = unsigned_value(value);
         else if (flag == "--array-rows") c.array_rows = unsigned_value(value);
         else if (flag == "--array-cols") c.array_cols = unsigned_value(value);
         else if (flag == "--macs-per-cycle") { c.macs_per_cycle = unsigned_value(value); args.macs_given = true; }
@@ -159,6 +168,24 @@ Arguments parse(int argc, char* argv[]) {
     if (args.slice_cycles == 0 || args.slice_cycles > 10000000)
         throw std::invalid_argument("slice cycles must be in 1..10000000");
     return args;
+}
+
+void validate_paths(const Arguments& args) {
+    const std::vector<std::pair<std::string, std::string>> outputs = {
+        {"VCD", args.vcd_path}, {"progress JSONL", args.progress_path},
+        {"CSV trace", args.config.trace_path}};
+    const std::vector<std::string> inputs = {args.input_path, args.quantization_path};
+    for (std::size_t i = 0; i < outputs.size(); ++i) {
+        if (outputs[i].second.empty()) continue;
+        for (std::size_t j = i + 1; j < outputs.size(); ++j) {
+            if (!outputs[j].second.empty() && npu::same_file_path(outputs[i].second, outputs[j].second))
+                throw std::invalid_argument("output paths conflict: " + outputs[i].first + " and " + outputs[j].first);
+        }
+        for (const auto& input : inputs) {
+            if (!input.empty() && npu::same_file_path(outputs[i].second, input))
+                throw std::invalid_argument("output path conflicts with an input file: " + outputs[i].first);
+        }
+    }
 }
 
 bool input_token(std::istream& stream, std::string& token) {
@@ -267,10 +294,17 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
         << ",\"config\":{\"m\":" << c.m << ",\"n\":" << c.n << ",\"k\":" << c.k
         << ",\"tile_m\":" << c.tile_m << ",\"tile_n\":" << c.tile_n << ",\"tile_k\":" << c.tile_k
         << ",\"weight_bits\":" << c.weight_bits << ",\"frequency_mhz\":" << c.frequency_mhz
+        << ",\"weight_encoding\":\"" << c.weight_encoding << "\",\"palette_bits\":" << c.palette_bits
         << ",\"timing\":\"" << c.timing << "\"},\"cycles\":" << snap.cycles
         << ",\"completed\":" << snap.completed << ",\"validated\":" << snap.completed
         << ",\"numerical_match\":" << (snap.completed ? "true" : "null")
         << ",\"macs\":" << s.macs << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
+        << ",\"executed_macs\":" << s.executed_macs << ",\"skipped_macs\":" << s.skipped_macs
+        << ",\"weight_decode_cycles\":" << s.weight_decode_cycles
+        << ",\"decoded_weight_values\":" << s.decoded_weight_values
+        << ",\"weight_read_bytes\":" << s.weight_read_bytes
+        << ",\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
+        << ",\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
         << ",\"compute_busy_cycles\":" << s.compute_busy_cycles << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
         << ",\"compute_utilization\":" << ratio(s.compute_busy_cycles)
         << ",\"memory_utilization\":" << ratio(s.dma_busy_cycles)
@@ -353,6 +387,9 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << "\"m\":" << c.m << ",\"n\":" << c.n << ",\"k\":" << c.k
         << ",\"tile_m\":" << c.tile_m << ",\"tile_n\":" << c.tile_n
         << ",\"tile_k\":" << c.tile_k << ",\"weight_bits\":" << c.weight_bits
+        << ",\"weight_encoding\":\"" << c.weight_encoding << "\",\"palette_bits\":" << c.palette_bits
+        << ",\"sparse_block\":" << c.sparse_block
+        << ",\"weight_decode_values_per_cycle\":" << c.weight_decode_values_per_cycle
         << ",\"array_rows\":" << c.array_rows << ",\"array_cols\":" << c.array_cols
         << ",\"macs_per_cycle\":" << c.macs_per_cycle
         << ",\"memory_bytes_per_cycle\":" << c.memory_bytes_per_cycle
@@ -372,6 +409,12 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
     std::cout << ",\"shifts\":"; array_json(q.shifts);
     std::cout << "}},\n"
         << "\"cycles\":" << s.cycles << ",\n\"macs\":" << s.macs
+        << ",\n\"executed_macs\":" << s.executed_macs << ",\n\"skipped_macs\":" << s.skipped_macs
+        << ",\n\"weight_decode_cycles\":" << s.weight_decode_cycles
+        << ",\n\"decoded_weight_values\":" << s.decoded_weight_values
+        << ",\n\"weight_read_bytes\":" << s.weight_read_bytes
+        << ",\n\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
+        << ",\n\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
         << ",\n\"read_bytes\":" << s.read_bytes << ",\n\"write_bytes\":" << s.write_bytes
         << ",\n\"compute_busy_cycles\":" << s.compute_busy_cycles
         << ",\n\"dma_busy_cycles\":" << s.dma_busy_cycles
@@ -390,7 +433,7 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << ",\n\"simulation_wall_seconds\":" << seconds
         << ",\n\"compute_utilization\":" << static_cast<double>(s.compute_busy_cycles) / static_cast<double>(s.cycles)
         << ",\n\"memory_utilization\":" << static_cast<double>(s.dma_busy_cycles) / static_cast<double>(s.cycles)
-        << ",\n\"mac_utilization\":" << static_cast<double>(s.macs) /
+        << ",\n\"mac_utilization\":" << static_cast<double>(s.executed_macs) /
             (static_cast<double>(npu::peak_macs_per_cycle(c)) * static_cast<double>(s.cycles))
         << ",\n\"dma_payload_utilization\":" << static_cast<double>(s.read_bytes + s.write_bytes) /
             (static_cast<double>(c.memory_bytes_per_cycle) * static_cast<double>(s.cycles))
@@ -410,6 +453,7 @@ int sc_main(int argc, char* argv[]) {
     try {
         auto args = parse(argc, argv);
         if (args.help) { usage(); return 0; }
+        validate_paths(args);
         const auto problem = input_problem(args);
         input_quantization(args);
         npu::validate(args.config);

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import queue
 import subprocess
@@ -77,6 +78,28 @@ class LiveChild:
 
 
 class LiveProtocolChecks(unittest.TestCase):
+    def test_output_paths_cannot_alias_other_outputs_or_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "same.vcd"
+            destination.write_text("preserve this evidence\n", encoding="utf-8")
+            combinations = [
+                ["--vcd", destination, "--progress-jsonl", destination],
+                ["--vcd", destination, "--trace", destination],
+                ["--progress-jsonl", destination, "--trace", destination],
+                ["--progress-jsonl", destination, "--input", destination],
+                ["--progress-jsonl", destination, "--quantization-file", destination],
+            ]
+            alias = Path(directory) / "hardlink.vcd"
+            os.link(destination, alias)
+            combinations.append(["--vcd", destination, "--progress-jsonl", alias])
+            for arguments in combinations:
+                with self.subTest(arguments=arguments):
+                    run = subprocess.run([str(BINARY), *map(str, arguments)],
+                                         text=True, capture_output=True, timeout=10)
+                    self.assertNotEqual(run.returncode, 0)
+                    self.assertIn("conflict", run.stderr)
+                    self.assertEqual(destination.read_text(), "preserve this evidence\n")
+
     def batch(self, arguments: list[str] | None = None) -> dict:
         process = subprocess.run([str(BINARY), *WORKLOAD, "--dump-output", *(arguments or [])],
                                  capture_output=True, text=True, timeout=30)

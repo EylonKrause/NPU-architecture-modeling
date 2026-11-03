@@ -11,7 +11,7 @@
 <main>
   <header><div><p class="eyebrow">NPU ARCHITECTURE MODELING</p><h1>A model you can watch work.</h1><p class="lede">Real integer inference. Real SystemC events. Inspect the architecture as it runs.</p></div><div class="status"><span id="status-dot"></span><span id="status">Connecting</span></div></header>
   <section class="toolbar" aria-label="Simulation controls">
-    <label>WORKLOAD<select id="profile"><option value="balanced">Balanced INT8</option><option value="compute-bound">Compute pressure</option><option value="memory-bound">Memory pressure</option></select></label>
+    <label>WORKLOAD<select id="profile"><option value="balanced">Balanced INT8</option><option value="compute-bound">Compute pressure</option><option value="memory-bound">Memory pressure</option><option value="palette-weights">Palettized weights</option></select></label>
     <div class="buttons"><button id="start" class="primary">Start continuous inference</button><button id="pause">Pause</button><button id="step">Step 256 cycles</button><button id="stop">Stop</button><button id="reset" class="quiet">Reset</button></div>
   </section>
   <p id="message" role="status">The simulator is idle. Start a workload to execute the C++/SystemC model.</p>
@@ -25,10 +25,11 @@
     <div class="section-title"><div><p class="eyebrow">EXECUTION PIPELINE</p><h2>Data movement meets compute.</h2></div><span id="validation" class="badge">Awaiting a result</span></div>
     <div class="pipeline">
       <div id="stage-load" class="stage"><span class="stage-index">01</span><h3>DMA load</h3><p>Activations + weights</p><b id="load-count">—</b></div><span class="arrow">→</span>
-      <div id="stage-compute" class="stage"><span class="stage-index">02</span><h3>MAC array</h3><p>Accumulate + requantize</p><b id="compute-count">—</b></div><span class="arrow">→</span>
+      <div id="stage-compute" class="stage"><span class="stage-index">02</span><h3>MAC array</h3><p>Decode + accumulate + requantize</p><b id="compute-count">—</b></div><span class="arrow">→</span>
       <div id="stage-store" class="stage"><span class="stage-index">03</span><h3>DMA store</h3><p>Quantized output</p><b id="store-count">—</b></div>
     </div>
     <div class="utilization"><label>Compute busy fraction <span id="compute-util">—</span><progress id="compute-bar" max="100" value="0"></progress></label><label>DMA busy fraction <span id="dma-util">—</span><progress id="dma-bar" max="100" value="0"></progress></label></div>
+    <p id="compression-detail">Dense weights · no decompression overhead</p>
     <div class="tiles-heading"><h3>Output tiles</h3><span id="tiles-label">Waiting for the model</span></div><div id="tiles" class="tiles" aria-label="Actual output-tile completion"></div>
     <div class="tensor-preview"><div><h3>Input activation preview</h3><code id="input-preview">Waiting for an inference</code></div><div><h3>Latest validated output preview</h3><code id="output-preview">Output is shown only after full numerical validation</code></div></div>
   </section>

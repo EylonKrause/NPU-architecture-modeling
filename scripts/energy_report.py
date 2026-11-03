@@ -52,6 +52,10 @@ def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
         raise ValueError("simulator must report numerical_match true")
     cycles = uint64(result.get("cycles"), "cycles", positive=True)
     macs = uint64(result.get("macs"), "macs")
+    executed_macs = uint64(result.get("executed_macs", macs), "executed_macs")
+    skipped_macs = uint64(result.get("skipped_macs", macs - executed_macs), "skipped_macs")
+    if executed_macs > macs or skipped_macs != macs - executed_macs:
+        raise ValueError("executed_macs plus skipped_macs must equal logical macs")
     read_bytes = uint64(result.get("read_bytes"), "read_bytes")
     write_bytes = uint64(result.get("write_bytes"), "write_bytes")
     uint64(result.get("output_hash"), "output_hash")
@@ -71,7 +75,7 @@ def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
     dram_cost = finite_nonnegative(dram_byte_pj, "dram_byte_pj")
     static_power = finite_nonnegative(static_mw, "static_mw")
     components = {
-        "mac": macs * mac_cost,
+        "mac": executed_macs * mac_cost,
         "dram_read": read_bytes * dram_cost,
         "dram_write": write_bytes * dram_cost,
         "static": latency * static_power,
@@ -90,7 +94,8 @@ def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
         "model": "user_coefficients_mac_external_bytes_constant_static",
         "numerical_match": True,
         "source_output_hash": result["output_hash"],
-        "source_counts": {"cycles": cycles, "macs": macs, "read_bytes": read_bytes,
+        "source_counts": {"cycles": cycles, "macs": macs, "executed_macs": executed_macs,
+                          "skipped_macs": skipped_macs, "read_bytes": read_bytes,
                           "write_bytes": write_bytes},
         "coefficients": {"mac_pj": mac_cost, "dram_byte_pj": dram_cost,
                          "static_mw": static_power},

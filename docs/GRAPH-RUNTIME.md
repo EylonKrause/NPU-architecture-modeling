@@ -151,6 +151,8 @@ array is the most efficient production depthwise engine.
 `tile_k`, `macs_per_cycle`, `array_rows`, `array_cols`, `memory_bytes_per_cycle`,
 `memory_latency`, `pipeline_cycles`, `dma_burst_bytes`, `weight_cache_bytes`,
 `buffer_slots`, `sram_bytes`, `frequency_mhz`, `timing`, and `weight_bits`.
+It also forwards `weight_encoding`, `palette_bits`, `sparse_block` and
+`weight_decode_values_per_cycle`; see [actual weight compression](WEIGHT-COMPRESSION.md).
 An explicit array geometry and explicit `macs_per_cycle` cannot be combined;
 the simulator validates architecture values and capacity. INT4 weight execution
 is selected by `weight_bits: 4`; signed values must fit the simulator's contract,
@@ -171,3 +173,24 @@ The usual `outputs` remain runtime-layout tensors; `external_outputs` restores
 original ONNX output layout with a host transpose. Conversion costs are excluded
 from NPU cycles. Other layout pairs are rejected. See [ONNX import](ONNX.md) for
 the strictly supported optional interchange subset.
+
+## Compile safe activation fusion
+
+```sh
+python3 scripts/graph_optimize.py examples/mobile_fusion.json \
+  --verify --binary build/npu-sim --output results/fused.json
+```
+
+The optional rewrite pass fuses a Dense, MatMul, Conv2D or DepthwiseConv2D
+producer followed by a single-consumer ReLU into the engine's existing
+requantization clamp. It preserves quantization, output names and complete
+numerical results, including saturation, nonzero zero points and both rounding
+policies. Shared or declared pre-activation outputs prevent fusion. Repeated
+ReLU chains are handled to a fixed point. The original document is preserved;
+the output path must be new. Create its parent directory before running.
+
+`--verify` executes both graphs and compares every declared output and layout.
+The report retains original/compiled NPU cycles, traffic, host logical access
+counts and liveness. Eliminating the host ReLU removes its host reads/writes;
+the model does not assign a fabricated NPU speedup to that work. This exact
+activation fusion does not supply general retained-SRAM cross-layer execution.

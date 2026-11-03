@@ -13,11 +13,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
 import queue
+import random
 import signal
 import subprocess
 import sys
 import threading
 import time
+import tempfile
 from urllib.parse import urlsplit
 
 
@@ -26,12 +28,14 @@ PROFILES = {
     "balanced": {"label": "Balanced INT8", "description": "Overlapped load, matrix compute and store with two SRAM slots."},
     "compute-bound": {"label": "Compute pressure", "description": "A larger reduction stresses the compute pipeline."},
     "memory-bound": {"label": "Memory pressure", "description": "Reduced external-memory bandwidth exposes DMA contention."},
+    "palette-weights": {"label": "Palettized weights", "description": "INT8 weights encoded as 2-bit lookup indices plus LUTs, with charged decode work."},
 }
 # These arguments are owned by the application, not supplied by HTTP clients.
 PROFILE_ARGS = {
     "balanced": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8", "--tile-k", "32", "--buffer-slots", "2"],
     "compute-bound": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8", "--tile-k", "32", "--buffer-slots", "2", "--macs-per-cycle", "4", "--memory-bytes-per-cycle", "128"],
     "memory-bound": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8", "--tile-k", "32", "--buffer-slots", "2", "--macs-per-cycle", "256", "--memory-bytes-per-cycle", "4", "--memory-latency", "24"],
+    "palette-weights": ["--tile-m", "8", "--tile-n", "8", "--tile-k", "32", "--buffer-slots", "2", "--weight-bits", "8", "--weight-encoding", "palette", "--palette-bits", "2", "--input-zero", "0", "--weight-zero", "0", "--shift", "4"],
 }
 MAX_MESSAGE = 1_048_576
 
@@ -99,15 +103,31 @@ class Controller:
     def _launch(self) -> None:
         self._terminate()
         self.messages = queue.Queue(maxsize=8)
-        self.process = subprocess.Popen(
-            [str(self.binary), "--live-stdio", *PROFILE_ARGS[self.profile],
-             "--seed", str(self.jobs_completed + 1)],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-            text=True, encoding="utf-8", bufsize=1,
-        )
-        threading.Thread(target=self._read_stdout, args=(self.process, self.messages),
-                         name="systemc-json-reader", daemon=True).start()
-        self._receive()
+        seed = self.jobs_completed + 1
+        # Only this fixed fixture profile needs a file. The application owns the
+        # path and dimensions; HTTP clients cannot supply tensors or paths.
+        fixture = tempfile.TemporaryDirectory(prefix="npu-live-palette-") if self.profile == "palette-weights" else None
+        try:
+            flags = list(PROFILE_ARGS[self.profile])
+            if fixture is not None:
+                rng = random.Random(seed)
+                path = Path(fixture.name) / "weights.npu"
+                values = [rng.randint(-8, 8) for _ in range(64 * 128)]
+                values += [rng.choice((-3, -1, 1, 3)) for _ in range(128 * 64)]
+                values += [rng.randint(-31, 31) for _ in range(64)]
+                path.write_text("NPU1 64 64 128\n" + " ".join(map(str, values)) + "\n", encoding="ascii")
+                flags += ["--input", str(path)]
+            self.process = subprocess.Popen(
+                [str(self.binary), "--live-stdio", *flags, "--seed", str(seed)],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                text=True, encoding="utf-8", bufsize=1,
+            )
+            threading.Thread(target=self._read_stdout, args=(self.process, self.messages),
+                             name="systemc-json-reader", daemon=True).start()
+            self._receive()  # Initial snapshot acknowledges all file reads.
+        finally:
+            if fixture is not None:
+                fixture.cleanup()
         self.started_at = time.monotonic()
 
     def _advance(self, cycles: int) -> None:

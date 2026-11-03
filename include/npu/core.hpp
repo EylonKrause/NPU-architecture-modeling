@@ -25,6 +25,10 @@ struct Config {
     std::uint64_t tile_m = 8, tile_n = 8;
     std::uint64_t tile_k = 0;
     std::uint64_t weight_bits = 8;
+    std::string weight_encoding = "dense";
+    std::uint64_t palette_bits = 4;
+    std::uint64_t sparse_block = 8;
+    std::uint64_t weight_decode_values_per_cycle = 16;
     std::uint64_t array_rows = 0, array_cols = 0;
     std::uint64_t macs_per_cycle = 64;
     std::uint64_t memory_bytes_per_cycle = 16;
@@ -56,6 +60,23 @@ struct Output {
 struct Tile {
     std::uint64_t id = 0, row = 0, col = 0, rows = 0, cols = 0;
 };
+
+// Compressed panels are shared by all output-row tiles. Each buffer contains
+// its four-byte codec header, LUT or bitmap, and genuinely packed payload.
+// The expanded Problem::weights remain exclusively the independent reference.
+struct EncodedWeightPanel {
+    std::uint64_t col = 0, cols = 0, k_start = 0, k = 0;
+    std::vector<std::uint8_t> buffer;
+    std::uint64_t nonzero_values = 0, retained_values = 0, decode_cycles = 0;
+};
+
+std::vector<EncodedWeightPanel> encode_weights(const Config& config, const Problem& problem);
+const EncodedWeightPanel& weight_panel(const Config& config,
+    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, std::uint64_t block);
+void compute_tile_encoded(const Problem& problem, const Config& config,
+    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, Output& output);
+std::uint64_t encoded_panel_compute_cycles(const Config& config, const Tile& tile,
+    std::uint64_t block, const EncodedWeightPanel& panel);
 
 std::uint64_t checked_add(std::uint64_t a, std::uint64_t b);
 std::uint64_t checked_mul(std::uint64_t a, std::uint64_t b);

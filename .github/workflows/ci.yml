@@ -39,6 +39,10 @@ jobs:
         run: |
           python3 scripts/graph_runtime.py examples/cnn.json --binary build/npu-sim
           python3 scripts/graph_runtime.py examples/residual_mlp.json --binary build/npu-sim
+      - name: Mobile compression, stateful transformer and multicore workloads
+        run: |
+          python3 scripts/mobile_suite.py --build-dir build --output-dir results/mobile
+          python3 scripts/graph_optimize.py examples/mobile_fusion.json --verify --binary build/npu-sim --output results/mobile/fused-graph.json
       - name: SRAM-constrained mapping search
         run: python3 scripts/autotune.py --binary build/npu-sim
       - name: Native SystemC waveform and TLM examples
@@ -47,6 +51,8 @@ jobs:
           mkdir -p results
           build/npu-sim --m 8 --n 8 --k 16 --vcd results/pipeline.vcd --progress-jsonl results/progress.jsonl > results/pipeline.json
           build/npu-tlm-demo --jobs 2 --vcd results/tlm > results/tlm.json
+          build/npu-transformer-demo --precision fp16 --prefill 4 --decode 3 --vcd results/transformer.vcd --progress-jsonl results/transformer.jsonl > results/transformer.json
+          build/npu-mobile-demo --cores 2 --jobs 6 --vcd results/mobile > results/mobile-platform.json
       - uses: actions/upload-artifact@v4
         if: matrix.cc == 'gcc'
         with:

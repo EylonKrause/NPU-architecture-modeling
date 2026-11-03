@@ -93,6 +93,29 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(state["jobs_completed"], 1, profile)
             self.assertTrue(state["recent_jobs"][0]["telemetry"]["validated"], profile)
 
+    def test_palette_decodes_real_buffers_varies_inputs_and_cleans_fixture(self):
+        self.controller.control({"action": "reset", "profile": "palette-weights"})
+        command = self.controller.process.args
+        fixture = Path(command[command.index("--input") + 1])
+        self.assertFalse(fixture.exists())  # First snapshot acknowledges all input reads.
+        for _ in range(100):
+            state = self.controller.control({"action": "step", "cycles": 10000})
+            if state["jobs_completed"] == 2:
+                break
+        self.assertEqual(state["jobs_completed"], 2)
+        first, second = [job["telemetry"] for job in state["recent_jobs"][:2]]
+        for result in (first, second):
+            self.assertTrue(result["validated"])
+            self.assertEqual(result["config"]["weight_encoding"], "palette")
+            self.assertEqual(result["config"]["weight_bits"], 8)
+            self.assertEqual(result["config"]["palette_bits"], 2)
+            self.assertLess(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])
+            self.assertGreater(result["weight_decode_cycles"], 0)
+            self.assertEqual(result["executed_macs"], result["macs"])
+            self.assertEqual(result["skipped_macs"], 0)
+        self.assertNotEqual(first["input_preview"], second["input_preview"])
+        self.assertNotEqual(first["output_hash"], second["output_hash"])
+
     def test_bounded_commands_and_state_transitions(self):
         for value in ({}, [], {"action": []}, {"action": "shell"},
                       {"action": "start", "profile": "../arbitrary"},

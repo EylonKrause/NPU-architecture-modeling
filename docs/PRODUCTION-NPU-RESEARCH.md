@@ -15,6 +15,8 @@ This repository is an executable architectural simulator. Its numerical outputs 
 | [MLIR TOSA dialect](https://mlir.llvm.org/docs/Dialects/TOSA/) | Tensor operations have explicit types, shapes and numerical semantics, including convolution, depthwise convolution, pooling and rescaling. | Publish a bounded operator contract and reject unsupported graphs or invalid shapes before execution. |
 | [Arm Ethos-U85](https://www.arm.com/products/silicon-ip-cpu/ethos/ethos-u85) and [ONNX Attention](https://onnx.ai/onnx/operators/onnx__Attention.html) | Contemporary NPU workloads include transformers; attention has explicit scaling, masking, softmax and optional key/value-cache semantics. | Dense matrix multiplication alone does not provide a complete transformer model. Treat these numerical and stateful operations as separate supported features. |
 | [Timeloop/Accelergy energy and area tables](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables) | Energy estimation uses component/action-specific reference costs. | Count actions and accept declared coefficients; label resulting energy as an estimate with provenance rather than measured hardware power. |
+| [Apple transformer deployment](https://machinelearning.apple.com/research/neural-engine-transformers), [stateful Core ML](https://apple.github.io/coremltools/docs-guides/source/stateful-models.html) and [palettization](https://apple.github.io/coremltools/docs-guides/source/opt-palettization-overview.html) | Attention locality, persistent prediction state and lookup-table weight compression are important mobile inference capabilities. | Implement explicit numerical precision, state lifetime, encoded buffers and decode/metadata costs. See the [mobile comparison and executable additions](MOBILE-NPU-COMPARISON.md). |
+| [Qualcomm Hexagon overview](https://www.qualcomm.com/processors/hexagon) | Scalar/vector/tensor engines, shared memory, microtile inference and power-constrained heterogeneous execution. | Add distinct operator stages and a concurrent shared-resource platform. Keep the implemented ReLU fusion boundary separate from general multi-layer microtile compilation. |
 
 ## Implementation priorities
 
@@ -28,7 +30,7 @@ Convolution lowering is a useful functional frontend: map output positions to ro
 
 Residual addition and pooling extend workload realism without pretending that every operator belongs on the same MAC array. Their rounding, quantization-domain rules and memory traffic need independent tests. A graph frontend should reject unsupported operators instead of silently computing them without timing or charging them to the accelerator.
 
-Transformer support would additionally need batched matrix multiplication, normalization, nonlinear operations, masks, sequence-dependent shapes and cache lifetime/traffic. Precision and approximation error need a defined contract. A matrix-multiplication experiment may study one transformer component, but it should not be advertised as complete transformer inference.
+The separate [transformer model](TRANSFORMER.md) now implements a small complete decoder block with attention, normalization, nonlinear operations, causal masking and cache lifetime/traffic. Its precision and approximation contract is explicit and independently checked. It does not turn the quantized graph importer into a general transformer runtime or provide a trained language model.
 
 ### Memory, mapping and timing
 

@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "mobile_relu_fusion",
+  "inputs": ["input"],
+  "tensors": {
+    "input": {"dtype": "int8", "shape": [2, 2], "data": [-2, -3, 1, 4], "scale": 1, "zero_point": 0},
+    "w1": {"dtype": "int8", "shape": [2, 2], "data": [1, -1, 2, 1], "scale": 1, "zero_point": 0},
+    "b1": {"dtype": "int32", "shape": [2], "data": [1, -2], "scale": 1, "zero_point": 0},
+    "w2": {"dtype": "int8", "shape": [2, 1], "data": [1, -1], "scale": 1, "zero_point": 0}
+  },
+  "nodes": [
+    {"name": "projection", "op": "Dense", "inputs": ["input", "w1", "b1"], "output": "pre",
+     "quant": {"multiplier": 1, "shift": 0, "output_scale": 1, "output_zero": 0}},
+    {"name": "activation", "op": "ReLU", "inputs": ["pre"], "output": "hidden"},
+    {"name": "output_projection", "op": "Dense", "inputs": ["hidden", "w2"], "output": "output",
+     "quant": {"multiplier": 1, "shift": 0, "output_scale": 1, "output_zero": 0}}
+  ],
+  "outputs": ["output"],
+  "expected_outputs": {"output": [0, 9]}
+}

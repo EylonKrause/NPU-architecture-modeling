@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(NPUArchitectureModeling VERSION 0.3.0 LANGUAGES CXX)
+project(NPUArchitectureModeling VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -32,8 +32,16 @@ add_executable(npu-tlm-demo src/tlm_platform.cpp)
 target_link_libraries(npu-tlm-demo PRIVATE npu_core SystemC::systemc)
 target_include_directories(npu-tlm-demo SYSTEM PRIVATE
   $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
+add_executable(npu-transformer-demo src/transformer.cpp)
+target_link_libraries(npu-transformer-demo PRIVATE npu_core SystemC::systemc)
+target_include_directories(npu-transformer-demo SYSTEM PRIVATE
+  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
+add_executable(npu-mobile-demo src/mobile_platform.cpp)
+target_link_libraries(npu-mobile-demo PRIVATE npu_core SystemC::systemc)
+target_include_directories(npu-mobile-demo SYSTEM PRIVATE
+  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
 
-foreach(target npu_core npu-sim npu-tlm-demo)
+foreach(target npu_core npu-sim npu-tlm-demo npu-transformer-demo npu-mobile-demo)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive-)
   else()
@@ -54,6 +62,13 @@ if(BUILD_TESTING)
     target_link_options(npu-core-tests PRIVATE -fsanitize=undefined)
   endif()
   add_test(NAME arithmetic-and-validation COMMAND npu-core-tests)
+  add_executable(npu-compression-core-tests tests/mobile_compression_core_tests.cpp)
+  target_link_libraries(npu-compression-core-tests PRIVATE npu_core)
+  if(NPU_ENABLE_SANITIZERS AND NOT MSVC)
+    target_compile_options(npu-compression-core-tests PRIVATE -fsanitize=undefined -fno-sanitize-recover=all)
+    target_link_options(npu-compression-core-tests PRIVATE -fsanitize=undefined)
+  endif()
+  add_test(NAME mobile-compression-storage COMMAND npu-compression-core-tests)
   find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
   add_test(NAME independent-integration
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py
@@ -64,6 +79,20 @@ if(BUILD_TESTING)
   add_test(NAME graph-inference
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_runtime_tests.py
             --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME graph-compiler-fusion
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_optimizer_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME mobile-weight-compression
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mobile_compression_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME mobile-transformer
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/transformer_tests.py
+            --binary $<TARGET_FILE:npu-transformer-demo>)
+  add_test(NAME mobile-soc-platform
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mobile_platform_tests.py
+            --binary $<TARGET_FILE:npu-mobile-demo>)
+  set_tests_properties(mobile-weight-compression mobile-transformer mobile-soc-platform
+    graph-compiler-fusion PROPERTIES TIMEOUT 180)
   add_test(NAME architecture-contract
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
             --binary $<TARGET_FILE:npu-sim>)

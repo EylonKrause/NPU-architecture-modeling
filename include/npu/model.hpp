@@ -23,6 +23,9 @@ struct Statistics {
     std::uint64_t weight_cache_hits = 0, weight_cache_misses = 0;
     std::uint64_t weight_bytes_saved = 0, peak_cached_weight_bytes = 0;
     std::uint64_t loaded_panels = 0, computed_panels = 0, completed_tiles = 0;
+    std::uint64_t executed_macs = 0, skipped_macs = 0, weight_decode_cycles = 0;
+    std::uint64_t decoded_weight_values = 0, weight_read_bytes = 0;
+    std::uint64_t encoded_weight_storage_bytes = 0, dense_weight_storage_bytes = 0;
 };
 
 // A point-in-time view of the running SystemC model. Resource identifiers are
@@ -66,6 +69,7 @@ private:
 
     const Config& config_;
     const Problem& problem_;
+    std::vector<EncodedWeightPanel> encoded_weights_;
     std::vector<Tile> tiles_;
     Output output_;
     Statistics stats_;
@@ -112,6 +116,9 @@ private:
     CounterSignal compute_cycles_signal_{"compute_busy_cycles"};
     CounterSignal dma_requests_signal_{"dma_requests"};
     CounterSignal dma_bursts_signal_{"dma_bursts"};
+    CounterSignal executed_macs_signal_{"executed_macs"};
+    CounterSignal skipped_macs_signal_{"skipped_macs"};
+    CounterSignal decode_cycles_signal_{"weight_decode_cycles"};
 
     void observe();
     void changed();

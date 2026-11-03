@@ -34,11 +34,16 @@ The report includes component energies, total energy in both units, modeled late
 
 Action counts combined with component costs are an established architecture-estimation approach; see the primary [Timeloop/Accelergy energy-reference-table documentation](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables). This script is an independent, much smaller coefficient model and does not invoke Accelergy or include its component models.
 
-MACs and bytes come from this simulator's scheduling and traffic contract. Cache hits or INT4 packing can reduce counted external-memory bytes. No sparse execution, unreported data movement or omitted subsystem receives an automatic energy benefit.
+MACs and bytes come from this simulator's scheduling and traffic contract. Cache hits, packed weights and actual compression can change counted external-memory bytes. When present, `executed_macs` determines MAC energy, while `macs` remains the logical dense workload; executed plus skipped counts must agree with logical work. Older dense results without those fields use logical MACs. Sparse decoding and metadata are represented in time/traffic but decoder energy remains excluded. Omitted subsystems receive no automatic energy benefit.
 
 The estimate excludes SRAM/register accesses, clock trees, interconnect, DMA control, decompression, host work and process-launch cost. The constant static-power term has no voltage, temperature, power-state or thermal feedback model. A coefficient calibrated for one memory system or voltage is not automatically transferable to another configuration. Coefficients should state whether their measured cost already includes another component, to avoid double counting.
 
 Energy differences support comparisons under fixed, declared assumptions. They do not establish measured device power, battery life, thermal safety or silicon energy accuracy. Hardware calibration is a separate validation step.
+
+The [mobile multicore platform](MOBILE-PLATFORM.md) has a separate opt-in energy
+model with OPP voltage scaling and active/retention/gated intervals. That model
+is not silently applied to this single-invocation energy script, and neither
+model includes calibrated thermal feedback.
 
 ## Verification
 

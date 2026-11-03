@@ -7,11 +7,26 @@ namespace npu {
 
 Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
                          const Problem& problem)
-    : sc_module(name), config_(config), problem_(problem), tiles_(make_tiles(config)),
+    : sc_module(name), config_(config), problem_(problem), encoded_weights_(encode_weights(config, problem)),
+      tiles_(make_tiles(config)),
       free_slots_("free_slots", static_cast<int>(config.buffer_slots)),
       loaded_("loaded_tiles", static_cast<int>(config.buffer_slots)),
       computed_("computed_tiles", static_cast<int>(config.buffer_slots)) {
     validate(config);
+    for (const auto& panel : encoded_weights_) {
+        stats_.encoded_weight_storage_bytes = checked_add(stats_.encoded_weight_storage_bytes, panel.buffer.size());
+        stats_.dense_weight_storage_bytes = checked_add(stats_.dense_weight_storage_bytes,
+            ceil_div(checked_mul(checked_mul(panel.k, panel.cols), config.weight_bits), 8));
+    }
+    if (config.weight_encoding == "dense") {
+        for (const auto& tile : tiles_) {
+            if (tile.row != 0) continue;
+            for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
+                stats_.dense_weight_storage_bytes = checked_add(stats_.dense_weight_storage_bytes,
+                    ceil_div(checked_mul(checked_mul(panel_k(config, block), tile.cols), config.weight_bits), 8));
+        }
+        stats_.encoded_weight_storage_bytes = stats_.dense_weight_storage_bytes;
+    }
     const auto size = static_cast<std::size_t>(checked_mul(config.m, config.n));
     output_.accumulators.resize(size);
     output_.quantized.resize(size);
@@ -88,6 +103,9 @@ void Accelerator::observe() {
     compute_cycles_signal_.write(view.statistics.compute_busy_cycles);
     dma_requests_signal_.write(view.statistics.dma_requests);
     dma_bursts_signal_.write(view.statistics.dma_bursts);
+    executed_macs_signal_.write(view.statistics.executed_macs);
+    skipped_macs_signal_.write(view.statistics.skipped_macs);
+    decode_cycles_signal_.write(view.statistics.weight_decode_cycles);
 }
 
 void Accelerator::trace_signals(sc_core::sc_trace_file* file) const {
@@ -115,6 +133,9 @@ void Accelerator::trace_signals(sc_core::sc_trace_file* file) const {
     NPU_TRACE(compute_cycles_signal_, "compute_busy_cycles");
     NPU_TRACE(dma_requests_signal_, "dma_requests");
     NPU_TRACE(dma_bursts_signal_, "dma_bursts");
+    NPU_TRACE(executed_macs_signal_, "executed_macs");
+    NPU_TRACE(skipped_macs_signal_, "skipped_macs");
+    NPU_TRACE(decode_cycles_signal_, "weight_decode_cycles");
 #undef NPU_TRACE
 }
 
@@ -154,15 +175,30 @@ bool Accelerator::weight_cached(const Tile& tile, std::uint64_t block, std::uint
 
 void Accelerator::transfer(const Tile& tile, bool read, std::uint64_t block) {
     auto bytes = read ? panel_read_bytes(config_, tile, block) : tile_write_bytes(tile);
+    std::uint64_t weight_bytes = 0;
     if (read) {
         const auto weights = ceil_div(checked_mul(checked_mul(panel_k(config_, block), tile.cols), config_.weight_bits), 8);
-        if (weight_cached(tile, block, weights)) bytes -= weights;
+        const auto actual = config_.weight_encoding == "dense" ? weights :
+            static_cast<std::uint64_t>(weight_panel(config_, encoded_weights_, tile, block).buffer.size());
+        if (config_.weight_encoding != "dense") {
+            // panel_read_bytes uses a conservative encoded SRAM/traffic bound.
+            // Replace that bound with the actual serialized panel byte count.
+            const auto elements = checked_mul(panel_k(config_, block), tile.cols);
+            const auto bound = config_.weight_encoding == "palette" ?
+                checked_add(checked_add(4, std::min(elements, UINT64_C(1) << config_.palette_bits)),
+                            ceil_div(checked_mul(elements, config_.palette_bits), 8)) :
+                checked_add(checked_add(4, ceil_div(ceil_div(elements, config_.sparse_block), 8)), weights);
+            bytes = checked_add(bytes - bound, actual);
+        }
+        if (weight_cached(tile, block, actual)) bytes -= actual;
+        else weight_bytes = actual;
     }
     Request request(tile, bytes, block);
     (read ? reads_ : writes_).push_back(&request);
     changed();
     dma_ready_.notify(sc_core::SC_ZERO_TIME);
     wait(request.done);
+    stats_.weight_read_bytes = checked_add(stats_.weight_read_bytes, weight_bytes);
 }
 
 void Accelerator::load() {
@@ -195,7 +231,10 @@ void Accelerator::compute() {
         const auto id = job / blocks;
         const auto block = job % blocks;
         const auto& tile = tiles_.at(static_cast<std::size_t>(id));
-        const auto duration = panel_compute_cycles(config_, tile, block);
+        const auto* encoded = config_.weight_encoding == "dense" ? nullptr :
+            &weight_panel(config_, encoded_weights_, tile, block);
+        const auto duration = encoded ? encoded_panel_compute_cycles(config_, tile, block, *encoded) :
+            panel_compute_cycles(config_, tile, block);
         const auto start = now();
         compute_start_ = start;
         compute_duration_ = duration;
@@ -205,10 +244,22 @@ void Accelerator::compute() {
         changed();
         // Integer arithmetic is evaluated once at the final reduction panel;
         // the timing model retains the partial-sum allocation across panels.
-        if (block + 1 == blocks) compute_tile(problem_, config_.quant, tile, output_);
+        if (block + 1 == blocks) {
+            if (encoded) compute_tile_encoded(problem_, config_, encoded_weights_, tile, output_);
+            else compute_tile(problem_, config_.quant, tile, output_);
+        }
         advance(duration);
         stats_.compute_busy_cycles = checked_add(stats_.compute_busy_cycles, duration);
-        stats_.macs = checked_add(stats_.macs, checked_mul(checked_mul(tile.rows, tile.cols), panel_k(config_, block)));
+        const auto logical_macs = checked_mul(checked_mul(tile.rows, tile.cols), panel_k(config_, block));
+        const auto executed_macs = config_.weight_encoding == "sparse" ?
+            checked_mul(tile.rows, encoded->nonzero_values) : logical_macs;
+        stats_.macs = checked_add(stats_.macs, logical_macs);
+        stats_.executed_macs = checked_add(stats_.executed_macs, executed_macs);
+        stats_.skipped_macs = checked_add(stats_.skipped_macs, logical_macs - executed_macs);
+        if (encoded) {
+            stats_.weight_decode_cycles = checked_add(stats_.weight_decode_cycles, encoded->decode_cycles);
+            stats_.decoded_weight_values = checked_add(stats_.decoded_weight_values, encoded->retained_values);
+        }
         ++stats_.computed_panels;
         compute_busy_ = false;
         changed();

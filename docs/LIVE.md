@@ -41,7 +41,7 @@ stops execution and is reported as an error.
 
 ## Workloads and observability
 
-All three built-in profiles use a bounded 64-by-64 output matrix with reduction
+All four built-in profiles use a bounded 64-by-64 output matrix with reduction
 length 128, 8-by-8 output tiles, reduction panels of 32 and two SRAM slots:
 
 | Profile | Purpose |
@@ -49,11 +49,14 @@ length 128, 8-by-8 output tiles, reduction panels of 32 and two SRAM slots:
 | Balanced INT8 | Default compute and shared DMA bandwidth assumptions. |
 | Compute pressure | Four MACs per cycle and 128 memory bytes per cycle. |
 | Memory pressure | 256 MACs per cycle, four memory bytes per cycle and 24-cycle DMA startup. |
+| Palettized weights | INT8 fixture with four weight values, actual packed two-bit indices plus per-panel LUTs and charged decode cycles. Activations change with each job seed. |
 
 These names describe selected model parameters; they do not assert measured
 silicon bottlenecks. The UI reports simulated cycles, completed MACs, DMA bytes,
 busy fractions, active stages, actual tile completion and real input/output
-previews. The first 16 values are previews, while validation covers the complete
+previews. Compression telemetry includes encoded/dense storage, decoder cycles
+and skipped MACs. Palettes preserve all input values; their cost includes LUT
+metadata, so compression does not guarantee fewer cycles. The first 16 values are previews, while validation covers the complete
 output. There is no synthetic activity animation. Busy fractions divide actual
 busy cycles, including elapsed time in an active stage, by simulated cycles.
 Completed MACs and byte counters increase when their corresponding stage
@@ -98,7 +101,7 @@ python3 tests/live_dashboard_tests.py --binary build/npu-sim -v
 Tests use the actual compiled SystemC executable. They verify increasing model
 time, frozen paused state, exact stepping before completion, resumption, owned
 child teardown, both full-output validation and changing deterministic inputs,
-all three profiles, rejected arbitrary commands, and HTTP browser boundaries.
+all four profiles, rejected arbitrary commands, and HTTP browser boundaries.
 
 The existing batch, graph and ONNX paths remain available; this dashboard is a
 live view of the SystemC matrix accelerator, not a replacement graph compiler.

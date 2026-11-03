@@ -8,6 +8,7 @@ function message(text, error = false) {element("message").textContent=text; elem
 function pick(object,...keys) {for(const key of keys) if(object[key]!==undefined) return object[key]; return undefined;}
 function render(value) {
   state=value; const t=value.telemetry||{}; const stats=t.statistics||t;
+  if(["running","paused"].includes(value.state)) element("profile").value=value.profile;
   const cycles=pick(t,"cycles","simulated_cycles")??stats.cycles;
   const macs=pick(stats,"macs","completed_macs");
   const read=stats.read_bytes, write=stats.write_bytes;
@@ -19,7 +20,10 @@ function render(value) {
   element("traffic-detail").textContent=`${bytes(read)} read / ${bytes(write)} write`;
   element("jobs").textContent=format(value.jobs_completed);
   const config=t.config||t.configuration||{};
-  element("workload-shape").textContent=config.m?`${config.m} × ${config.n} × ${config.k} · signed INT${config.weight_bits||8} weights`:"INT8 matrix computation";
+  element("workload-shape").textContent=config.m?`${config.m} × ${config.n} × ${config.k} · signed INT${config.weight_bits||8} weights · ${config.weight_encoding||"dense"}`:"INT8 matrix computation";
+  element("compression-detail").textContent=(config.weight_encoding&&config.weight_encoding!=="dense")
+    ?`${config.weight_encoding} · ${bytes(stats.encoded_weight_storage_bytes)} encoded / ${bytes(stats.dense_weight_storage_bytes)} packed-dense weights · ${format(stats.weight_decode_cycles)} decode cycles · ${format(stats.skipped_macs)} MACs skipped`
+    :"Dense weights · no decompression overhead";
   const targetTime=t.target_time_ns??(typeof cycles==="number"&&config.frequency_mhz?cycles*1000/config.frequency_mhz:undefined);
   element("target-time").textContent=typeof targetTime==="number"?`${format(targetTime)} ns of target time`:"Current inference · simulated clock";
   const compute=stats.compute_busy_cycles||0, dma=stats.dma_busy_cycles||0;

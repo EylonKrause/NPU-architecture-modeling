@@ -74,6 +74,7 @@ class SystemCObservability(unittest.TestCase):
             "macs", "dma_tile_id", "dma_block_id", "compute_tile_id",
             "compute_block_id", "dma_busy_cycles", "compute_busy_cycles",
             "dma_requests", "dma_bursts",
+            "executed_macs", "skipped_macs", "weight_decode_cycles",
         }
         self.assertTrue(required <= changes.keys(), required - changes.keys())
         for name in required:
@@ -81,7 +82,8 @@ class SystemCObservability(unittest.TestCase):
             expected_width = 1 if name in {"done", "dma_busy", "compute_busy", "dma_read"} else 64
             self.assertEqual(widths[name], expected_width, name)
         for name in {"cycles", "read_bytes", "write_bytes", "macs",
-                     "dma_busy_cycles", "compute_busy_cycles", "dma_requests", "dma_bursts"}:
+                     "dma_busy_cycles", "compute_busy_cycles", "dma_requests", "dma_bursts",
+                     "executed_macs", "skipped_macs", "weight_decode_cycles"}:
             self.assertEqual(changes[name][-1][1], result[name], name)
             self.assertEqual([value for _, value in changes[name]],
                              sorted(value for _, value in changes[name]), name)
@@ -129,6 +131,24 @@ class SystemCObservability(unittest.TestCase):
         for key in results[0]:
             if key not in {"simulation_wall_seconds", "config"}:
                 self.assertEqual(results[0][key], results[1][key], key)
+
+    def test_compressed_waveforms_match_real_decoder_and_skipped_work(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "weights.npu"
+            source.write_text("NPU1 2 3 4\n1 2 3 4 5 6 7 8\n"
+                              "0 0 0 1 0 0 0 0 0 1 -1 0\n0 0 0\n", encoding="ascii")
+            for codec in ("palette", "sparse"):
+                with self.subTest(codec=codec):
+                    path = Path(directory) / (codec + ".vcd")
+                    result = self.run_simulator(["--input", str(source), "--tile-m", "1",
+                        "--tile-n", "2", "--tile-k", "2", "--input-zero", "0",
+                        "--weight-zero", "0", "--weight-encoding", codec, "--palette-bits", "2",
+                        "--sparse-block", "2", "--vcd", str(path)])
+                    self.verify_waveform(path, result, 2)
+                    self.assertGreater(result["weight_decode_cycles"], 0)
+                    self.assertEqual(result["executed_macs"] + result["skipped_macs"], 24)
+                    if codec == "sparse":
+                        self.assertGreater(result["skipped_macs"], 0)
 
     def test_vcd_in_unwritable_directory_fails_without_false_success(self):
         with tempfile.TemporaryDirectory() as directory:

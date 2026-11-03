@@ -27,6 +27,7 @@ ARCHITECTURE_KEYS = {
     "memory_latency", "pipeline_cycles", "buffer_slots", "sram_bytes",
     "frequency_mhz", "timing", "tile_k", "array_rows", "array_cols",
     "dma_burst_bytes", "weight_cache_bytes", "weight_bits",
+    "weight_encoding", "palette_bits", "sparse_block", "weight_decode_values_per_cycle",
 }
 
 

@@ -4,7 +4,7 @@
 
 A working C++17/SystemC architectural simulator for quantized neural inference, with executable graph workloads and explicit compute, SRAM and external-memory assumptions. It models signed INT8 activations, INT8 or packed INT4 weights, per-channel quantization, reduction tiling, an optional systolic-array timing model, bounded buffers, DMA arbitration and weight reuse.
 
-The C++ engine compares every complete accumulator and output with a scalar reference. A local browser dashboard controls actual live SystemC execution, with pause, resume, stepping and repeated validated inferences. A separate persistent TLM-2.0 platform implements host MMIO, byte-addressed DRAM, DMA, clock/reset and completion interrupts. A Python graph frontend runs dense layers, convolutions and depthwise convolutions through the tiled engine, and executes explicitly identified pooling, residual and activation fallbacks on the host.
+The C++ engine compares every complete accumulator and output with a scalar reference. A local browser dashboard controls actual live SystemC execution, with pause, resume, stepping and repeated validated inferences. Real packed palette/sparse weights feed the numerical datapath. A persistent floating-point transformer model implements causal attention and a KV cache; a mobile platform models concurrent inference cores, shared memory, priorities, DVFS and idle gating. A separate TLM-2.0 platform implements host MMIO, byte-addressed DRAM, DMA, clock/reset and completion interrupts. A Python graph frontend runs dense layers, convolutions and depthwise convolutions through the tiled engine, and executes explicitly identified pooling, residual and activation fallbacks on the host.
 
 This is a generic architectural model. It is not a commercial NPU ISA emulator or an independently calibrated RTL/silicon timing model. Supported operations and remaining limits are listed in the [feature matrix](docs/FEATURE-MATRIX.md); [production NPU research](docs/PRODUCTION-NPU-RESEARCH.md) explains the design priorities with primary sources.
 
@@ -44,7 +44,7 @@ build/npu-sim --m 17 --n 13 --k 31 \
   --progress-jsonl results/progress.jsonl --slice-cycles 64 > results/panels.json
 ```
 
-The CSV identifies each output tile and reduction block. The native SystemC VCD exposes 21 actual signals, including resource ownership, occupancy, bytes, MACs and completion. JSONL progress reports the same running model while stdout remains one final result object. A passive `SC_METHOD` checks resource invariants without adding architecture cycles. Cache capacity is included in the SRAM reservation. Explicit array geometry and `--macs-per-cycle` are alternative compute configurations. See [SystemC tracing, snapshots and the live stdio protocol](docs/SYSTEMC.md).
+The CSV identifies each output tile and reduction block. The native SystemC VCD exposes 24 actual signals, including resource ownership, occupancy, bytes, logical/executed/skipped MACs, decoder cycles and completion. JSONL progress reports the same running model while stdout remains one final result object. A passive `SC_METHOD` checks resource invariants without adding architecture cycles. Cache capacity is included in the SRAM reservation. Explicit array geometry and `--macs-per-cycle` are alternative compute configurations. See [SystemC tracing, snapshots and the live stdio protocol](docs/SYSTEMC.md).
 
 ## Persistent TLM-2.0 coprocessor
 
@@ -67,6 +67,24 @@ python3 scripts/mlp_demo.py --binary build/npu-sim
 The custom graph format carries tensor shapes, scales, zero points, dependencies and explicit quantization. It supports dense/matrix multiplication, Conv2D and depthwise Conv2D with padding, stride and dilation. Convolution is materialized lowering to the dense engine, rather than a direct-convolution line-buffer model. Add, ReLU, pooling and Flatten are labelled host fallbacks. Graph reports include tensor liveness, lowering workspace and per-node placement; host fallback work is excluded from NPU cycles.
 
 Layer invocations are sequential, with complete off-chip outputs between layers. There is no cross-layer overlap or retained SRAM. See [graph runtime](docs/GRAPH-RUNTIME.md) for layouts, scale validation and supported operators. The optional [ONNX importer](docs/ONNX.md) accepts a strict signed-INT8 subset: rank-two `QLinearMatMul`, and static `QLinearConv` with ordinary or depthwise grouping. It requires exactly representable scale ratios, uses nearest-even rounding, and converts convolution layouts explicitly. Unsupported graphs fail rather than being approximated.
+
+## Mobile NPU capabilities
+
+[Apple/mobile comparison](docs/MOBILE-NPU-COMPARISON.md) connects public production capabilities to executable features and remaining gaps. Run the paired examples together:
+
+```sh
+python3 scripts/mobile_suite.py --build-dir build --output-dir results/mobile
+build/npu-transformer-demo --precision fp16 --prefill 4 --decode 3 --verify-lifecycle --dump-output
+build/npu-mobile-demo --cores 2 --jobs 6 --governor deadline --deadline-ns 2000
+python3 scripts/graph_optimize.py examples/mobile_fusion.json --verify --binary build/npu-sim
+```
+
+* [Compressed weights](docs/WEIGHT-COMPRESSION.md): lossless 1/2/4/8-bit palette indices or zero-point-aware sparse blocks, actual decoding, metadata traffic, decode cycles and executed/skipped MACs. The live dashboard includes a **Palettized weights** profile.
+* [Stateful transformer](docs/TRANSFORMER.md): causal grouped-query attention, stable softmax, RoPE, RMSNorm, residuals and SwiGLU, with FP16/BF16 storage plus FP32 accumulation and a persistent bounded KV cache. Independent Python checks cover complete outputs and low-precision conversion.
+* [Mobile multicore platform](docs/MOBILE-PLATFORM.md): concurrent SystemC engine threads, shared bus contention, priorities/deadlines, private SRAM/cache, synthetic OPPs, voltage/frequency switching and idle gating. Energy requires explicit coefficients.
+* [Graph compilation](scripts/graph_optimize.py): safe single-consumer Dense/Conv → ReLU fusion removes avoidable host operations while preserving observed intermediate results. `--verify` runs original and compiled graphs and compares every output.
+
+The mobile suite preserves individual dense/compressed comparisons and identical serial/multicore jobs. Metadata, decode and shared-memory costs can outweigh theoretical gains. These are generic architectural models, without a proprietary phone NPU ISA, trained language model or calibrated mobile silicon timing.
 
 ## Import a supported ONNX model
 
@@ -111,6 +129,9 @@ Set these variables from measurements or clearly stated experimental assumptions
 | `--m`, `--n`, `--k`, `--input` | Deterministic workload dimensions or real input tensors. |
 | `--tile-m`, `--tile-n`, `--tile-k` | Output tiling and reduction panels; zero reduction tile means full reduction. |
 | `--weight-bits 4\|8` | Signed weight range and packed weight traffic; activations remain INT8. |
+| `--weight-encoding dense\|palette\|sparse` | Actual encoded weights, lossless decoding and representation-aware resource costs. |
+| `--palette-bits 1\|2\|4\|8`, `--sparse-block N` | Lookup-index width or zero-point-aware sparse block length. |
+| `--weight-decode-values-per-cycle N` | Charged decoder throughput for compressed weights. |
 | `--macs-per-cycle` | Aggregate vector MAC budget. |
 | `--array-rows`, `--array-cols` | Alternative analytical systolic geometry, including folds and fill/drain. |
 | `--pipeline-cycles` | Compute overhead charged for every reduction panel. |
@@ -128,4 +149,4 @@ Set these variables from measurements or clearly stated experimental assumptions
 | `--progress-jsonl`, `--slice-cycles` | Running snapshots at a bounded observation cadence. |
 | `--live-stdio` | Paused kernel controlled through `advance N`, `snapshot` and `stop`. |
 
-Read [architecture](docs/ARCHITECTURE.md), the [implementation contract](docs/IMPLEMENTATION-CONTRACT.md), [validation method](docs/VALIDATION.md), and [verified results](docs/VALIDATED-RESULTS.md) before interpreting performance claims. Floating-point datapaths, sparse execution, attention, physical SRAM/DRAM/NoC contention, proprietary command streams and hardware calibration are separate features, not implied by matrix multiplication support.
+Read [architecture](docs/ARCHITECTURE.md), the [implementation contract](docs/IMPLEMENTATION-CONTRACT.md), [validation method](docs/VALIDATION.md), and [verified results](docs/VALIDATED-RESULTS.md) before interpreting performance claims. Each executable has its own contract: the quantized pipeline, persistent transformer and multicore platform are distinct models. Physical SRAM/DRAM/NoC contention, proprietary command streams and hardware calibration remain outside their supplied evidence.

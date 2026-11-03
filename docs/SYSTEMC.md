@@ -39,6 +39,7 @@ JSON result. The two trace formats observe the same simulation.
 | `loaded_tiles`, `computed_tiles` | Jobs available in the two bounded interstage FIFOs. |
 | `read_queue_depth`, `write_queue_depth` | Requests waiting for DMA arbitration. |
 | `read_bytes`, `write_bytes`, `macs` | Completed-operation counters. |
+| `executed_macs`, `skipped_macs`, `weight_decode_cycles` | Actual compressed-path arithmetic and charged decoder work; logical `macs` retains dense shape work. |
 | `dma_requests`, `dma_bursts` | Completed DMA requests and modeled burst count. |
 | `dma_busy_cycles`, `compute_busy_cycles` | Accumulated occupancy, including elapsed time in an active operation when sampled. |
 | `cycles` | Current architecture-cycle timestamp when a state transition is observed. |

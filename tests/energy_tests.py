@@ -37,6 +37,19 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(result["average_power_mw"], 0)
         self.assertEqual(result["coefficients"]["static_mw"], 0)
 
+    def test_sparse_energy_counts_executed_macs_and_retains_logical_work(self):
+        source = {**fixture(), "executed_macs": 4, "skipped_macs": 6}
+        report = energy.estimate(source, mac_pj=2, dram_byte_pj=0)
+        self.assertEqual(report["component_pj"]["mac"], 8)
+        self.assertEqual(report["source_counts"]["macs"], 10)
+        self.assertEqual(report["source_counts"]["executed_macs"], 4)
+        self.assertTrue(any("decompression" in item for item in report["limitations"]))
+
+    def test_inconsistent_or_invalid_sparse_counters_rejected(self):
+        for executed, skipped in ((11, 0), (4, 5), (True, 9), (-1, 11), (0, 11)):
+            with self.subTest(executed=executed, skipped=skipped), self.assertRaises(ValueError):
+                energy.estimate({**fixture(), "executed_macs": executed, "skipped_macs": skipped}, 1, 1)
+
     def test_schema_and_numerical_agreement_required(self):
         for key, value in (("schema_version", True), ("schema_version", 1.0),
                            ("schema_version", 2), ("numerical_match", False),
