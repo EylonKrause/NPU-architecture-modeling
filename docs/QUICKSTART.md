@@ -96,6 +96,10 @@ explains the compiler setup.
 The launcher handles the native `.exe` name and Release build directory. These
 instructions do not imply that native Windows or macOS execution was verified
 by a Linux-only local run; see the repository's CI results for platform evidence.
+For current MSVC compilers, the fetched SystemC dependency receives the
+[official upstream integer-stream compatibility fix](https://github.com/accellera-official/systemc/commit/3570c374f3c98e060d6267183ccb8de51aab5129).
+The build checks the original and patched file hashes, preserves dependency
+copyrights and refuses to overwrite unexpected local modifications.
 
 ## Useful options
 
