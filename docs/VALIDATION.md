@@ -21,8 +21,14 @@ The standard suite covers the following evidence boundaries:
 | Graph inference | CNN/residual golden outputs, direct convolution reference versus lowered execution, padding/stride/dilation, depthwise channel mapping, host placement, scale validation, dependency scheduling and tensor liveness. |
 | Energy analysis | Hand-calculated units/components, required coefficients, latency consistency, strict result schema, overflow/nonfinite rejection and create-only output. |
 | Mapping search | Resource-constrained selection, latency/SRAM objectives, infeasible candidates, bounded search and unexpected-error propagation. |
+| Native SystemC observability | Parse actual VCD declarations and changes, check final byte/MAC/burst totals and completion, occupancy bounds, real busy activity, traced/untraced output identity and event/cycle agreement. |
+| Live stdio protocol | Drive the actual child process with bounded response waits; verify frozen paused state, explicit advancement, complete output/hash identity with batch, recoverable bounded command errors, EOF, progress and waveform output. |
+| Local live dashboard | Actual SystemC time progression, pause/step/resume, repeated verified jobs with changing inputs, all workload profiles, owned-child teardown, rejected arbitrary commands and HTTP browser boundaries. |
+| TLM coprocessor platform | Persistent repeated jobs, real tensor memory transactions and complete output readback, independent Python integer results, startup reset, clock/IRQ behavior and masking, malformed protocol rejection, DRAM bounds and host/engine arbitration. |
 
 The executable compares full accumulators and outputs; hashes are additional identity evidence. Python tests derive expected values independently rather than calling the C++ reference. The extended architecture test uses exact serial sums plus multi-slot causal/resource invariants; the original default-model scheduler additionally checks concurrent timestamps exactly. Event/cycle agreement shares implementation and therefore supplements, rather than replaces, independent checks.
+
+The default configuration contains eleven CTest suites: the C++ core and 92 Python tests. Enabling the optional ONNX checks adds one suite and eighteen Python tests, for twelve suites and 110 Python tests. Counts describe the checked-in tests; successful runs must still be recorded for the exact revision and environment. A configured GitHub Actions workflow is not evidence that an unpublished revision has passed remote CI.
 
 Optional ONNX import has a separate pinned dependency/test boundary. Its tests construct actual ONNX models and compare outputs with ONNX Runtime for the supported signed-INT8 subset, including nearest-even ties and convolution layout conversion. Unsupported operators, types, shapes, grouping and scale ratios are rejected. Do not infer general framework conformance from a supported fixture; consult [the import contract](ONNX.md).
 
@@ -71,6 +77,10 @@ Keep individual cases alongside the geometric mean. Do not aggregate unrelated c
 ## Timing-mode and energy boundaries
 
 `compare_modes.py` verifies identical architecture results and repeats host measurements. Median subprocess wall time includes startup, scheduling and library effects. The executable's simulation wall time has a narrower boundary. Small cases can be dominated by startup noise. Neither host metric changes modeled accelerator cycles.
+
+Live snapshots run on the kernel's host thread while execution is paused. Their busy counters include elapsed active operations, while bytes and MACs commit at operation completion. Completion snapshots retain the actual model completion cycle if the last host slice runs to a later deadline. Tracing and slicing must preserve batch outputs and architecture cycles; the regression suite tests this explicitly. Native VCD uses picosecond resolution for delta-cycle ordering, not a claim of picosecond circuit accuracy. Read the cycle signal or CSV cycle columns for architecture timing.
+
+The dashboard intentionally paces host commands for inspection. Its browser refresh rate and inferences per host second are not NPU throughput. Its continuous mode launches a new process per inference. The separate TLM platform validates repeated submissions in one kernel, with its own fixed workload, memory transactions and loosely timed serial schedule. It does not inherit the overlapped pipeline's elapsed-cycle predictions. Startup reset and the specified MMIO protocol are tested; arbitrary mid-job resets or undocumented software-driver behavior are outside the supplied evidence.
 
 Energy analysis requires declared coefficients and a valid simulator result. Keep coefficient provenance, units and omitted components with each report. Synthetic test coefficients verify arithmetic; they are not technology measurements. Graph host fallbacks and lowering are excluded from NPU cycles and from the single-invocation energy tool's action counts.
 

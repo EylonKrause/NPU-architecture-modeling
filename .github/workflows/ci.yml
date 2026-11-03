@@ -41,6 +41,17 @@ jobs:
           python3 scripts/graph_runtime.py examples/residual_mlp.json --binary build/npu-sim
       - name: SRAM-constrained mapping search
         run: python3 scripts/autotune.py --binary build/npu-sim
+      - name: Native SystemC waveform and TLM examples
+        if: matrix.cc == 'gcc'
+        run: |
+          mkdir -p results
+          build/npu-sim --m 8 --n 8 --k 16 --vcd results/pipeline.vcd --progress-jsonl results/progress.jsonl > results/pipeline.json
+          build/npu-tlm-demo --jobs 2 --vcd results/tlm > results/tlm.json
+      - uses: actions/upload-artifact@v4
+        if: matrix.cc == 'gcc'
+        with:
+          name: systemc-waveforms-and-results
+          path: results/
 
   undefined-behavior:
     runs-on: ubuntu-latest

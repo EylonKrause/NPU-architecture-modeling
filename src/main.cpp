@@ -6,13 +6,21 @@
 #include <cctype>
 #include <cmath>
 #include <fstream>
+#include <filesystem>
 #include <iomanip>
 #include <iostream>
 #include <limits>
+#include <memory>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 
 namespace {
+void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actions& actions) {
+    if (actions & sc_core::SC_DISPLAY) std::cerr << report.what() << '\n';
+    sc_core::sc_report_handler::default_handler(report, actions & ~sc_core::SC_DISPLAY);
+}
+
 std::uint64_t unsigned_value(const std::string& text) {
     std::uint64_t result = 0;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
@@ -62,6 +70,10 @@ void usage() {
         "  --rounding away|even          rounding ties (default away from zero)\n"
         "  --relu                        fused quantized ReLU\n"
         "  --trace PATH                  export stage trace CSV\n"
+        "  --vcd PATH.vcd                export native SystemC waveforms\n"
+        "  --progress-jsonl PATH         write snapshots during bounded simulation slices\n"
+        "  --slice-cycles N              progress slice size (default 1024)\n"
+        "  --live-stdio                  stdin advance/snapshot/stop; JSONL responses\n"
         "  --dump-output                 include both result arrays in JSON\n"
         "  --help                        show this text\n";
 }
@@ -70,6 +82,9 @@ struct Arguments {
     npu::Config config;
     std::string input_path;
     std::string quantization_path;
+    std::string vcd_path, progress_path;
+    std::uint64_t slice_cycles = 1024;
+    bool live_stdio = false;
     bool dump = false, help = false;
     bool dimensions_given = false;
     bool macs_given = false;
@@ -82,6 +97,7 @@ Arguments parse(int argc, char* argv[]) {
         if (flag == "--help") { args.help = true; continue; }
         if (flag == "--relu") { args.config.quant.relu = true; continue; }
         if (flag == "--dump-output") { args.dump = true; continue; }
+        if (flag == "--live-stdio") { args.live_stdio = true; continue; }
         if (i + 1 == argc) throw std::invalid_argument("missing value for " + flag);
         const std::string value(argv[++i]);
         auto& c = args.config;
@@ -122,6 +138,16 @@ Arguments parse(int argc, char* argv[]) {
             if (value.empty()) throw std::invalid_argument("--quantization-file path must not be empty");
             args.quantization_path = value;
         }
+        else if (flag == "--vcd") {
+            if (value.empty() || std::filesystem::path(value).extension() != ".vcd")
+                throw std::invalid_argument("--vcd requires a nonempty .vcd path");
+            args.vcd_path = value;
+        }
+        else if (flag == "--progress-jsonl") {
+            if (value.empty()) throw std::invalid_argument("--progress-jsonl path must not be empty");
+            args.progress_path = value;
+        }
+        else if (flag == "--slice-cycles") args.slice_cycles = unsigned_value(value);
         else if (flag == "--frequency-mhz") {
             std::size_t used = 0;
             c.frequency_mhz = std::stod(value, &used);
@@ -130,6 +156,8 @@ Arguments parse(int argc, char* argv[]) {
     }
     if (args.macs_given && (args.config.array_rows || args.config.array_cols))
         throw std::invalid_argument("choose --macs-per-cycle or --array-rows/--array-cols, not both");
+    if (args.slice_cycles == 0 || args.slice_cycles > 10000000)
+        throw std::invalid_argument("slice cycles must be in 1..10000000");
     return args;
 }
 
@@ -211,13 +239,110 @@ void input_quantization(Arguments& args) {
     if (!file.eof()) throw std::invalid_argument("quantization read failed");
 }
 
-template<class T> void array_json(const std::vector<T>& values) {
-    std::cout << '[';
+template<class T> void array_json(const std::vector<T>& values, std::ostream& stream = std::cout) {
+    stream << '[';
     for (std::size_t i = 0; i < values.size(); ++i) {
-        if (i != 0) std::cout << ',';
-        std::cout << static_cast<std::int64_t>(values[i]);
+        if (i != 0) stream << ',';
+        stream << static_cast<std::int64_t>(values[i]);
     }
-    std::cout << ']';
+    stream << ']';
+}
+
+void check_numerics(const npu::Accelerator& model, const npu::Output& expected) {
+    if (model.completed() && (model.output().accumulators != expected.accumulators ||
+        model.output().quantized != expected.quantized))
+        throw std::runtime_error("numerical validation failed");
+}
+
+void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Problem& problem,
+                   const npu::Accelerator& model, const char* type = "snapshot") {
+    const auto snap = model.snapshot();
+    const auto& s = snap.statistics;
+    const auto tiles = npu::checked_mul(npu::ceil_div(c.m, c.tile_m), npu::ceil_div(c.n, c.tile_n));
+    const auto ratio = [cycles = snap.cycles](std::uint64_t busy) {
+        return cycles ? static_cast<double>(busy) / static_cast<double>(cycles) : 0.0;
+    };
+    stream << std::boolalpha << std::setprecision(17)
+        << "{\"schema_version\":1,\"type\":\"" << type << "\",\"simulation\":true"
+        << ",\"config\":{\"m\":" << c.m << ",\"n\":" << c.n << ",\"k\":" << c.k
+        << ",\"tile_m\":" << c.tile_m << ",\"tile_n\":" << c.tile_n << ",\"tile_k\":" << c.tile_k
+        << ",\"weight_bits\":" << c.weight_bits << ",\"frequency_mhz\":" << c.frequency_mhz
+        << ",\"timing\":\"" << c.timing << "\"},\"cycles\":" << snap.cycles
+        << ",\"completed\":" << snap.completed << ",\"validated\":" << snap.completed
+        << ",\"numerical_match\":" << (snap.completed ? "true" : "null")
+        << ",\"macs\":" << s.macs << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
+        << ",\"compute_busy_cycles\":" << s.compute_busy_cycles << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
+        << ",\"compute_utilization\":" << ratio(s.compute_busy_cycles)
+        << ",\"memory_utilization\":" << ratio(s.dma_busy_cycles)
+        << ",\"inflight_tiles\":" << snap.inflight_tiles
+        << ",\"read_queue_depth\":" << snap.read_queue_depth << ",\"write_queue_depth\":" << snap.write_queue_depth
+        << ",\"dma_busy\":" << snap.dma_busy << ",\"compute_busy\":" << snap.compute_busy
+        << ",\"dma_read\":" << snap.dma_read << ",\"dma_tile_id\":" << snap.dma_tile_id
+        << ",\"dma_block_id\":" << snap.dma_block_id << ",\"compute_tile_id\":" << snap.compute_tile_id
+        << ",\"compute_block_id\":" << snap.compute_block_id
+        << ",\"tiles_total\":" << tiles << ",\"tiles_completed\":" << s.completed_tiles
+        << ",\"panels_total\":" << npu::checked_mul(tiles, npu::reduction_blocks(c))
+        << ",\"panels_completed\":" << s.computed_panels << ",\"loaded_panels\":" << s.loaded_panels
+        << ",\"modeled_latency_ns\":" << static_cast<double>(snap.cycles) * 1000.0 / c.frequency_mhz
+        << ",\"active_stages\":[";
+    if (snap.dma_busy) stream << (snap.dma_read ? "\"load\"" : "\"store\"");
+    if (snap.compute_busy) stream << (snap.dma_busy ? ",\"compute\"" : "\"compute\"");
+    stream << "],\"output_hash\":";
+    if (snap.completed) stream << '"' << npu::output_hash(model.output()) << '"'; else stream << "null";
+    stream << ",\"input_preview\":";
+    array_json(std::vector<std::int8_t>(problem.activations.begin(),
+        problem.activations.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(16, problem.activations.size()))), stream);
+    stream << ",\"output_preview\":";
+    if (snap.completed) array_json(std::vector<std::int8_t>(model.output().quantized.begin(),
+        model.output().quantized.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(16, model.output().quantized.size()))), stream);
+    else stream << "[]";
+    stream << "}\n" << std::flush;
+    if (!stream) throw std::runtime_error("cannot write simulation progress");
+}
+
+void live_commands(const npu::Config& c, const npu::Problem& problem,
+                   npu::Accelerator& model, const npu::Output& expected, std::ostream* progress) {
+    sc_core::sc_start(sc_core::SC_ZERO_TIME);
+    const auto emit = [&](const char* type = "snapshot") {
+        check_numerics(model, expected);
+        snapshot_json(std::cout, c, problem, model, type);
+        if (progress) snapshot_json(*progress, c, problem, model, type);
+    };
+    emit();
+    while (true) {
+        char command[257] = {};
+        if (!std::cin.getline(command, sizeof(command))) {
+            if (std::cin.eof()) return;
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cout << "{\"type\":\"error\",\"error\":\"command exceeds 256 characters\"}\n" << std::flush;
+            continue;
+        }
+        std::istringstream line(command);
+        std::string verb, value, extra;
+        line >> verb;
+        if (verb == "advance" && (line >> value) && !(line >> extra)) {
+            try {
+                const auto cycles = unsigned_value(value);
+                if (!cycles || cycles > 10000000) throw std::invalid_argument("invalid slice");
+                if (!model.completed()) {
+                    const auto before = sc_core::sc_time_stamp();
+                    sc_core::sc_start(sc_core::sc_time::from_value(cycles), sc_core::SC_RUN_TO_TIME);
+                    if (!model.completed() && (sc_core::sc_time_stamp() == before || !sc_core::sc_pending_activity()))
+                        throw std::runtime_error("simulation stalled before completion");
+                }
+            } catch (const std::invalid_argument&) {
+                std::cout << "{\"type\":\"error\",\"error\":\"advance requires cycles in 1..10000000\"}\n" << std::flush;
+                continue;
+            }
+            emit();
+        } else if ((verb == "snapshot" || verb == "stop") && !(line >> extra)) {
+            emit(verb == "stop" ? "stopped" : "snapshot");
+            if (verb == "stop") return;
+        } else {
+            std::cout << "{\"type\":\"error\",\"error\":\"expected advance N, snapshot, or stop\"}\n" << std::flush;
+        }
+    }
 }
 
 void report(const npu::Config& c, const npu::Accelerator& model, double seconds, bool dump) {
@@ -290,13 +415,48 @@ int sc_main(int argc, char* argv[]) {
         npu::validate(args.config);
         const auto expected = npu::reference(problem, args.config.quant);
         sc_core::sc_set_time_resolution(1, sc_core::SC_NS);
+        sc_core::sc_report_handler::set_handler(diagnostic_report);
+        sc_core::sc_report_handler::set_actions(sc_core::SC_INFO, sc_core::SC_DO_NOTHING);
         npu::Accelerator model("npu", args.config, problem);
+        std::unique_ptr<sc_core::sc_trace_file, decltype(&sc_core::sc_close_vcd_trace_file)>
+            waves(nullptr, &sc_core::sc_close_vcd_trace_file);
+        if (!args.vcd_path.empty()) {
+            std::ofstream probe(args.vcd_path);
+            if (!probe) throw std::invalid_argument("cannot open VCD waveform path");
+            probe.close();
+            auto base = std::filesystem::path(args.vcd_path);
+            base.replace_extension();
+            waves.reset(sc_core::sc_create_vcd_trace_file(base.string().c_str()));
+            if (!waves) throw std::runtime_error("cannot create VCD waveform file");
+            waves->set_time_unit(1, sc_core::SC_PS);
+            sc_core::sc_trace_delta_cycles(waves.get(), true);
+            model.trace_signals(waves.get());
+        }
+        std::ofstream progress;
+        if (!args.progress_path.empty()) {
+            progress.open(args.progress_path);
+            if (!progress) throw std::invalid_argument("cannot open progress JSONL path");
+        }
+        if (args.live_stdio) {
+            live_commands(args.config, problem, model, expected, progress.is_open() ? &progress : nullptr);
+            return 0;
+        }
         const auto before = std::chrono::steady_clock::now();
-        sc_core::sc_start();
+        if (progress.is_open()) {
+            sc_core::sc_start(sc_core::SC_ZERO_TIME);
+            snapshot_json(progress, args.config, problem, model);
+            while (!model.completed()) {
+                const auto previous = sc_core::sc_time_stamp();
+                sc_core::sc_start(sc_core::sc_time::from_value(args.slice_cycles), sc_core::SC_RUN_TO_TIME);
+                if (!model.completed() && (sc_core::sc_time_stamp() == previous || !sc_core::sc_pending_activity()))
+                    throw std::runtime_error("simulation stalled before completion");
+                check_numerics(model, expected);
+                snapshot_json(progress, args.config, problem, model);
+            }
+        } else sc_core::sc_start();
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
         if (!model.completed()) throw std::runtime_error("model deadlocked before completion");
-        if (model.output().accumulators != expected.accumulators || model.output().quantized != expected.quantized)
-            throw std::runtime_error("numerical validation failed");
+        check_numerics(model, expected);
         if (!args.config.trace_path.empty()) {
             std::ofstream trace(args.config.trace_path);
             if (!trace) throw std::runtime_error("cannot open trace output");

@@ -74,6 +74,27 @@ python3 scripts/autotune.py --binary build/npu-sim
 
 The expanded Release and undefined-behavior-sanitized Debug builds both passed all seven standard CTest suites. Those suites include the C++ core and 74 Python tests: 12 legacy integration, six quantization, six extended architecture, 34 graph inference, 12 energy and four mapping-search tests. CNN/residual fixtures, malformed graphs, liveness and preallocation bounds are included. Eighteen additional optional ONNX tests passed, including full-output comparisons against ONNX Runtime 1.23.2 with ONNX 1.19.1; the optional configuration runs all eight CTest suites. See [validation](VALIDATION.md) for reproducible commands. These results apply to the tested environments, without an all-platform certification claim.
 
+## Live SystemC and platform checks
+
+The November 3 SystemC expansion adds three native-waveform tests, six live-protocol tests, five dashboard tests and four TLM-platform tests. Together with the existing suites, the current CTest configuration contains the C++ core plus 92 standard Python tests; the optional ONNX configuration contains twelve suites and 110 Python tests. These counts describe executable checks, not unobserved remote CI results.
+
+Local native-waveform tests verified all 21 signal declarations, real resource transitions, final DMA and MAC counters, completion, occupancy limits and equality of traced/untraced outputs and modeled cycles. Picosecond VCD resolution records delta ordering; it does not add physical circuit timing. Live child-process checks verified paused time, explicit stepping, clean EOF, recoverable invalid commands, automatic progress and exact agreement of completed output previews and hashes with batch inference. Completed snapshots retain the actual completion cycle rather than a later host slice deadline.
+
+The local dashboard tests drove the compiled SystemC executable through all three profiles, validated repeated jobs with changing inputs, and checked pause/resume/step and child teardown. Browser checks covered desktop and mobile layouts against the actual running service. The display reports copied model state; it does not synthesize NPU activity. Continuous dashboard operation starts a fresh child process for each inference.
+
+The separate persistent TLM platform exercised two jobs in one kernel with changed tensor bytes, host MMIO, DMA reads/writes, startup reset, clock and masked/unmasked completion interrupts. Output validation covers every accumulator and INT8 result read back from modeled DRAM. Its independent Python arithmetic checks and explicit protocol-error tests provide evidence for the documented fixed workload and register/memory contract. This platform is a loosely timed serial coprocessor model; it does not claim the configurable pipeline's overlap timing or commercial driver compatibility.
+
+Reproduce the added checks with:
+
+```sh
+python3 tests/systemc_observability_tests.py --binary build/npu-sim
+python3 tests/live_protocol_tests.py --binary build/npu-sim
+python3 tests/live_dashboard_tests.py --binary build/npu-sim
+python3 tests/tlm_platform_tests.py --binary build/npu-tlm-demo
+```
+
+The original default-contract timing comparisons above remain the baseline. Live observation is required to preserve those numerical and cycle results. Full regression and compiler/sanitizer outcomes must be associated with the tested revision; no pending remote workflow is treated as already passed.
+
 ## Verification boundary
 
 The model now includes convolution/depthwise graph lowering, explicit host fallbacks and the extended memory/compute mechanisms documented in the [feature matrix](FEATURE-MATRIX.md). It still has no supplied silicon or RTL timing reference, proprietary NPU specification, physical memory-system calibration or cross-layer on-chip scheduling. The optional [ONNX importer](ONNX.md) has a strict supported-subset and independent backend-validation boundary; it does not imply general framework conformance.

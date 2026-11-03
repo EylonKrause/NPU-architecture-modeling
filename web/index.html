@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>NPU architecture modeling · live SystemC</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+<main>
+  <header><div><p class="eyebrow">NPU ARCHITECTURE MODELING</p><h1>A model you can watch work.</h1><p class="lede">Real integer inference. Real SystemC events. Inspect the architecture as it runs.</p></div><div class="status"><span id="status-dot"></span><span id="status">Connecting</span></div></header>
+  <section class="toolbar" aria-label="Simulation controls">
+    <label>WORKLOAD<select id="profile"><option value="balanced">Balanced INT8</option><option value="compute-bound">Compute pressure</option><option value="memory-bound">Memory pressure</option></select></label>
+    <div class="buttons"><button id="start" class="primary">Start continuous inference</button><button id="pause">Pause</button><button id="step">Step 256 cycles</button><button id="stop">Stop</button><button id="reset" class="quiet">Reset</button></div>
+  </section>
+  <p id="message" role="status">The simulator is idle. Start a workload to execute the C++/SystemC model.</p>
+  <section class="metrics" aria-label="Current inference counters">
+    <article><p>SIMULATED CYCLES</p><strong id="cycles">—</strong><small id="target-time">Current inference</small></article>
+    <article><p>COMPLETED MACs</p><strong id="macs">—</strong><small id="workload-shape">INT8 matrix computation</small></article>
+    <article><p>EXTERNAL MEMORY</p><strong id="traffic">—</strong><small id="traffic-detail">Read / write bytes</small></article>
+    <article><p>VALIDATED INFERENCES</p><strong id="jobs">0</strong><small>Complete output compared with scalar reference</small></article>
+  </section>
+  <section class="architecture">
+    <div class="section-title"><div><p class="eyebrow">EXECUTION PIPELINE</p><h2>Data movement meets compute.</h2></div><span id="validation" class="badge">Awaiting a result</span></div>
+    <div class="pipeline">
+      <div id="stage-load" class="stage"><span class="stage-index">01</span><h3>DMA load</h3><p>Activations + weights</p><b id="load-count">—</b></div><span class="arrow">→</span>
+      <div id="stage-compute" class="stage"><span class="stage-index">02</span><h3>MAC array</h3><p>Accumulate + requantize</p><b id="compute-count">—</b></div><span class="arrow">→</span>
+      <div id="stage-store" class="stage"><span class="stage-index">03</span><h3>DMA store</h3><p>Quantized output</p><b id="store-count">—</b></div>
+    </div>
+    <div class="utilization"><label>Compute busy fraction <span id="compute-util">—</span><progress id="compute-bar" max="100" value="0"></progress></label><label>DMA busy fraction <span id="dma-util">—</span><progress id="dma-bar" max="100" value="0"></progress></label></div>
+    <div class="tiles-heading"><h3>Output tiles</h3><span id="tiles-label">Waiting for the model</span></div><div id="tiles" class="tiles" aria-label="Actual output-tile completion"></div>
+    <div class="tensor-preview"><div><h3>Input activation preview</h3><code id="input-preview">Waiting for an inference</code></div><div><h3>Latest validated output preview</h3><code id="output-preview">Output is shown only after full numerical validation</code></div></div>
+  </section>
+  <section class="lower-grid"><article class="history"><div class="section-title"><div><p class="eyebrow">RECENT OUTPUTS</p><h2>Checked, then repeated.</h2></div></div><div id="history"><p class="empty">Completed inferences appear here with their real output signature and validation.</p></div></article><article class="notes"><p class="eyebrow">READING THIS MODEL</p><h2>Architecture, made observable.</h2><p>Start runs repeated bounded inference jobs. Pause freezes simulated time; Step advances it explicitly. Counters and tile states come from the SystemC process, not an animation.</p><p>Wall-clock pacing makes the model inspectable. It is not hardware throughput. Target latency depends on the declared clock, memory and compute assumptions.</p><p>This is a local architectural simulator, not a physical NPU device or a calibrated commercial NPU emulator. The dashboard uses no external assets or network services.</p><a href="https://github.com/EylonKrause/NPU-architecture-modeling" rel="noreferrer">Source and modelling contracts ↗</a></article></section>
+  <footer><span>SystemC · discrete-event simulation · signed integer inference</span><span id="connection">Local controller</span></footer>
+</main>
+</body>
+</html>

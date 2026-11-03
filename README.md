@@ -1,18 +1,30 @@
 # NPU architecture modeling
 
+![Live SystemC NPU dashboard](docs/images/live-dashboard.png)
+
 A working C++17/SystemC architectural simulator for quantized neural inference, with executable graph workloads and explicit compute, SRAM and external-memory assumptions. It models signed INT8 activations, INT8 or packed INT4 weights, per-channel quantization, reduction tiling, an optional systolic-array timing model, bounded buffers, DMA arbitration and weight reuse.
 
-The C++ engine compares every complete accumulator and output with a scalar reference. A Python graph frontend runs dense layers, convolutions and depthwise convolutions through that engine, and executes explicitly identified pooling, residual and activation fallbacks on the host. The project includes independent arithmetic/timing checks, CNN and residual-network examples, mapping search, traces and coefficient-based energy analysis.
+The C++ engine compares every complete accumulator and output with a scalar reference. A local browser dashboard controls actual live SystemC execution, with pause, resume, stepping and repeated validated inferences. A separate persistent TLM-2.0 platform implements host MMIO, byte-addressed DRAM, DMA, clock/reset and completion interrupts. A Python graph frontend runs dense layers, convolutions and depthwise convolutions through the tiled engine, and executes explicitly identified pooling, residual and activation fallbacks on the host.
 
 This is a generic architectural model. It is not a commercial NPU ISA emulator or an independently calibrated RTL/silicon timing model. Supported operations and remaining limits are listed in the [feature matrix](docs/FEATURE-MATRIX.md); [production NPU research](docs/PRODUCTION-NPU-RESEARCH.md) explains the design priorities with primary sources.
 
-## Build and run
+## Build and launch the live model
 
 Requirements: a C++17 compiler, CMake 3.24 or newer, a build tool, and Python 3.10 or newer. CMake fetches hash-verified [SystemC 3.0.2](https://github.com/accellera-official/systemc/releases/tag/3.0.2), so initial configuration needs internet access. An installed package can be selected with `-DNPU_FETCH_SYSTEMC=OFF -DCMAKE_PREFIX_PATH=/path/to/systemc`.
 
 ```sh
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j2
+python3 scripts/live_dashboard.py --binary build/npu-sim
+```
+
+Open **http://127.0.0.1:8765** and press **Start continuous inference**. The dashboard shows actual kernel progress, MAC/DMA activity, tile completion, input/output previews and validation. Pause freezes simulated time; Step advances the paused model. Each completed inference is checked before continuous mode launches the next deterministic input in a fresh simulator process. Nothing is animated as a substitute for computation. See [live controls and local API](docs/LIVE.md).
+
+The dashboard uses only Python's standard library and binds to loopback. It is a running virtual NPU model, with no requirement for physical NPU hardware. Its host pacing makes the simulation inspectable; it is not a hardware throughput measurement.
+
+## Batch inference, waveforms and streaming progress
+
+```sh
 ctest --test-dir build --output-on-failure
 build/npu-sim --help
 build/npu-sim --m 16 --n 16 --k 32 --timing event
@@ -28,10 +40,21 @@ build/npu-sim --m 17 --n 13 --k 31 \
   --tile-m 8 --tile-n 8 --tile-k 8 --weight-bits 4 \
   --array-rows 4 --array-cols 4 --dma-burst-bytes 64 \
   --weight-cache-bytes 1024 --rounding even \
-  --trace results/panels.csv > results/panels.json
+  --trace results/panels.csv --vcd results/run.vcd \
+  --progress-jsonl results/progress.jsonl --slice-cycles 64 > results/panels.json
 ```
 
-The CSV identifies each output tile and reduction block. Cache capacity is included in the SRAM reservation. Explicit array geometry and `--macs-per-cycle` are alternative compute configurations.
+The CSV identifies each output tile and reduction block. The native SystemC VCD exposes 21 actual signals, including resource ownership, occupancy, bytes, MACs and completion. JSONL progress reports the same running model while stdout remains one final result object. A passive `SC_METHOD` checks resource invariants without adding architecture cycles. Cache capacity is included in the SRAM reservation. Explicit array geometry and `--macs-per-cycle` are alternative compute configurations. See [SystemC tracing, snapshots and the live stdio protocol](docs/SYSTEMC.md).
+
+## Persistent TLM-2.0 coprocessor
+
+```sh
+build/npu-tlm-demo --jobs 2 --dump-output --vcd results/tlm
+```
+
+The host sends real tensor bytes through TLM memory transactions, programs MMIO and waits for an interrupt. An independent engine reads those bytes, computes tiled inference and writes both accumulators and outputs back to memory. The host reads and validates every result, acknowledges completion, changes the input and submits the next job in the **same SystemC kernel**. The model has an actual SystemC clock, startup reset, IRQ masking, bounded DRAM accesses and shared-memory arbitration. Its fixed small workload and loosely timed serial contract are documented in [the TLM platform](docs/TLM-PLATFORM.md).
+
+This platform and the overlapped `npu-sim` accelerator answer different questions: platform transactions and persistent-job control versus configurable tiled-pipeline architecture. Their timing contracts are explicit and their elapsed cycles should not be treated as interchangeable.
 
 ## Execute neural graphs
 
@@ -101,5 +124,8 @@ Set these variables from measurements or clearly stated experimental assumptions
 | `--timing event\|cycle` | Whole-stage jumps or single-cycle waits under the same contract. |
 | `--frequency-mhz`, `--seed` | Target-time reporting and deterministic generated fixtures. |
 | `--trace`, `--dump-output` | Stage CSV and full accumulator/output JSON arrays. |
+| `--vcd PATH.vcd` | Native SystemC signal waveforms, including delta-cycle transitions. |
+| `--progress-jsonl`, `--slice-cycles` | Running snapshots at a bounded observation cadence. |
+| `--live-stdio` | Paused kernel controlled through `advance N`, `snapshot` and `stop`. |
 
 Read [architecture](docs/ARCHITECTURE.md), the [implementation contract](docs/IMPLEMENTATION-CONTRACT.md), [validation method](docs/VALIDATION.md), and [verified results](docs/VALIDATED-RESULTS.md) before interpreting performance claims. Floating-point datapaths, sparse execution, attention, physical SRAM/DRAM/NoC contention, proprietary command streams and hardware calibration are separate features, not implied by matrix multiplication support.

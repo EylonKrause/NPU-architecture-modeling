@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.24)
-project(NPUArchitectureModeling VERSION 0.2.0 LANGUAGES CXX)
+project(NPUArchitectureModeling VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,8 +28,12 @@ add_executable(npu-sim src/main.cpp src/model.cpp)
 target_link_libraries(npu-sim PRIVATE npu_core SystemC::systemc)
 target_include_directories(npu-sim SYSTEM PRIVATE
   $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
+add_executable(npu-tlm-demo src/tlm_platform.cpp)
+target_link_libraries(npu-tlm-demo PRIVATE npu_core SystemC::systemc)
+target_include_directories(npu-tlm-demo SYSTEM PRIVATE
+  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
 
-foreach(target npu_core npu-sim)
+foreach(target npu_core npu-sim npu-tlm-demo)
   if(MSVC)
     target_compile_options(${target} PRIVATE /W4 /permissive-)
   else()
@@ -68,6 +72,19 @@ if(BUILD_TESTING)
   add_test(NAME mapping-search
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/autotune_tests.py
             --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME systemc-observability
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/systemc_observability_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME systemc-tlm-platform
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tlm_platform_tests.py
+            --binary $<TARGET_FILE:npu-tlm-demo>)
+  add_test(NAME live-control-protocol
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/live_protocol_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  add_test(NAME live-dashboard
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/live_dashboard_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  set_tests_properties(live-dashboard live-control-protocol PROPERTIES TIMEOUT 90)
   if(NPU_ENABLE_ONNX_TESTS)
     execute_process(COMMAND ${Python3_EXECUTABLE} -c "import onnx, onnxruntime"
       RESULT_VARIABLE NPU_ONNX_IMPORT_RESULT OUTPUT_QUIET ERROR_QUIET)
