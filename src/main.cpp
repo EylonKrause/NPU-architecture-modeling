@@ -19,7 +19,8 @@
 namespace {
 void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actions& actions) {
     if (actions & sc_core::SC_DISPLAY) std::cerr << report.what() << '\n';
-    sc_core::sc_report_handler::default_handler(report, actions & ~sc_core::SC_DISPLAY);
+    sc_core::sc_report_handler::default_handler(
+        report, actions & ~static_cast<sc_core::sc_actions>(sc_core::SC_DISPLAY));
 }
 
 std::uint64_t unsigned_value(const std::string& text) {

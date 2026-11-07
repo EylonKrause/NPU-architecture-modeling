@@ -1,79 +1,175 @@
-name: build-and-test
+name: ci
 
 on:
   push:
+    branches: [main]
+    tags: ['v*']
   pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 4 * * 1'  # weekly, to catch runner-image and toolchain drift
 
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: '1'
+  BUILD_TOOLS: cmake==3.31.10 ninja==1.11.1.4
+
 jobs:
-  compilers:
-    runs-on: ubuntu-latest
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install clang-format==21.1.8 ruff==0.16.10
+      - name: clang-format
+        run: git ls-files -z '*.cpp' '*.hpp' | xargs -0 clang-format --dry-run --Werror
+      - name: ruff check
+        if: success() || failure()
+        run: ruff check --output-format=github .
+      - name: ruff format
+        if: success() || failure()
+        run: ruff format --check .
+
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
         include:
-          - cc: gcc
-            cxx: g++
-          - cc: clang
-            cxx: clang++
+          - {name: linux-x64-gcc, os: ubuntu-24.04, preset: ci-gcc, cc: gcc, cxx: g++}
+          - {name: linux-x64-clang, os: ubuntu-24.04, preset: ci-clang, cc: clang, cxx: clang++}
+          - {name: linux-arm64-gcc, os: ubuntu-24.04-arm, preset: ci-gcc, cc: gcc, cxx: g++}
+          - {name: macos-arm64-clang, os: macos-15, preset: ci-clang, cc: clang, cxx: clang++}
+          - {name: windows-x64-msvc, os: windows-2025, preset: ci-msvc, cc: cl, cxx: cl}
     env:
       CC: ${{ matrix.cc }}
       CXX: ${{ matrix.cxx }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install $BUILD_TOOLS
+      - if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - id: systemc
+        uses: ./.github/actions/systemc
+        with:
+          toolchain: ${{ matrix.name }}
       - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+        run: >-
+          cmake --preset ${{ matrix.preset }} -DNPU_FETCH_SYSTEMC=OFF
+          -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
       - name: Build
-        run: cmake --build build -j2
-      - name: Tests
-        run: ctest --test-dir build --output-on-failure
-      - name: Architecture sweep
-        run: python3 scripts/sweep.py --binary build/npu-sim
-      - name: Timing-mode agreement
-        run: python3 scripts/compare_modes.py --binary build/npu-sim --repeats 2
-      - name: Two-layer inference
-        run: python3 scripts/mlp_demo.py --binary build/npu-sim
-      - name: CNN and residual graph inference
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Test
+        run: >-
+          ctest --preset ${{ matrix.preset }}
+          --output-junit "${GITHUB_WORKSPACE}/junit-${{ matrix.name }}.xml"
+      - name: Upload test report
+        if: success() || failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.name }}
+          path: junit-${{ matrix.name }}.xml
+          if-no-files-found: ignore
+      # The one-command path from the README: a fresh FetchContent build, then reuse of it.
+      - name: Launcher builds from scratch and reuses the build
+        if: runner.os != 'Linux'
         run: |
-          python3 scripts/graph_runtime.py examples/cnn.json --binary build/npu-sim
-          python3 scripts/graph_runtime.py examples/residual_mlp.json --binary build/npu-sim
-      - name: Mobile compression, stateful transformer and multicore workloads
+          python run.py --build-only --jobs 4
+          python run.py --build-only --jobs 4
+      - name: Waveforms and result files
+        if: matrix.name == 'linux-x64-gcc'
         run: |
-          python3 scripts/mobile_suite.py --build-dir build --output-dir results/mobile
-          python3 scripts/graph_optimize.py examples/mobile_fusion.json --verify --binary build/npu-sim --output results/mobile/fused-graph.json
-      - name: SRAM-constrained mapping search
-        run: python3 scripts/autotune.py --binary build/npu-sim
-      - name: Native SystemC waveform and TLM examples
-        if: matrix.cc == 'gcc'
-        run: |
+          bin=build/${{ matrix.preset }}
           mkdir -p results
-          build/npu-sim --m 8 --n 8 --k 16 --vcd results/pipeline.vcd --progress-jsonl results/progress.jsonl > results/pipeline.json
-          build/npu-tlm-demo --jobs 2 --vcd results/tlm > results/tlm.json
-          build/npu-transformer-demo --precision fp16 --prefill 4 --decode 3 --vcd results/transformer.vcd --progress-jsonl results/transformer.jsonl > results/transformer.json
-          build/npu-mobile-demo --cores 2 --jobs 6 --vcd results/mobile > results/mobile-platform.json
-      - uses: actions/upload-artifact@v4
-        if: matrix.cc == 'gcc'
+          $bin/npu-sim --m 8 --n 8 --k 16 --vcd results/pipeline.vcd \
+            --progress-jsonl results/progress.jsonl > results/pipeline.json
+          $bin/npu-tlm-demo --jobs 2 --vcd results/tlm > results/tlm.json
+          $bin/npu-transformer-demo --precision fp16 --prefill 4 --decode 3 \
+            --vcd results/transformer.vcd --progress-jsonl results/transformer.jsonl \
+            > results/transformer.json
+          $bin/npu-mobile-demo --cores 2 --jobs 6 --vcd results/mobile \
+            > results/mobile-platform.json
+          cp -R $bin/examples-mobile results/mobile-suite
+      - name: Upload waveforms and result files
+        if: matrix.name == 'linux-x64-gcc'
+        uses: actions/upload-artifact@v4
         with:
           name: systemc-waveforms-and-results
           path: results/
 
-  undefined-behavior:
-    runs-on: ubuntu-latest
+  sanitizers:
+    name: linux-x64-asan-ubsan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Configure core sanitizer build
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Debug -DNPU_ENABLE_SANITIZERS=ON
-      - name: Build
-        run: cmake --build build -j2
-      - name: Tests
-        env:
-          UBSAN_OPTIONS: halt_on_error=1:print_stacktrace=1
-        run: ctest --test-dir build --output-on-failure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install $BUILD_TOOLS
+      # SystemC is fetched and built with the same instrumentation as the project.
+      - run: cmake --workflow --preset asan-ubsan
 
-  onnx-conformance:
-    runs-on: ubuntu-latest
+  coverage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install $BUILD_TOOLS gcovr==8.4
+      - id: systemc
+        uses: ./.github/actions/systemc
+        with:
+          toolchain: linux-x64-gcc
+      - name: Configure
+        run: >-
+          cmake --preset coverage -DNPU_FETCH_SYSTEMC=OFF
+          -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
+      - run: cmake --build --preset coverage
+      - run: ctest --preset coverage
+      - name: Line coverage of src/ and include/
+        run: |
+          mkdir -p coverage
+          gcovr --root . --object-directory build/coverage --filter 'src/' --filter 'include/' \
+            --print-summary --txt coverage/summary.txt \
+            --xml coverage/coverage.xml --html-details coverage/index.html
+          cat coverage/summary.txt >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage/
+
+  onnx:
+    name: onnx-runtime-differential
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      CXX: g++
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -81,35 +177,15 @@ jobs:
           python-version: '3.12'
           cache: pip
           cache-dependency-path: requirements-onnx.txt
-      - name: Install optional model-format dependencies
-        run: python -m pip install -r requirements-onnx.txt
-      - name: Configure
-        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNPU_ENABLE_ONNX_TESTS=ON -DPython3_EXECUTABLE="$(which python)"
-      - name: Build
-        run: cmake --build build -j2
-      - name: Tests and ONNX Runtime comparison
-        run: ctest --test-dir build --output-on-failure
-
-  native-launcher:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - run: python -m pip install $BUILD_TOOLS -r requirements-onnx.txt
+      - id: systemc
+        uses: ./.github/actions/systemc
         with:
-          python-version: '3.12'
-      - name: Build through the Python launcher
-        run: python run.py --build-only --jobs 2
-      - name: Reuse the existing native build
-        run: python run.py --build-only --jobs 2
-      - name: Exercise native launcher lifecycle
-        shell: bash
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            python tests/launcher_tests.py --binary build-live/Release/npu-sim.exe
-          else
-            python tests/launcher_tests.py --binary build-live/npu-sim
-          fi
+          toolchain: linux-x64-gcc
+      - name: Configure
+        run: >-
+          cmake --preset ci-gcc -DNPU_FETCH_SYSTEMC=OFF
+          -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
+          -DNPU_ENABLE_ONNX_TESTS=ON -DPython3_EXECUTABLE="$(command -v python)"
+      - run: cmake --build --preset ci-gcc
+      - run: ctest --preset ci-gcc -L onnx

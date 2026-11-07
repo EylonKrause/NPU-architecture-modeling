@@ -1,7 +1,14 @@
 /build*/
 /results/
+/.deps/
+CMakeUserPresets.json
+compile_commands.json
+Testing/
+.cache/
 __pycache__/
 *.py[cod]
+.pytest_cache/
+.ruff_cache/
 *.vcd
 .DS_Store
 .vscode/

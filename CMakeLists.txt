@@ -1,137 +1,182 @@
 cmake_minimum_required(VERSION 3.24)
-project(NPUArchitectureModeling VERSION 0.4.0 LANGUAGES CXX)
+project(NPUArchitectureModeling
+  VERSION 0.4.0
+  DESCRIPTION "SystemC/TLM-2.0 architecture model of a tiled INT8/INT4 NPU"
+  HOMEPAGE_URL "https://github.com/EylonKrause/NPU-architecture-modeling"
+  LANGUAGES CXX)
 
+if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type: Release, Debug or RelWithDebInfo" FORCE)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
+
 option(NPU_FETCH_SYSTEMC "Fetch the pinned SystemC dependency" ON)
-option(NPU_ENABLE_SANITIZERS "Enable undefined-behavior checks in project code" OFF)
-option(NPU_ENABLE_ONNX_TESTS "Test optional ONNX importer against ONNX Runtime" OFF)
+set(NPU_SANITIZERS "" CACHE STRING
+  "Sanitizers for the project and a fetched SystemC: any of address;undefined;leak")
+option(NPU_ENABLE_SANITIZERS "Deprecated: same as NPU_SANITIZERS=undefined" OFF)
+option(NPU_WARNINGS_AS_ERRORS "Treat warnings in project code as errors" OFF)
+option(NPU_COVERAGE "Instrument project code for gcov line coverage" OFF)
+option(NPU_ENABLE_ONNX_TESTS "Test the optional ONNX importer against ONNX Runtime" OFF)
+if(DEFINED ENV{NPU_TEST_TIMEOUT_SCALE})
+  set(_npu_timeout_scale "$ENV{NPU_TEST_TIMEOUT_SCALE}")
+else()
+  set(_npu_timeout_scale 1)
+endif()
+set(NPU_TEST_TIMEOUT_SCALE "${_npu_timeout_scale}" CACHE STRING
+  "Integer multiplier for test timeouts (sanitizer builds, slow hosts)")
+if(NOT NPU_TEST_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
+  message(FATAL_ERROR
+    "NPU_TEST_TIMEOUT_SCALE must be a positive integer, got '${NPU_TEST_TIMEOUT_SCALE}'")
+endif()
+
+include(GNUInstallDirs)
+include(NpuCompileOptions)  # before SystemC: sanitizer flags must reach the dependency
+include(NpuVersion)
+include(SystemCSource)
 
 if(NPU_FETCH_SYSTEMC)
   include(FetchContent)
-  set(BUILD_SHARED_LIBS OFF CACHE BOOL "Static dependency" FORCE)
-  set(ENABLE_EXAMPLES OFF CACHE BOOL "Do not build dependency examples" FORCE)
-  set(ENABLE_REGRESSION OFF CACHE BOOL "Do not build dependency regressions" FORCE)
+  # Normal variables (CMP0077): they configure SystemC without touching the user's cache.
+  foreach(_npu_option IN LISTS NPU_SYSTEMC_OPTIONS)
+    string(REGEX MATCH "^([^=]+)=(.*)$" _npu_match "${_npu_option}")
+    set(${CMAKE_MATCH_1} ${CMAKE_MATCH_2})
+  endforeach()
+  # SystemC replaces a defaulted install prefix with /opt/systemc; keep the platform default.
+  set(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT FALSE)
   FetchContent_Declare(systemc
-    URL https://codeload.github.com/accellera-official/systemc/tar.gz/refs/tags/3.0.2
-    URL_HASH SHA256=9b3693ed286aab958b9e5d79bb0ad3bc523bbc46931100553275352038f4a0c4
+    URL "${NPU_SYSTEMC_URL}"
+    URL_HASH SHA256=${NPU_SYSTEMC_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  # GNUInstallDirs has set CMAKE_INSTALL_DOCDIR to this project's directory, and SystemC's
+  # cache default cannot override a normal variable: without this, its README, LICENSE and
+  # NOTICE install as this project's documentation.
+  set(_npu_docdir "${CMAKE_INSTALL_DOCDIR}")
+  set(NPU_SYSTEMC_DOCDIR "${CMAKE_INSTALL_DATAROOTDIR}/doc/systemc")
+  set(CMAKE_INSTALL_DOCDIR "${NPU_SYSTEMC_DOCDIR}")
   FetchContent_MakeAvailable(systemc)
+  set(CMAKE_INSTALL_DOCDIR "${_npu_docdir}")
+  npu_sanitize_systemc(systemc)
   if(MSVC)
     set(NPU_SYSTEMC_SOURCE_DIR "${systemc_SOURCE_DIR}")
-    include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/PatchSystemCMsvc.cmake")
+    include(PatchSystemCMsvc)
   endif()
 else()
-  find_package(SystemCLanguage 3.0 CONFIG REQUIRED)
+  find_package(SystemCLanguage ${NPU_SYSTEMC_VERSION} CONFIG REQUIRED)
 endif()
 
-add_library(npu_core src/core.cpp)
-target_include_directories(npu_core PUBLIC include)
-add_executable(npu-sim src/main.cpp src/model.cpp)
-target_link_libraries(npu-sim PRIVATE npu_core SystemC::systemc)
-target_include_directories(npu-sim SYSTEM PRIVATE
-  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
-add_executable(npu-tlm-demo src/tlm_platform.cpp)
-target_link_libraries(npu-tlm-demo PRIVATE npu_core SystemC::systemc)
-target_include_directories(npu-tlm-demo SYSTEM PRIVATE
-  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
-add_executable(npu-transformer-demo src/transformer.cpp)
-target_link_libraries(npu-transformer-demo PRIVATE npu_core SystemC::systemc)
-target_include_directories(npu-transformer-demo SYSTEM PRIVATE
-  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
-add_executable(npu-mobile-demo src/mobile_platform.cpp)
-target_link_libraries(npu-mobile-demo PRIVATE npu_core SystemC::systemc)
-target_include_directories(npu-mobile-demo SYSTEM PRIVATE
-  $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)
+set(NPU_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
+npu_generate_version_header("${NPU_GENERATED_INCLUDE_DIR}/npu/version.hpp")
 
-foreach(target npu_core npu-sim npu-tlm-demo npu-transformer-demo npu-mobile-demo)
-  if(MSVC)
-    target_compile_options(${target} PRIVATE /W4 /permissive-)
-  else()
-    target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic -Wconversion -Wshadow)
-  endif()
-  if(NPU_ENABLE_SANITIZERS AND NOT MSVC)
-    target_compile_options(${target} PRIVATE -fsanitize=undefined -fno-sanitize-recover=all)
-    target_link_options(${target} PUBLIC -fsanitize=undefined)
-  endif()
-endforeach()
+add_library(npu_core STATIC src/core.cpp)
+target_include_directories(npu_core PUBLIC include "${NPU_GENERATED_INCLUDE_DIR}")
+npu_project_target(npu_core)
+
+npu_add_tool(npu-sim src/main.cpp src/model.cpp)
+npu_add_tool(npu-tlm-demo src/tlm_platform.cpp)
+npu_add_tool(npu-transformer-demo src/transformer.cpp)
+npu_add_tool(npu-mobile-demo src/mobile_platform.cpp)
 
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(npu-core-tests tests/core_tests.cpp)
-  target_link_libraries(npu-core-tests PRIVATE npu_core)
-  if(NPU_ENABLE_SANITIZERS AND NOT MSVC)
-    target_compile_options(npu-core-tests PRIVATE -fsanitize=undefined -fno-sanitize-recover=all)
-    target_link_options(npu-core-tests PRIVATE -fsanitize=undefined)
+  include(NpuTesting)
+
+  npu_add_unit_test(core.arithmetic
+    TARGET npu-core-tests SOURCES tests/core_tests.cpp TIMEOUT 60)
+  npu_add_unit_test(core.weight-codec
+    TARGET npu-compression-core-tests SOURCES tests/mobile_compression_core_tests.cpp TIMEOUT 60)
+
+  npu_add_python_test(sim.gemm-oracle
+    SCRIPT tests/integration.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(sim.quantization
+    SCRIPT tests/quantization_tests.py BINARY npu-sim)
+  npu_add_python_test(sim.memory-hierarchy
+    SCRIPT tests/architecture_tests.py BINARY npu-sim)
+  npu_add_python_test(sim.weight-compression
+    SCRIPT tests/mobile_compression_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(sim.observability
+    SCRIPT tests/systemc_observability_tests.py BINARY npu-sim)
+  npu_add_python_test(graph.runtime
+    SCRIPT tests/graph_runtime_tests.py BINARY npu-sim)
+  npu_add_python_test(graph.fusion
+    SCRIPT tests/graph_optimizer_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(soc.transformer
+    SCRIPT tests/transformer_tests.py BINARY npu-transformer-demo TIMEOUT 180)
+  npu_add_python_test(soc.multicore
+    SCRIPT tests/mobile_platform_tests.py BINARY npu-mobile-demo TIMEOUT 180)
+  npu_add_python_test(soc.tlm
+    SCRIPT tests/tlm_platform_tests.py BINARY npu-tlm-demo)
+  npu_add_python_test(live.protocol
+    SCRIPT tests/live_protocol_tests.py BINARY npu-sim TIMEOUT 90)
+  npu_add_python_test(live.dashboard
+    SCRIPT tests/live_dashboard_tests.py BINARY npu-sim TIMEOUT 90)
+  npu_add_python_test(tools.launcher
+    SCRIPT tests/launcher_tests.py BINARY npu-sim TIMEOUT 90)
+  npu_add_python_test(tools.energy
+    SCRIPT tests/energy_tests.py)
+  npu_add_python_test(tools.autotune
+    SCRIPT tests/autotune_tests.py BINARY npu-sim)
+
+  set(_npu_install_args
+    --cmake "${CMAKE_COMMAND}" --build-dir "${PROJECT_BINARY_DIR}" --config "$<CONFIG>"
+    --bindir "${CMAKE_INSTALL_BINDIR}" --docdir "${CMAKE_INSTALL_DOCDIR}"
+    --tools $<TARGET_FILE_NAME:npu-sim> $<TARGET_FILE_NAME:npu-tlm-demo>
+            $<TARGET_FILE_NAME:npu-transformer-demo> $<TARGET_FILE_NAME:npu-mobile-demo>)
+  if(NPU_FETCH_SYSTEMC)
+    list(APPEND _npu_install_args --systemc-docdir "${NPU_SYSTEMC_DOCDIR}")
   endif()
-  add_test(NAME arithmetic-and-validation COMMAND npu-core-tests)
-  add_executable(npu-compression-core-tests tests/mobile_compression_core_tests.cpp)
-  target_link_libraries(npu-compression-core-tests PRIVATE npu_core)
-  if(NPU_ENABLE_SANITIZERS AND NOT MSVC)
-    target_compile_options(npu-compression-core-tests PRIVATE -fsanitize=undefined -fno-sanitize-recover=all)
-    target_link_options(npu-compression-core-tests PRIVATE -fsanitize=undefined)
+  npu_add_python_test(build.install
+    SCRIPT tests/install_tests.py ARGS ${_npu_install_args})
+  npu_add_python_test(ci.systemc-cache
+    SCRIPT tests/ci_cache_tests.py TIMEOUT 30)
+  if("undefined" IN_LIST NPU_SANITIZERS)
+    add_executable(npu-ubsan-vptr-probe tests/ubsan_vptr_probe.cpp)
+    npu_project_target(npu-ubsan-vptr-probe)
+    npu_add_python_test(build.ubsan-vptr
+      SCRIPT tests/ubsan_vptr_tests.py BINARY npu-ubsan-vptr-probe TIMEOUT 30)
   endif()
-  add_test(NAME mobile-compression-storage COMMAND npu-compression-core-tests)
-  find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
-  add_test(NAME independent-integration
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME per-channel-and-int4
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/quantization_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME graph-inference
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_runtime_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME graph-compiler-fusion
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/graph_optimizer_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME mobile-weight-compression
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mobile_compression_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME mobile-transformer
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/transformer_tests.py
-            --binary $<TARGET_FILE:npu-transformer-demo>)
-  add_test(NAME mobile-soc-platform
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/mobile_platform_tests.py
-            --binary $<TARGET_FILE:npu-mobile-demo>)
-  set_tests_properties(mobile-weight-compression mobile-transformer mobile-soc-platform
-    graph-compiler-fusion PROPERTIES TIMEOUT 180)
-  add_test(NAME architecture-contract
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME energy-analysis
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/energy_tests.py)
-  add_test(NAME mapping-search
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/autotune_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME systemc-observability
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/systemc_observability_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME systemc-tlm-platform
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/tlm_platform_tests.py
-            --binary $<TARGET_FILE:npu-tlm-demo>)
-  add_test(NAME live-control-protocol
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/live_protocol_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME live-dashboard
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/live_dashboard_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  add_test(NAME one-command-launcher
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/launcher_tests.py
-            --binary $<TARGET_FILE:npu-sim>)
-  set_tests_properties(one-command-launcher PROPERTIES TIMEOUT 90)
-  set_tests_properties(live-dashboard live-control-protocol PROPERTIES TIMEOUT 90)
+
+  # The scripts under scripts/ run end to end on the bundled examples. The setup fixture
+  # deletes the outputs these scripts refuse to overwrite, so ctest can be re-run.
+  set(_npu_mobile_out "${PROJECT_BINARY_DIR}/examples-mobile")
+  set(_npu_fused_out "${PROJECT_BINARY_DIR}/examples-fused-graph.json")
+  add_test(NAME examples.clean-output
+    COMMAND "${CMAKE_COMMAND}" -E rm -rf "${_npu_mobile_out}" "${_npu_fused_out}")
+  _npu_register_test(examples.clean-output 30)
+  set_tests_properties(examples.clean-output PROPERTIES FIXTURES_SETUP examples-output)
+  npu_add_python_test(examples.sweep
+    SCRIPT scripts/sweep.py BINARY npu-sim)
+  npu_add_python_test(examples.compare-modes
+    SCRIPT scripts/compare_modes.py BINARY npu-sim ARGS --repeats 2)
+  npu_add_python_test(examples.mlp
+    SCRIPT scripts/mlp_demo.py BINARY npu-sim)
+  npu_add_python_test(examples.graph-cnn
+    SCRIPT scripts/graph_runtime.py BINARY npu-sim
+    ARGS "${PROJECT_SOURCE_DIR}/examples/cnn.json")
+  npu_add_python_test(examples.graph-residual
+    SCRIPT scripts/graph_runtime.py BINARY npu-sim
+    ARGS "${PROJECT_SOURCE_DIR}/examples/residual_mlp.json")
+  npu_add_python_test(examples.graph-fusion
+    SCRIPT scripts/graph_optimize.py BINARY npu-sim
+    ARGS "${PROJECT_SOURCE_DIR}/examples/mobile_fusion.json" --verify --output "${_npu_fused_out}"
+    FIXTURES_REQUIRED examples-output)
+  npu_add_python_test(examples.mobile-suite
+    SCRIPT scripts/mobile_suite.py
+    ARGS --build-dir "$<TARGET_FILE_DIR:npu-sim>" --output-dir "${_npu_mobile_out}"
+    TIMEOUT 180 FIXTURES_REQUIRED examples-output)
+  npu_add_python_test(examples.autotune
+    SCRIPT scripts/autotune.py BINARY npu-sim)
+
   if(NPU_ENABLE_ONNX_TESTS)
-    execute_process(COMMAND ${Python3_EXECUTABLE} -c "import onnx, onnxruntime"
-      RESULT_VARIABLE NPU_ONNX_IMPORT_RESULT OUTPUT_QUIET ERROR_QUIET)
-    if(NOT NPU_ONNX_IMPORT_RESULT EQUAL 0)
-      message(FATAL_ERROR "ONNX tests require pip install -r requirements-onnx.txt in the selected Python interpreter")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import onnx, onnxruntime"
+      RESULT_VARIABLE _npu_onnx_import OUTPUT_QUIET ERROR_QUIET)
+    if(NOT _npu_onnx_import EQUAL 0)
+      message(FATAL_ERROR
+        "ONNX tests require `pip install -r requirements-onnx.txt` for ${Python3_EXECUTABLE}")
     endif()
-    add_test(NAME onnx-runtime-conformance
-      COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/onnx_import_tests.py
-              --binary $<TARGET_FILE:npu-sim>)
-    set_tests_properties(onnx-runtime-conformance PROPERTIES TIMEOUT 180)
+    npu_add_python_test(onnx.ort-differential
+      SCRIPT tests/onnx_import_tests.py BINARY npu-sim TIMEOUT 180)
   endif()
-  set_tests_properties(independent-integration PROPERTIES TIMEOUT 180)
 endif()

@@ -23,7 +23,7 @@ using U64 = std::uint64_t;
 
 void diagnostic_report(const sc_report& report, const sc_actions& actions) {
     if (actions & SC_DISPLAY) std::cerr << report.what() << '\n';
-    sc_report_handler::default_handler(report, actions & ~SC_DISPLAY);
+    sc_report_handler::default_handler(report, actions & ~static_cast<sc_actions>(SC_DISPLAY));
 }
 
 void require(bool condition, const char* message) {

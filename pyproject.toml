@@ -1,0 +1,24 @@
+# Lint and format settings for the Python tools and tests (ruff). The scripts use only the
+# standard library; this file does not make the repository an installable package.
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["build*", "results"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # import order
+    "B",    # bugbear
+    "UP",   # pyupgrade (Python 3.10 syntax)
+    "SIM",  # simplifications
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["npuperf"]
+
+[tool.ruff.format]
+quote-style = "double"
+line-ending = "lf"

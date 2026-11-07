@@ -1,0 +1,25 @@
+# C++ style of this repository: Google layout with 4-space indentation, 100 columns,
+# references and pointers bound to the type, project headers before system headers.
+BasedOnStyle: Google
+Language: Cpp
+Standard: c++17
+ColumnLimit: 100
+IndentWidth: 4
+ContinuationIndentWidth: 4
+ConstructorInitializerIndentWidth: 4
+AccessModifierOffset: -4
+DerivePointerAlignment: false
+PointerAlignment: Left
+BreakBeforeTernaryOperators: false
+AllowShortIfStatementsOnASingleLine: AllIfsAndElse
+AllowShortLoopsOnASingleLine: true
+AllowShortFunctionsOnASingleLine: All
+AllowShortBlocksOnASingleLine: Empty
+AllowShortLambdasOnASingleLine: All
+IncludeBlocks: Preserve
+SortIncludes: CaseSensitive
+IncludeCategories:
+  - Regex: '^"'
+    Priority: 1
+  - Regex: '^<'
+    Priority: 2
