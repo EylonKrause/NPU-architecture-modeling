@@ -597,8 +597,10 @@ int sc_main(int argc, char* argv[]) {
         if (trace) sc_close_vcd_trace_file(trace);
         require(host.completed && host.results.size() == jobs,
                 "TLM platform timed out before all jobs completed");
-        const auto protocol_errors = engine.protocol_errors + dram.protocol_errors;
-        require(protocol_errors == host.expected_errors, "unexpected protocol errors occurred");
+        // The host checked each access's response status; the targets' error
+        // counters must agree with its count of rejected accesses.
+        require(engine.protocol_errors + dram.protocol_errors == host.expected_errors,
+                "target error counters disagree with the host's rejected accesses");
         const auto cycle = [&](sc_time time) { return static_cast<std::uint64_t>(time / period); };
         std::cout << "{\n\"schema_version\":1,\"model\":\"systemc-tlm2-serial-coprocessor\","
                   << "\"jobs_completed\":" << host.results.size() << ",\"interrupts_observed\":" << host.irqs
@@ -615,8 +617,7 @@ int sc_main(int argc, char* argv[]) {
                   << ",\"dma_read_bytes\":" << dram.dma.read_bytes
                   << ",\"dma_write_bytes\":" << dram.dma.write_bytes
                   << ",\"debug_reads\":" << dram.debug_reads
-                  << ",\"expected_protocol_errors\":" << host.expected_errors
-                  << ",\"protocol_errors\":" << protocol_errors << ",\"jobs\":[";
+                  << ",\"expected_protocol_errors\":" << host.expected_errors << ",\"jobs\":[";
         for (std::size_t i = 0; i < host.results.size(); ++i) {
             if (i) std::cout << ',';
             const auto& result = host.results[i];

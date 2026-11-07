@@ -39,6 +39,15 @@ def oracle(seed: int, job: int) -> tuple[list[int], list[int]]:
     return acc, [max(-128, min(127, round(value / 16))) for value in acc]
 
 
+def rejected_accesses(jobs: int) -> int:
+    """The host's illegal accesses: eleven in its protocol checks (two MMIO
+    address errors, a write to a read-only register, a byte enable, an ignore
+    command and a short burst on MMIO; an out-of-range read, an ignore command,
+    a byte enable, an oversized burst and a narrow streaming width on DRAM),
+    plus one START written while BUSY per job."""
+    return 11 + jobs
+
+
 class TlmPlatformTests(unittest.TestCase):
     def test_two_jobs_full_output_and_traffic(self):
         report = run('--dump-output')
@@ -54,8 +63,8 @@ class TlmPlatformTests(unittest.TestCase):
         self.assertEqual(report['dma_write_bytes'], 150)
         self.assertEqual(report['compute_cycles'], 72)
         self.assertEqual(report['debug_reads'], 2)
-        self.assertEqual(report['expected_protocol_errors'], 13)
-        self.assertEqual(report['protocol_errors'], 13)
+        self.assertEqual(report['expected_protocol_errors'], rejected_accesses(2))
+        self.assertNotIn('protocol_errors', report)
         self.assertGreater(report['first_start_cycle'], report['reset_release_cycle'])
         self.assertGreater(report['simulation_cycles'], 72)
         self.assertGreater(report['mmio_transactions'], 20)
@@ -71,8 +80,7 @@ class TlmPlatformTests(unittest.TestCase):
         self.assertEqual(report['jobs_completed'], 5)
         self.assertEqual(report['interrupts_observed'], 5)
         self.assertEqual(report['dma_transactions'], 25)
-        self.assertEqual(report['expected_protocol_errors'], 16)
-        self.assertEqual(report['protocol_errors'], 16)
+        self.assertEqual(report['expected_protocol_errors'], rejected_accesses(5))
         for job in report['jobs']:
             acc, outputs = oracle(4294967295, job['id'])
             self.assertEqual(job['accumulators'], acc)
@@ -88,7 +96,7 @@ class TlmPlatformTests(unittest.TestCase):
         self.assertEqual(report['interrupts_observed'], 2)
         self.assertEqual(report['dma_transactions'], 10)
         self.assertEqual(report['compute_cycles'], 72)
-        self.assertEqual(report['protocol_errors'], report['expected_protocol_errors'])
+        self.assertEqual(report['expected_protocol_errors'], rejected_accesses(2))
         for job in report['jobs']:
             acc, outputs = oracle(1, job['id'])
             self.assertEqual(job['accumulators'], acc)
