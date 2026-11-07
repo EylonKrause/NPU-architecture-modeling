@@ -504,7 +504,7 @@ int sc_main(int argc, char* argv[]) {
         if (!args.config.trace_path.empty()) {
             std::ofstream trace(args.config.trace_path);
             if (!trace) throw std::runtime_error("cannot open trace output");
-            npu::write_trace(trace, model.trace());
+            npu::write_trace(trace, model.spans());
         }
         report(args.config, model, seconds, args.dump);
         return 0;

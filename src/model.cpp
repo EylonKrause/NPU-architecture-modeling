@@ -30,7 +30,7 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
     const auto size = static_cast<std::size_t>(checked_mul(config.m, config.n));
     output_.accumulators.resize(size);
     output_.quantized.resize(size);
-    trace_.reserve(static_cast<std::size_t>(checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
+    spans_.reserve(static_cast<std::size_t>(checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
     for (std::uint64_t i = 0; i < config.buffer_slots; ++i) {
         if (!free_slots_.nb_write(i)) throw std::logic_error("cannot initialize slots");
     }
@@ -263,7 +263,7 @@ void Accelerator::compute() {
         ++stats_.computed_panels;
         compute_busy_ = false;
         changed();
-        trace_.push_back({"compute", tile.id, start, now(), 0, block});
+        spans_.push_back({"compute", tile.id, start, now(), 0, block});
         if (block + 1 == blocks) computed_.write(tile.id);
         else panel_consumed_.notify(sc_core::SC_ZERO_TIME);
     }
@@ -308,7 +308,7 @@ void Accelerator::dma() {
         dma_busy_ = true;
         changed();
         advance(duration);
-        trace_.push_back({read ? "load" : "store", request->tile.id, start, now(), request->bytes, request->block});
+        spans_.push_back({read ? "load" : "store", request->tile.id, start, now(), request->bytes, request->block});
         ++stats_.dma_requests;
         stats_.dma_bursts = checked_add(stats_.dma_bursts,
             config_.dma_burst_bytes ? ceil_div(request->bytes, config_.dma_burst_bytes) : 1);

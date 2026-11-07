@@ -46,12 +46,13 @@ struct LiveSnapshot {
 // sc_start(). Request pointers never outlive their blocking caller's stack frame.
 class Accelerator final : public sc_core::sc_module {
 public:
-    SC_HAS_PROCESS(Accelerator);
     Accelerator(sc_core::sc_module_name name, const Config& config,
                 const Problem& problem);
     const Output& output() const { return output_; }
     const Statistics& statistics() const { return stats_; }
-    const std::vector<Span>& trace() const { return trace_; }
+    // Completed load, compute and store intervals. Not named trace(), which
+    // would hide sc_object::trace(sc_trace_file*).
+    const std::vector<Span>& spans() const { return spans_; }
     bool completed() const { return completed_; }
     LiveSnapshot snapshot() const;
     // Register before the first sc_start(). The caller owns and closes file.
@@ -73,7 +74,7 @@ private:
     std::vector<Tile> tiles_;
     Output output_;
     Statistics stats_;
-    std::vector<Span> trace_;
+    std::vector<Span> spans_;
     sc_core::sc_fifo<std::uint64_t> free_slots_;
     sc_core::sc_fifo<std::uint64_t> loaded_;
     sc_core::sc_fifo<std::uint64_t> computed_;
