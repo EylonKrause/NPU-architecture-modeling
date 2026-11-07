@@ -467,7 +467,9 @@ void check_echo() {
     c.description = "\xc3\xa9";
     c.shape = {5, 6, 7, 3, 1ULL << 40};
     c.arch.compute = {3, 2, 4, npu::Dataflow::WeightStationary, 9, 11};
-    c.arch.memory = {8, 30, 512};
+    c.arch.memory.bytes_per_cycle = 8;
+    c.arch.memory.latency = 30;
+    c.arch.memory.burst_bytes = 512;
     c.arch.memory.model = npu::MemoryModel::Axi;
     c.arch.memory.dram_bytes_per_cycle = 24;
     c.arch.memory.axi = {64, 256, 1, 64, 0, 1000000000};

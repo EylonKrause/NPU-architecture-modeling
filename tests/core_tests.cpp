@@ -339,7 +339,7 @@ void check_reduction_panels_and_systolic() {
     c.mapping.panel_buffers = 1;
     require(npu::slot_panel_buffers(c) == 1 && npu::scratchpad_bytes(c) == 2 * (64 + 10 + 60),
             "one panel buffer per slot");
-    for (const std::uint64_t buffers : {0, 3}) {
+    for (const std::uint64_t buffers : {UINT64_C(0), UINT64_C(3)}) {
         c.mapping.panel_buffers = buffers;
         rejects_with([&] { npu::validate(c); }, "panel buffers must be 1 or 2");
     }
@@ -413,14 +413,14 @@ void check_random_edges() {
         c.quant.input_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.weight_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.output_zero = static_cast<std::int32_t>(next() % 256) - 128;
-        c.quant.multiplier = next() % 257;
-        c.quant.shift = next() % 18;
+        c.quant.multiplier = static_cast<std::int32_t>(next() % 257);
+        c.quant.shift = static_cast<std::int32_t>(next() % 18);
         c.quant.relu = next() % 2 != 0;
         if (trial % 2) {
             for (std::uint64_t col = 0; col < c.shape.n; ++col) {
                 c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 256) - 128);
-                c.quant.multipliers.push_back(next() % 257);
-                c.quant.shifts.push_back(next() % 18);
+                c.quant.multipliers.push_back(static_cast<std::int32_t>(next() % 257));
+                c.quant.shifts.push_back(static_cast<std::int32_t>(next() % 18));
             }
         }
         const auto p = npu::make_problem(c);
