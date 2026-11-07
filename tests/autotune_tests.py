@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 import argparse
 import itertools
+import json
 from pathlib import Path
 import sys
 import subprocess
 import unittest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
-from autotune import search
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from npuperf import analytic
+from npuperf.autotune import search
 
 BINARY = None
 
@@ -52,9 +54,35 @@ class MappingTests(unittest.TestCase):
                    "--binary", "/does-not-exist", "--tile-m-options", grid,
                    "--tile-n-options", grid, "--tile-k-options", grid, "--slot-options", grid]
         result = subprocess.run(command, capture_output=True, text=True, timeout=5)
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 2)
+        self.assertTrue(result.stderr.startswith("autotune: "), result.stderr)
         self.assertIn("256 candidates", result.stderr)
         self.assertNotIn("binary does not exist", result.stderr)
+
+    def test_infeasible_candidates_are_skipped_without_a_launch(self):
+        flags = ["--m", 4, "--n", 5, "--k", 6, "--sram-bytes", 90]
+        candidates = [(3, 4, 2, 2), (1, 1, 0, 1)]
+        report, rows = search(BINARY, [4, 5, 6], candidates, flags)
+        skipped = [run for run in report["runs"] if not run["feasible"]]
+        self.assertEqual(len(skipped), 1)
+        design = analytic.Design.from_flags({"m": 4, "n": 5, "k": 6, "tile_m": 3, "tile_n": 4,
+                                             "tile_k": 2, "buffer_slots": 2})
+        self.assertEqual(skipped[0]["predicted_scratchpad_bytes"],
+                         analytic.scratchpad_bytes(design, panel_buffers=1))
+        self.assertNotIn("command", skipped[0])
+
+    def test_cli_table_and_json(self):
+        script = Path(__file__).resolve().parents[1] / "scripts" / "autotune.py"
+        base = [sys.executable, str(script), "--binary", str(BINARY), "--m", "8", "--n", "8",
+                "--k", "8", "--tile-m-options", "4,8", "--tile-n-options", "8",
+                "--tile-k-options", "0", "--slot-options", "1,2"]
+        table = subprocess.run(base, capture_output=True, text=True, timeout=60)
+        self.assertEqual(table.returncode, 0, table.stderr)
+        self.assertIn("Pareto front", table.stdout)
+        data = subprocess.run(base + ["--format", "json"], capture_output=True, text=True,
+                              timeout=60)
+        self.assertEqual(data.returncode, 0, data.stderr)
+        self.assertEqual(json.loads(data.stdout)["candidate_count"], 4)
 
 
 if __name__ == "__main__":

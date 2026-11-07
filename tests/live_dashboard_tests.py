@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
-import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import socket
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -14,10 +19,8 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("live_dashboard", ROOT / "scripts" / "live_dashboard.py")
-dashboard = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(dashboard)
+sys.path.insert(0, str(ROOT))
+from npuperf import live as dashboard
 BINARY: Path
 
 
@@ -39,7 +42,7 @@ class DashboardTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("Model failed to reach the expected state before the deadline.")
 
-    def test_real_simulation_pause_step_resume_stop(self):
+    def test_pause_step_resume_stop(self):
         state = self.controller.control({"action": "start", "profile": "balanced"})
         self.assertEqual(state["state"], "running")
         state = self.wait_for(lambda s: s["telemetry"].get("cycles", 0) > 0)
@@ -94,7 +97,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(state["jobs_completed"], 1, profile)
             self.assertTrue(state["recent_jobs"][0]["telemetry"]["validated"], profile)
 
-    def test_palette_decodes_real_buffers_varies_inputs_and_cleans_fixture(self):
+    def test_palette_decode_varies_inputs_and_cleans_fixture(self):
         self.controller.control({"action": "reset", "profile": "palette-weights"})
         command = self.controller.process.args
         fixture = Path(command[command.index("--input") + 1])
@@ -182,6 +185,60 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+class DashboardCliTests(unittest.TestCase):
+    def run_main(self, argv):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            status = dashboard.main(argv)
+        return status, stderr.getvalue()
+
+    def test_missing_binary_is_one_line_error(self):
+        status, stderr = self.run_main(["--binary", str(ROOT / "does-not-exist" / "npu-sim")])
+        self.assertEqual(status, 2)
+        self.assertTrue(stderr.startswith("live_dashboard: "), stderr)
+        self.assertEqual(len(stderr.strip().splitlines()), 1)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_busy_port_is_one_line_error(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            status, stderr = self.run_main(["--binary", str(BINARY), "--port", str(port)])
+        self.assertEqual(status, 1)
+        self.assertTrue(stderr.startswith(f"live_dashboard: cannot listen on 127.0.0.1:{port}"),
+                        stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_script_rejects_bad_port_with_status_two(self):
+        run = subprocess.run([sys.executable, str(ROOT / "scripts" / "live_dashboard.py"),
+                              "--port", "70000"], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 2)
+        self.assertTrue(run.stderr.startswith("live_dashboard: "), run.stderr)
+
+    def test_reuse_address_policy(self):
+        self.assertEqual(dashboard.DashboardServer.allow_reuse_address, os.name != "nt")
+
+    def test_state_does_not_wait_for_the_simulator_lock(self):
+        controller = dashboard.Controller(BINARY, tick_seconds=0.01, slice_cycles=64)
+        try:
+            controller.control({"action": "reset", "profile": "balanced"})
+            result = {}
+            with controller.lock:  # the scheduler holds this while it talks to the child
+                reader = threading.Thread(target=lambda: result.update(controller.snapshot()))
+                reader.start()
+                reader.join(timeout=2)
+                self.assertFalse(reader.is_alive())
+            self.assertEqual(result["state"], "paused")
+        finally:
+            controller.close()
+
+    def test_profiles_report_their_analytic_bound(self):
+        self.assertEqual(dashboard.profile_bound("compute-bound"), "compute")
+        self.assertIn(dashboard.profile_bound("memory-bound"), ("bandwidth", "latency"))
+        self.assertIsNone(dashboard.profile_bound("palette-weights"))
 
 
 if __name__ == "__main__":

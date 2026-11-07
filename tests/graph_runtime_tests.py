@@ -4,13 +4,15 @@
 import argparse
 import json
 from pathlib import Path
+import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import graph_runtime as graph
+sys.path.insert(0, str(ROOT))
+from npuperf import graph, sim
 
 BINARY = ROOT / "build" / "npu-sim"
 
@@ -107,7 +109,9 @@ class GraphRuntimeTests(unittest.TestCase):
                           ["a", "w"], [2, 4, -3, 9, 4, 8, -5, 15], quant=quant())
         report = self.execute(document)
         self.assertEqual(report["outputs"]["result"]["shape"], [1, 1, 2, 4])
-        self.assertEqual(report["layers"][0]["npu_invocations"], 2)
+        # One grouped call when npu-sim has --groups, else one call per channel.
+        self.assertEqual(report["layers"][0]["npu_invocations"],
+                         1 if graph.grouped_calls(BINARY) else 2)
         self.assertEqual(report["macs"], 8)
 
     def test_max_pool_negative_values_do_not_use_zero_padding(self):
@@ -242,7 +246,7 @@ class GraphRuntimeTests(unittest.TestCase):
         document = single("Dense", {"a": tensor([1, 1], [1]), "w": tensor([1, 1], [1]),
                                      "b": tensor([1], [(1 << 31) - 1], "int32")},
                           ["a", "w", "b"], [127], quant=quant())
-        with patch.object(graph, "run_model") as simulator:
+        with patch.object(graph.sim, "run") as simulator:
             with self.assertRaisesRegex(ValueError, "accumulator"):
                 self.execute(document)
             simulator.assert_not_called()
@@ -250,19 +254,19 @@ class GraphRuntimeTests(unittest.TestCase):
     def test_python_reference_checks_full_arrays_not_only_cpp_match_flag(self):
         document = single("MatMul", {"a": tensor([1, 1], [2]), "w": tensor([1, 1], [3])},
                           ["a", "w"], [6], quant=quant())
-        original = graph.run_model
+        original = sim.run
         def corrupt(*args, **kwargs):
-            report = original(*args, **kwargs)
-            report["result"]["outputs"][0] = 5
-            return report
-        with patch.object(graph, "run_model", side_effect=corrupt):
-            with self.assertRaisesRegex(ValueError, "independent scalar reference"):
+            result = original(*args, **kwargs)
+            result.raw["outputs"][0] = 5
+            return result
+        with patch.object(graph.sim, "run", side_effect=corrupt):
+            with self.assertRaisesRegex(sim.CheckError, "independent scalar reference"):
                 self.execute(document)
 
     def test_wrong_golden_is_a_failure(self):
         document = self.example("residual_mlp.json")
         document["expected_outputs"]["output"] = [0, 0, 0]
-        with self.assertRaisesRegex(ValueError, "independent golden"):
+        with self.assertRaisesRegex(sim.CheckError, "independent golden"):
             self.execute(document)
 
     def test_declared_even_rounding_changes_halfway_cases(self):
@@ -310,6 +314,33 @@ class GraphRuntimeTests(unittest.TestCase):
         document["nodes"][1]["output"] = "hidden"
         with self.assertRaisesRegex(ValueError, "unique producer"):
             self.execute(document)
+
+    def test_architecture_passes_any_simulator_flag_but_not_runtime_owned_ones(self):
+        document = self.example("residual_mlp.json")
+        report = self.execute(document, architecture={"tile_m": 1, "memory_latency": 3})
+        self.assertEqual(report["outputs"]["output"]["data"], [8, 1, 5])
+        for key in ("shift", "input", "groups", "bad key"):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "architecture field"):
+                self.execute(document, architecture={key: 1})
+        with self.assertRaisesRegex(sim.SimError, "unknown option"):
+            self.execute(document, architecture={"not_a_simulator_flag": 1})
+
+    def test_cli_table_and_rejected_input(self):
+        command = [sys.executable, str(ROOT / "scripts" / "graph_runtime.py"),
+                   str(ROOT / "examples" / "cnn.json"), "--binary", str(BINARY),
+                   "--format", "table"]
+        run = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertIn("NPU cycles", run.stdout)
+        with tempfile.TemporaryDirectory() as folder:
+            bad = Path(folder) / "bad.json"
+            bad.write_text('{"schema_version": 1, "schema_version": 1}', encoding="utf-8")
+            run = subprocess.run(command[:2] + [str(bad), "--binary", str(BINARY)],
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(run.returncode, 2)
+        self.assertTrue(run.stderr.startswith("graph_runtime: duplicate JSON object key"),
+                        run.stderr)
+        self.assertNotIn("Traceback", run.stderr)
 
     def test_duplicate_operand_freed_once(self):
         document = single("Add", {"a": tensor([1], [2])}, ["a", "a"], [4])

@@ -112,8 +112,9 @@ class LauncherTests(unittest.TestCase):
                 env=env, capture_output=True, text=True, encoding="utf-8", timeout=20,
             )
 
-    def assert_friendly_failure(self, result, *terms: str) -> None:
-        self.assertNotEqual(result.returncode, 0)
+    def assert_friendly_failure(self, result, status: int, *terms: str) -> None:
+        self.assertEqual(result.returncode, status, result.stderr)
+        self.assertTrue(result.stderr.startswith("run.py: "), result.stderr)
         self.assertNotIn("Traceback (most recent call last)", result.stderr)
         self.assertTrue(result.stderr.strip(), "A failed startup needs a readable explanation.")
         for term in terms:
@@ -165,13 +166,13 @@ class LauncherTests(unittest.TestCase):
             (["--jobs", "0"], "jobs"),
         ]:
             with self.subTest(arguments=arguments):
-                self.assert_friendly_failure(self.run_launcher(arguments), term)
+                self.assert_friendly_failure(self.run_launcher(arguments), 2, term)
 
     def test_missing_binary_has_actionable_error(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-binary-") as directory:
             result = self.run_launcher(
                 ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
-            self.assert_friendly_failure(result, "npu-sim")
+            self.assert_friendly_failure(result, 1, "npu-sim")
 
     def test_corrupt_executable_is_rejected_before_serving(self):
         with tempfile.TemporaryDirectory(prefix="npu-bad-binary-") as directory:
@@ -181,7 +182,7 @@ class LauncherTests(unittest.TestCase):
                 executable.chmod(0o755)
             result = self.run_launcher(
                 ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
-            self.assert_friendly_failure(result, "npu-sim")
+            self.assert_friendly_failure(result, 1, "npu-sim")
             self.assertNotRegex(result.stdout, r"http://127\.0\.0\.1:\d+")
 
     def test_busy_port_is_reported_before_any_build(self):
@@ -193,8 +194,29 @@ class LauncherTests(unittest.TestCase):
                 build = Path(directory) / "must-not-be-created"
                 result = self.run_launcher(
                     ["--build-dir", str(build), "--port", str(port), "--no-browser"])
-                self.assert_friendly_failure(result, "port", str(port))
+                self.assert_friendly_failure(result, 1, "port", str(port))
                 self.assertFalse(build.exists(), "A busy port should fail before configuring a build.")
+
+    def test_port_is_reusable_right_after_a_restart(self):
+        # A browser keep-alive connection leaves the old socket in TIME_WAIT; the next
+        # launch must still bind (POSIX SO_REUSEADDR, the same option the server uses).
+        sys.path.insert(0, str(ROOT))
+        from npuperf import live
+        first = live.DashboardServer(("127.0.0.1", 0))
+        port = first.server_address[1]
+        thread = threading.Thread(target=first.serve_forever, daemon=True)
+        thread.start()
+        client = socket.create_connection(("127.0.0.1", port), timeout=3)
+        try:
+            client.sendall(b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
+            client.recv(4096)
+        finally:
+            first.shutdown()
+            first.server_close()
+            thread.join(timeout=3)
+            client.close()
+        second = live.DashboardServer(("127.0.0.1", port))
+        second.server_close()
 
     def test_missing_cmake_has_setup_guidance(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-cmake-") as directory:
@@ -203,7 +225,7 @@ class LauncherTests(unittest.TestCase):
                 ["--build-only", "--build-dir", str(Path(directory) / "build"), "--no-browser"],
                 env=environment,
             )
-            self.assert_friendly_failure(result, "cmake")
+            self.assert_friendly_failure(result, 1, "cmake")
             self.assertRegex(result.stderr.lower(), r"install|prerequisite|require|not found")
 
 

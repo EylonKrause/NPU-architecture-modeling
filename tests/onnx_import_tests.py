@@ -11,9 +11,9 @@ import unittest
 from unittest.mock import patch
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import graph_runtime
-import onnx_import
+sys.path.insert(0, str(ROOT))
+from npuperf import graph as graph_runtime
+from npuperf import onnx_import
 
 try:
     import numpy as np
@@ -23,7 +23,7 @@ try:
 except ImportError as error:
     raise SystemExit("install optional requirements-onnx.txt before running ONNX tests") from error
 
-BINARY = ROOT / "build-clean" / "npu-sim"
+BINARY = ROOT / "build" / "npu-sim"
 
 
 def make_model(nodes, shapes, initializers, outputs, input_type=onnx.TensorProto.INT8):
@@ -213,7 +213,8 @@ class OnnxImportTests(unittest.TestCase):
             document = graph_runtime.load_graph(graph_path)
             graph_runtime.validate_graph(document)
             repeated = subprocess.run(command, capture_output=True, text=True, timeout=60, check=False)
-            self.assertNotEqual(repeated.returncode, 0)
+            self.assertEqual(repeated.returncode, 2)
+            self.assertTrue(repeated.stderr.startswith("onnx_import: "), repeated.stderr)
             self.assertIn("File exists", repeated.stderr)
 
     def test_input_shape_data_scale_and_names_are_validated(self):

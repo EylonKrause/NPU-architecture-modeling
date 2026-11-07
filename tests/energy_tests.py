@@ -9,8 +9,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import energy_report as energy
+sys.path.insert(0, str(ROOT))
+from npuperf import energy
 
 
 def fixture():
@@ -43,7 +43,20 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(report["component_pj"]["mac"], 8)
         self.assertEqual(report["source_counts"]["macs"], 10)
         self.assertEqual(report["source_counts"]["executed_macs"], 4)
-        self.assertTrue(any("decompression" in item for item in report["limitations"]))
+        self.assertIn("weight_decode", report["scope"]["excluded"])
+        self.assertNotIn("weight_decode", report["scope"]["included"])
+
+    def test_component_shares_sum_to_one(self):
+        report = energy.estimate(fixture(), mac_pj=2, dram_byte_pj=3, static_mw=4)
+        self.assertAlmostEqual(sum(report["component_share"].values()), 1.0)
+        self.assertEqual(report["component_share"]["static"], 400 / 450)
+
+    def test_timing_only_result_is_accepted_without_hash(self):
+        source = {**fixture(), "numerics": "skipped"}
+        del source["numerical_match"], source["output_hash"]
+        report = energy.estimate(source, 2, 3)
+        self.assertEqual(report["numerics"], "skipped")
+        self.assertEqual(report["total_pj"], 50)
 
     def test_inconsistent_or_invalid_sparse_counters_rejected(self):
         for executed, skipped in ((11, 0), (4, 5), (True, 9), (-1, 11), (0, 11)):
@@ -122,8 +135,13 @@ class EnergyTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text()), json.loads(first.stdout))
             before = output.read_bytes()
             second = subprocess.run(command, text=True, capture_output=True, timeout=10)
-            self.assertNotEqual(second.returncode, 0)
+            self.assertEqual(second.returncode, 2)
+            self.assertTrue(second.stderr.startswith("energy_report: "), second.stderr)
             self.assertEqual(second.stdout, "")
+            self.assertEqual(output.read_bytes(), before)
+            forced = subprocess.run(command + ["--force"], text=True, capture_output=True,
+                                    timeout=10)
+            self.assertEqual(forced.returncode, 0, forced.stderr)
             self.assertEqual(output.read_bytes(), before)
 
     def test_cli_required_coefficients_and_nonfinite_rejection(self):
@@ -137,7 +155,8 @@ class EnergyTests(unittest.TestCase):
                               ["--mac-pj", "-1", "--dram-byte-pj", "1"]):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(base + arguments, text=True, capture_output=True, timeout=10)
-                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertTrue(result.stderr.startswith("energy_report: "), result.stderr)
                     self.assertEqual(result.stdout, "")
 
     def test_json_nan_duplicate_keys_and_nonobject_rejected(self):
