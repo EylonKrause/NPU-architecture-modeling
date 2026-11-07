@@ -13,7 +13,10 @@ computes it, and after the last panel stores a * b output bytes.
 Compute cycles per panel (c = panel depth, P = MACs per cycle, A_r x A_c array):
     vector       ceil(a * b * c / P) + pipeline
     os           ceil(a/A_r) * ceil(b/A_c) * c + (A_r + A_c - 2) + pipeline
-    ws           ceil(c/A_r) * ceil(b/A_c) * a + A_r + (A_r + A_c - 2) + pipeline
+    ws           A_r + (F - 1) * max(a, A_r) + a + (A_r + A_c - 2) + pipeline,
+                 F = ceil(c/A_r) * ceil(b/A_c) weight folds: the first A_r-cycle weight
+                 preload is exposed and each later one overlaps the previous fold's
+                 a-row stream, so a fold occupies max(a, A_r) cycles and the last one a
     os-per-wave  ceil(a/A_r) * ceil(b/A_c) * (c + A_r + A_c - 2) + pipeline
                  (npu-sim builds without --dataflow expose fill/drain on every wave)
 
@@ -281,7 +284,8 @@ def panel_compute_cycles(design: Design, rows: int, cols: int, depth: int) -> in
         if design.dataflow == "os":
             work = ceil_div(rows, ar) * ceil_div(cols, ac) * depth + fill_drain
         elif design.dataflow == "ws":
-            work = ceil_div(depth, ar) * ceil_div(cols, ac) * rows + ar + fill_drain
+            folds = ceil_div(depth, ar) * ceil_div(cols, ac)
+            work = ar + (folds - 1) * max(rows, ar) + rows + fill_drain
         elif design.dataflow == "os-per-wave":
             work = ceil_div(rows, ar) * ceil_div(cols, ac) * (depth + fill_drain)
         else:

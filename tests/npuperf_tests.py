@@ -583,6 +583,9 @@ class AnalyticUnitTests(unittest.TestCase):
         ws = os_design.replace(dataflow="ws")
         # WS: ceil(20/4)*ceil(12/8) folds x M + A_r + (A_r + A_c - 2) + pipeline
         self.assertEqual(analytic.panel_compute_cycles(ws, 10, 12, 20), 5 * 2 * 10 + 4 + 10 + 3)
+        # A tile shorter than the array cannot hide the next A_r-cycle weight preload: every
+        # fold but the last occupies A_r cycles.
+        self.assertEqual(analytic.panel_compute_cycles(ws, 1, 12, 20), 4 + 9 * 4 + 1 + 10 + 3)
         self.assertEqual(os_design.peak_macs_per_cycle, 32)
 
     def test_grouped_traffic_is_groups_times_one_group(self):
