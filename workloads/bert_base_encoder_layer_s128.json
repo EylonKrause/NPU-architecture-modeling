@@ -1,0 +1,222 @@
+{
+ "schema_version": 1,
+ "conventions": {
+  "batch": 1,
+  "layout": "NHWC",
+  "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately; BN folded",
+  "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
+  "repeat": "number of identical instances of the layer in the network",
+  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention per KV head with sharing query heads stacked along M"
+ },
+ "name": "bert_base_encoder_layer_s128",
+ "source": [
+  "https://huggingface.co/google-bert/bert-base-uncased/raw/main/config.json",
+  "https://arxiv.org/abs/1810.04805",
+  "https://arxiv.org/abs/2004.02984"
+ ],
+ "notes": "One BERT-base encoder layer at sequence 128, batch 1: hidden 768, 12 heads x 64, FFN 3072, GELU, post-LN, biases on every projection. The full encoder is this layer x12 (totals.encoder_x12). Attention is bidirectional.",
+ "layers": [
+  {
+   "name": "attention.self.query",
+   "op": "dense",
+   "M": 128,
+   "N": 768,
+   "K": 768,
+   "repeat": 1,
+   "macs": 75497472,
+   "weight_bytes_int8": 589824,
+   "bias_bytes_int32": 3072,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 768,
+    "K": 768,
+    "G": 1,
+    "calls": 1
+   }
+  },
+  {
+   "name": "attention.self.key",
+   "op": "dense",
+   "M": 128,
+   "N": 768,
+   "K": 768,
+   "repeat": 1,
+   "macs": 75497472,
+   "weight_bytes_int8": 589824,
+   "bias_bytes_int32": 3072,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 768,
+    "K": 768,
+    "G": 1,
+    "calls": 1
+   }
+  },
+  {
+   "name": "attention.self.value",
+   "op": "dense",
+   "M": 128,
+   "N": 768,
+   "K": 768,
+   "repeat": 1,
+   "macs": 75497472,
+   "weight_bytes_int8": 589824,
+   "bias_bytes_int32": 3072,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 768,
+    "K": 768,
+    "G": 1,
+    "calls": 1
+   },
+   "note": "Q/K/V often fused as one N=2304 GEMM (226,492,416 MACs)"
+  },
+  {
+   "name": "attn_scores_QKt",
+   "op": "matmul",
+   "M": 128,
+   "N": 128,
+   "K": 64,
+   "repeat": 12,
+   "macs": 1048576,
+   "weight_bytes_int8": 0,
+   "bias_bytes_int32": 0,
+   "b_operand": "activations",
+   "lowered": {
+    "M": 128,
+    "N": 128,
+    "K": 64,
+    "G": 12,
+    "calls": 1
+   },
+   "note": "bidirectional: full SxS, no causal mask"
+  },
+  {
+   "name": "attn_context_PV",
+   "op": "matmul",
+   "M": 128,
+   "N": 64,
+   "K": 128,
+   "repeat": 12,
+   "macs": 1048576,
+   "weight_bytes_int8": 0,
+   "bias_bytes_int32": 0,
+   "b_operand": "activations",
+   "lowered": {
+    "M": 128,
+    "N": 64,
+    "K": 128,
+    "G": 12,
+    "calls": 1
+   }
+  },
+  {
+   "name": "attention.output.dense",
+   "op": "dense",
+   "M": 128,
+   "N": 768,
+   "K": 768,
+   "repeat": 1,
+   "macs": 75497472,
+   "weight_bytes_int8": 589824,
+   "bias_bytes_int32": 3072,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 768,
+    "K": 768,
+    "G": 1,
+    "calls": 1
+   }
+  },
+  {
+   "name": "intermediate.dense",
+   "op": "dense",
+   "M": 128,
+   "N": 3072,
+   "K": 768,
+   "repeat": 1,
+   "macs": 301989888,
+   "weight_bytes_int8": 2359296,
+   "bias_bytes_int32": 12288,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 3072,
+    "K": 768,
+    "G": 1,
+    "calls": 1
+   }
+  },
+  {
+   "name": "output.dense",
+   "op": "dense",
+   "M": 128,
+   "N": 768,
+   "K": 3072,
+   "repeat": 1,
+   "macs": 301989888,
+   "weight_bytes_int8": 2359296,
+   "bias_bytes_int32": 3072,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 768,
+    "K": 3072,
+    "G": 1,
+    "calls": 1
+   }
+  }
+ ],
+ "vector_ops": [
+  {
+   "name": "softmax",
+   "op": "softmax",
+   "elements": 196608,
+   "repeat": 1
+  },
+  {
+   "name": "attention.output.LayerNorm(+residual)",
+   "op": "layernorm",
+   "elements": 98304,
+   "repeat": 1
+  },
+  {
+   "name": "intermediate.gelu",
+   "op": "gelu",
+   "elements": 393216,
+   "repeat": 1
+  },
+  {
+   "name": "output.LayerNorm(+residual)",
+   "op": "layernorm",
+   "elements": 98304,
+   "repeat": 1
+  }
+ ],
+ "totals": {
+  "macs": 931135488,
+  "weight_bytes_int8": 7077888,
+  "bias_bytes_int32": 27648,
+  "simulator_calls": 8,
+  "param_check": {
+   "per_layer_params_hf": 7087872,
+   "computed_bert_base_params": 109482240,
+   "published_params": "110M (Devlin et al.); HF bert-base-uncased 109,482,240",
+   "match": true
+  },
+  "encoder_x12": {
+   "macs": 11173625856,
+   "weight_bytes_int8": 84934656
+  },
+  "reference": {
+   "published_flops": 22500000000,
+   "published_source": "Sun et al. 2020 (MobileBERT) Table 4: BERT_BASE 109M params, 22.5B FLOPS at seq 128",
+   "computed_encoder_x12_flops_2_per_mac": 22347251712,
+   "computed_vs_published": 0.9932
+  }
+ }
+}
