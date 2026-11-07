@@ -1,5 +1,5 @@
 # Compile settings for project targets. SystemC keeps its own warning flags; only the
-# sanitizer instrumentation below reaches it.
+# sanitizer instrumentation below reaches it, minus the checks npu_sanitize_systemc() drops.
 
 # --- Sanitizers ----------------------------------------------------------------------------
 # Applied with add_compile_options() before SystemC is added, so a fetched SystemC is
@@ -23,18 +23,23 @@ if(NOT NPU_SANITIZERS STREQUAL "")
   list(JOIN NPU_SANITIZERS "," _npu_sanitize)
   set(_npu_sanitize_flags
     -fsanitize=${_npu_sanitize} -fno-sanitize-recover=all -fno-omit-frame-pointer)
-  if("undefined" IN_LIST NPU_SANITIZERS)
-    # SystemC invokes process bodies through sc_process_host member-function pointers. UBSan's
-    # vptr check rejects that call (sc_process.h, reproduced with a one-method module), so
-    # every SystemC-driven test would abort on kernel code.
-    list(APPEND _npu_sanitize_flags -fno-sanitize=vptr)
-  endif()
   add_compile_options("$<$<COMPILE_LANGUAGE:C,CXX>:${_npu_sanitize_flags}>")
   add_link_options(-fsanitize=${_npu_sanitize})
   if(NOT NPU_FETCH_SYSTEMC)
     message(STATUS "NPU_SANITIZERS: the prebuilt SystemC package is not instrumented")
   endif()
 endif()
+
+# npu_sanitize_systemc(<target>): the exemptions a fetched SystemC needs, on its own objects
+# only. SystemC invokes process bodies through sc_process_host member-function pointers, which
+# UBSan's vptr check rejects (sc_process.h, reproduced with a one-method module), so every
+# SystemC-driven test would abort in kernel code. Project code keeps the vptr check for its
+# sc_module subclasses and payload casts; the build.ubsan-vptr test holds it to that.
+function(npu_sanitize_systemc target)
+  if("undefined" IN_LIST NPU_SANITIZERS)
+    target_compile_options(${target} PRIVATE -fno-sanitize=vptr)
+  endif()
+endfunction()
 
 # --- Warnings ------------------------------------------------------------------------------
 add_library(npu_warnings INTERFACE)

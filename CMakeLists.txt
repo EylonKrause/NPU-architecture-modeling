@@ -51,6 +51,7 @@ if(NPU_FETCH_SYSTEMC)
     URL_HASH SHA256=${NPU_SYSTEMC_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
   FetchContent_MakeAvailable(systemc)
+  npu_sanitize_systemc(systemc)
   if(MSVC)
     set(NPU_SYSTEMC_SOURCE_DIR "${systemc_SOURCE_DIR}")
     include(PatchSystemCMsvc)
@@ -110,6 +111,13 @@ if(BUILD_TESTING)
     SCRIPT tests/energy_tests.py)
   npu_add_python_test(tools.autotune
     SCRIPT tests/autotune_tests.py BINARY npu-sim)
+
+  if("undefined" IN_LIST NPU_SANITIZERS)
+    add_executable(npu-ubsan-vptr-probe tests/ubsan_vptr_probe.cpp)
+    npu_project_target(npu-ubsan-vptr-probe)
+    npu_add_python_test(build.ubsan-vptr
+      SCRIPT tests/ubsan_vptr_tests.py BINARY npu-ubsan-vptr-probe TIMEOUT 30)
+  endif()
 
   # The scripts under scripts/ run end to end on the bundled examples. The setup fixture
   # deletes the outputs these scripts refuse to overwrite, so ctest can be re-run.
