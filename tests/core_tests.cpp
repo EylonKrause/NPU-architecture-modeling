@@ -990,6 +990,29 @@ void check_memory_map() {
     m.arch.memory.dram_bytes_per_cycle = 100;
     require(npu::peak_memory_bytes_per_cycle(m) == 64, "a faster DRAM does not");
     npu::validate(m);
+    using Mutation = std::function<void(npu::AxiConfig&, npu::MemoryConfig&)>;
+    const auto bad = [](const Mutation& mutation, const std::string& message) {
+        npu::Config config;
+        config.arch.memory.model = npu::MemoryModel::Axi;
+        mutation(config.arch.memory.axi, config.arch.memory);
+        rejects_with([&] { npu::validate(config); }, message);
+    };
+    bad([](auto& a, auto&) { a.data_bytes = 12; }, "AXI data bytes must be 8, 16, 32 or 64");
+    bad([](auto& a, auto&) { a.data_bytes = 0; }, "AXI data bytes must be 8, 16, 32 or 64");
+    bad([](auto& a, auto&) { a.max_burst_beats = 0; }, "AXI burst beats must be in 1..256");
+    bad([](auto& a, auto&) { a.max_burst_beats = 257; }, "AXI burst beats must be in 1..256");
+    bad([](auto& a, auto&) { a.read_outstanding = 0; }, "AXI outstanding bursts must be in 1..64");
+    bad([](auto& a, auto&) { a.write_outstanding = 65; }, "AXI outstanding bursts must be");
+    bad([](auto& a, auto&) { a.write_latency = 1000000001; }, "AXI latencies must be at most");
+    bad([](auto&, auto& memory) { memory.dram_bytes_per_cycle = 1000000001; },
+        "DRAM bytes per cycle must be at most 1000000000");
+    // Every burst pays the latency in the bound: 1e9 cycles times 1e9 bytes
+    // per cycle leaves 64 bits.
+    bad([](auto& a, auto& memory) {
+            a.read_latency = 1000000000;
+            memory.dram_bytes_per_cycle = 1000000000;
+        },
+        "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
 }
 
 }  // namespace

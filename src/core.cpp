@@ -227,6 +227,44 @@ std::uint64_t panel_bytes(const Config& config, std::uint64_t k,
     return checked_add(checked_add(activations, weights), metadata);
 }
 
+void validate_memory(const Config& config) {
+    const auto& memory = config.arch.memory;
+    const auto& axi = memory.axi;
+    require(axi.data_bytes == 8 || axi.data_bytes == 16 || axi.data_bytes == 32 ||
+                axi.data_bytes == 64,
+            "AXI data bytes must be 8, 16, 32 or 64");
+    require(axi.max_burst_beats >= 1 && axi.max_burst_beats <= 256,
+            "AXI burst beats must be in 1..256");
+    require(axi.read_outstanding >= 1 && axi.read_outstanding <= 64 &&
+                axi.write_outstanding >= 1 && axi.write_outstanding <= 64,
+            "AXI outstanding bursts must be in 1..64");
+    require(axi.read_latency <= max_timing_value && axi.write_latency <= max_timing_value,
+            "AXI latencies must be at most 1000000000");
+    require(memory.dram_bytes_per_cycle <= max_timing_value,
+            "DRAM bytes per cycle must be at most 1000000000");
+}
+
+// Axi cycles of one run moved with every burst waiting for the previous one
+// to complete: per burst an issue cycle and the latency, per beat a bus cycle,
+// and the run's DRAM time rounded up once per burst. Bursts after the first
+// start beat aligned, so a run of L bytes has at most L / burst bytes +
+// L / 4096 + 3 bursts and L / data_bytes + 2 beats.
+std::uint64_t axi_run_bound(const Config& config, bool read, std::uint64_t length) {
+    if (!length) return 0;
+    const auto& memory = config.arch.memory;
+    const auto& axi = memory.axi;
+    const auto bursts = checked_add(length / (axi.max_burst_beats * axi.data_bytes),
+                                    length / axi_boundary_bytes + 3);
+    const auto beats = length / axi.data_bytes + 2;
+    auto cycles = checked_add(checked_mul(bursts, checked_add(1, read ? axi.read_latency :
+                                                                       axi.write_latency)),
+                              beats);
+    if (memory.dram_bytes_per_cycle)
+        cycles = checked_add(cycles, checked_add(bursts,
+            ceil_div(checked_mul(beats, axi.data_bytes), memory.dram_bytes_per_cycle)));
+    return cycles;
+}
+
 // MAC cycles of a rows x cols output tile over one K panel of depth k,
 // without the per-panel pipeline charge. On an A_r x A_c array:
 //   os: ceil(rows/A_r) * ceil(cols/A_c) output waves of k cycles, issued back
@@ -483,6 +521,7 @@ void validate(const Config& config) {
     require(arch.memory.burst_bytes <= max_timing_value &&
                 arch.weight_cache_bytes <= max_timing_value,
             "DMA burst and weight cache sizes must be at most 1000000000 bytes");
+    validate_memory(config);
     require(std::isfinite(arch.frequency_mhz) && arch.frequency_mhz >= 1e-6 &&
                 arch.frequency_mhz <= static_cast<double>(max_timing_value),
             "frequency MHz must be finite and in 0.000001..1000000000 (at least 1 Hz)");
@@ -523,7 +562,23 @@ void validate(const Config& config) {
 
     // The serial schedule bounds every overlapped schedule. Four tile shape
     // classes per group give the exact serial sum without iterating over huge
-    // tile lists.
+    // tile lists. The axi sum charges every burst its full latency.
+    const bool axi = arch.memory.model == MemoryModel::Axi;
+    const auto read_cycles = [&](std::uint64_t rows, std::uint64_t cols, std::uint64_t block) {
+        const auto k = panel_k(config, block);
+        if (!axi)
+            return dma_transfer_cycles(config, panel_bytes(config, k, rows, cols, block == 0));
+        auto cycles = checked_add(checked_mul(rows, axi_run_bound(config, true, k)),
+            axi_run_bound(config, true, encoded_weight_bound(config, checked_mul(k, cols))));
+        if (block == 0)
+            cycles = checked_add(cycles, axi_run_bound(config, true,
+                checked_mul(cols, param_record_bytes(config))));
+        return cycles;
+    };
+    const auto write_cycles = [&](std::uint64_t rows, std::uint64_t cols) {
+        return axi ? checked_mul(rows, axi_run_bound(config, false, cols)) :
+                     dma_transfer_cycles(config, checked_mul(rows, cols));
+    };
     std::uint64_t serial_cycles = 0;
     const std::uint64_t row_sizes[] = {map.tile_m, shape.m % map.tile_m};
     const std::uint64_t row_counts[] = {shape.m / map.tile_m, shape.m % map.tile_m ? 1ULL : 0ULL};
@@ -534,20 +589,21 @@ void validate(const Config& config) {
             const auto count = checked_mul(shape.groups, checked_mul(row_counts[r], col_counts[c]));
             if (!count) continue;
             std::uint64_t cycles = 0;
-            for (std::uint64_t block = 0; block < reduction_blocks(config); ++block) {
-                const auto bytes = panel_bytes(config, panel_k(config, block),
-                                                row_sizes[r], col_sizes[c], block == 0);
-                cycles = checked_add(cycles, dma_transfer_cycles(config, bytes));
-            }
+            for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
+                cycles = checked_add(cycles, read_cycles(row_sizes[r], col_sizes[c], block));
             cycles = checked_add(cycles,
                 compute_cycles(config, row_sizes[r], col_sizes[c]));
-            cycles = checked_add(cycles, dma_transfer_cycles(config,
-                checked_mul(row_sizes[r], col_sizes[c])));
+            cycles = checked_add(cycles, write_cycles(row_sizes[r], col_sizes[c]));
             serial_cycles = checked_add(serial_cycles, checked_mul(count, cycles));
         }
     }
     require(serial_cycles < exact_cycle_limit,
             "simulation cycle bound must be less than 2^53");
+    // The DRAM timeline counts bytes: cycle c starts at byte c * rate.
+    require(!axi || !arch.memory.dram_bytes_per_cycle ||
+                serial_cycles <= std::numeric_limits<std::uint64_t>::max() /
+                                     arch.memory.dram_bytes_per_cycle,
+            "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
     // Cycle mode performs one host wait per stage cycle. Bound the complete
     // serial work even when overlap would make the reported makespan shorter.
     require(config.sim.timing != TimingMode::Cycle || serial_cycles <= 10000000,

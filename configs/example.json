@@ -4,7 +4,7 @@
   "shape": {"m": 64, "n": 64, "k": 128, "seed": 7},
   "arch": {
     "compute": {"array_rows": 16, "array_cols": 16, "dataflow": "os", "pipeline_cycles": 4},
-    "memory": {"bytes_per_cycle": 32, "latency": 40, "burst_bytes": 256},
+    "memory": {"model": "serial", "bytes_per_cycle": 32, "latency": 40, "burst_bytes": 256},
     "sram_bytes": 524288,
     "weight_cache_bytes": 65536,
     "frequency_mhz": 1000

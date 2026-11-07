@@ -4,6 +4,7 @@
 #include "npu/json.hpp"
 #include "npu/options.hpp"
 
+#include <initializer_list>
 #include <iostream>
 #include <limits>
 #include <set>
@@ -11,6 +12,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -118,6 +120,16 @@ void check_option_table() {
                 npu::find_option_by_flag("--groups")->path == "shape.groups" &&
                 npu::find_option_by_flag("--timing-only")->path == "sim.timing_only",
             "numerics options");
+    for (const auto& [flag, path] : std::initializer_list<std::pair<const char*, const char*>>{
+             {"--memory-model", "arch.memory.model"},
+             {"--dram-bytes-per-cycle", "arch.memory.dram_bytes_per_cycle"},
+             {"--axi-data-bytes", "arch.memory.axi.data_bytes"},
+             {"--axi-burst-beats", "arch.memory.axi.max_burst_beats"},
+             {"--axi-read-outstanding", "arch.memory.axi.read_outstanding"},
+             {"--axi-write-outstanding", "arch.memory.axi.write_outstanding"},
+             {"--axi-read-latency", "arch.memory.axi.read_latency"},
+             {"--axi-write-latency", "arch.memory.axi.write_latency"}})
+        require(option(flag).path == path, std::string("memory option ") + flag);
     std::ostringstream help;
     npu::write_config_help(help);
     for (const auto& entry : table) {
@@ -423,6 +435,9 @@ void check_echo() {
     c.shape = {5, 6, 7, 3, 1ULL << 40};
     c.arch.compute = {3, 2, 4, npu::Dataflow::WeightStationary, 9, 11};
     c.arch.memory = {8, 30, 512};
+    c.arch.memory.model = npu::MemoryModel::Axi;
+    c.arch.memory.dram_bytes_per_cycle = 24;
+    c.arch.memory.axi = {64, 256, 1, 64, 0, 1000000000};
     c.arch.sram_bytes = 1000000;
     c.arch.weight_cache_bytes = 4096;
     c.arch.frequency_mhz = 933.3333333333334;
@@ -454,7 +469,10 @@ void check_echo() {
                 r.arch.frequency_mhz == c.arch.frequency_mhz &&
                 r.quant.multipliers == c.quant.multipliers && r.quant.shifts == c.quant.shifts &&
                 r.quant.rescale == c.quant.rescale && r.sim.timing_only && r.name == c.name &&
-                r.sim.trace_path == c.sim.trace_path,
+                r.sim.trace_path == c.sim.trace_path &&
+                r.arch.memory.model == npu::MemoryModel::Axi &&
+                r.arch.memory.dram_bytes_per_cycle == 24 && r.arch.memory.axi.data_bytes == 64 &&
+                r.arch.memory.axi.write_latency == 1000000000,
             "echoed values are exact");
 }
 

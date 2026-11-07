@@ -136,6 +136,22 @@ Arguments parse(int argc, char* argv[]) {
     if (args.builder.source("arch.compute.dataflow") == npu::OptionSource::CommandLine &&
         !compute.array_rows && !compute.array_cols)
         throw std::invalid_argument("--dataflow requires --array-rows and --array-cols");
+    // Each memory model reads its own keys; a flag for the other model would
+    // change nothing. Config files may carry both, as every echo does.
+    const bool axi = args.builder.config.arch.memory.model == npu::MemoryModel::Axi;
+    for (const auto& option : npu::config_options()) {
+        if (option.flag.empty() || option.path.substr(0, 12) != "arch.memory." ||
+            option.path == "arch.memory.model" ||
+            args.builder.source(option.path) != npu::OptionSource::CommandLine)
+            continue;
+        const bool axi_key = option.path == "arch.memory.dram_bytes_per_cycle" ||
+                             option.path.substr(0, 16) == "arch.memory.axi.";
+        if (axi_key && !axi)
+            throw std::invalid_argument(std::string(option.flag) + " requires --memory-model axi");
+        if (!axi_key && axi)
+            throw std::invalid_argument(std::string(option.flag) +
+                                        " applies to --memory-model serial only");
+    }
     if (args.slice_cycles == 0 || args.slice_cycles > 10000000)
         throw std::invalid_argument("slice cycles must be in 1..10000000");
     if (args.live_stdio && (args.dump || !args.builder.config.sim.trace_path.empty()))
@@ -298,12 +314,14 @@ double fraction(std::uint64_t value, std::uint64_t total) {
 }
 
 // Per channel: counters, request latency, burst efficiency = payload /
-// (beats * bytes_per_cycle) and payload bytes per cycle of the run; snapshots
-// add the channel state.
+// (beats * beat bytes) and payload bytes per cycle of the run; snapshots add
+// the channel state. Beat bytes are the serial bytes_per_cycle or the AXI
+// data_bytes.
 void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryView& memory,
                  std::uint64_t cycles, bool live) {
     const auto& m = c.arch.memory;
-    const auto beat_bytes = m.bytes_per_cycle;
+    const bool axi = m.model == npu::MemoryModel::Axi;
+    const auto beat_bytes = axi ? m.axi.data_bytes : m.bytes_per_cycle;
     const auto channel = [&](const char* name, const npu::ChannelView& view) {
         const auto& s = view.statistics;
         stream << '"' << name << "\":{\"requests\":" << s.requests << ",\"bursts\":" << s.bursts
@@ -325,6 +343,11 @@ void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryVi
     channel("read", memory.read);
     stream << ',';
     channel("write", memory.write);
+    if (axi)
+        stream << ",\"dram\":{\"bytes_per_cycle\":" << m.dram_bytes_per_cycle
+               << ",\"bytes\":" << memory.dram_bytes << ",\"utilization\":"
+               << fraction(memory.dram_bytes, npu::checked_mul(m.dram_bytes_per_cycle, cycles))
+               << '}';
     stream << '}';
 }
 
