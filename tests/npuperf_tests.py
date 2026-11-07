@@ -800,7 +800,8 @@ class ExperimentScriptTests(unittest.TestCase):
                 self.assertTrue((Path(folder) / "summary.json").is_file())
         # A build directory without the demos fails; it does not borrow them from another build.
         with tempfile.TemporaryDirectory() as folder:
-            lone = Path(folder) / "build"
+            # resolve() expands Windows 8.3 short names (RUNNER~1) to match the tool's message.
+            lone = Path(folder).resolve() / "build"
             lone.mkdir()
             shutil.copy2(BINARY, lone / BINARY.name)
             result = self.tool("npuperf.mobile_suite", "--binary", str(lone), "--output-dir",
