@@ -482,7 +482,7 @@ void Core::store() {
 
 Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
                          const Problem& problem)
-    : sc_module(name), config_(config),
+    : sc_module(name),
       encoded_weights_(config.sim.timing_only ? std::vector<EncodedWeightPanel>{} :
                        encode_weights(config, problem)) {
     validate(config);

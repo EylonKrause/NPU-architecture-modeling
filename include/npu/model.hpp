@@ -95,7 +95,6 @@ public:
     void trace_signals(sc_core::sc_trace_file* file) const;
 
 private:
-    const Config& config_;
     std::vector<EncodedWeightPanel> encoded_weights_;
     // Offset of each encoded panel from weight_base, in encoded_weights_ order.
     std::vector<std::uint64_t> weight_offsets_;
