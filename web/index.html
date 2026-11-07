@@ -3,38 +3,146 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>NPU architecture modeling · live SystemC</title>
+  <meta name="color-scheme" content="light dark">
+  <title>npu-sim live</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
 </head>
 <body>
+<header class="bar">
+  <div class="ident">
+    <span class="tool">npu-sim live</span>
+    <span id="machine" class="machine">—</span>
+  </div>
+  <div class="controls" aria-label="Simulation controls">
+    <span id="run-state" class="pill" data-state="idle">idle</span>
+    <select id="profile" aria-label="Profile"></select>
+    <button id="start" type="button">Run</button>
+    <button id="pause" type="button">Pause</button>
+    <span class="joined">
+      <button id="step" type="button">Step</button>
+      <select id="step-cycles" aria-label="Cycles per step">
+        <option value="1">1</option>
+        <option value="8">8</option>
+        <option value="64">64</option>
+        <option value="256" selected>256</option>
+        <option value="1024">1024</option>
+        <option value="4096">4096</option>
+        <option value="10000">10000</option>
+      </select>
+    </span>
+    <button id="stop" type="button">Stop</button>
+    <button id="reset" type="button">Reset</button>
+  </div>
+</header>
+<p id="message" class="message" role="status" hidden></p>
+
 <main>
-  <header><div><p class="eyebrow">NPU ARCHITECTURE MODELING</p><h1>A model you can watch work.</h1><p class="lede">Real integer inference. Real SystemC events. Inspect the architecture as it runs.</p></div><div class="status"><span id="status-dot"></span><span id="status">Connecting</span></div></header>
-  <section class="toolbar" aria-label="Simulation controls">
-    <label>WORKLOAD<select id="profile"><option value="balanced">Balanced INT8</option><option value="compute-bound">Compute pressure</option><option value="memory-bound">Memory pressure</option><option value="palette-weights">Palettized weights</option></select></label>
-    <div class="buttons"><button id="start" class="primary">Start continuous inference</button><button id="pause">Pause</button><button id="step">Step 256 cycles</button><button id="stop">Stop</button><button id="reset" class="quiet">Reset</button></div>
-  </section>
-  <p id="message" role="status">The simulator is idle. Start a workload to execute the C++/SystemC model.</p>
-  <section class="metrics" aria-label="Current inference counters">
-    <article><p>SIMULATED CYCLES</p><strong id="cycles">—</strong><small id="target-time">Current inference</small></article>
-    <article><p>COMPLETED MACs</p><strong id="macs">—</strong><small id="workload-shape">INT8 matrix computation</small></article>
-    <article><p>EXTERNAL MEMORY</p><strong id="traffic">—</strong><small id="traffic-detail">Read / write bytes</small></article>
-    <article><p>VALIDATED INFERENCES</p><strong id="jobs">0</strong><small>Complete output compared with scalar reference</small></article>
-  </section>
-  <section class="architecture">
-    <div class="section-title"><div><p class="eyebrow">EXECUTION PIPELINE</p><h2>Data movement meets compute.</h2></div><span id="validation" class="badge">Awaiting a result</span></div>
-    <div class="pipeline">
-      <div id="stage-load" class="stage"><span class="stage-index">01</span><h3>DMA load</h3><p>Activations + weights</p><b id="load-count">—</b></div><span class="arrow">→</span>
-      <div id="stage-compute" class="stage"><span class="stage-index">02</span><h3>MAC array</h3><p>Decode + accumulate + requantize</p><b id="compute-count">—</b></div><span class="arrow">→</span>
-      <div id="stage-store" class="stage"><span class="stage-index">03</span><h3>DMA store</h3><p>Quantized output</p><b id="store-count">—</b></div>
+  <section class="kpis" aria-label="Current job">
+    <div class="kpi">
+      <span class="label">Cycles</span>
+      <span class="value" id="kpi-cycles">—</span>
+      <span class="sub" id="kpi-latency">—</span>
     </div>
-    <div class="utilization"><label>Compute busy, last slice <span id="compute-util">—</span><progress id="compute-bar" max="100" value="0"></progress></label><label>DMA busy, last slice <span id="dma-util">—</span><progress id="dma-bar" max="100" value="0"></progress></label></div>
-    <p id="compression-detail">Dense weights · no decompression overhead</p>
-    <div class="tiles-heading"><h3>Output tiles</h3><span id="tiles-label">Waiting for the model</span></div><div id="tiles" class="tiles" aria-label="Actual output-tile completion"></div>
-    <div class="tensor-preview"><div><h3>Input activation preview</h3><code id="input-preview">Waiting for an inference</code></div><div><h3>Latest validated output preview</h3><code id="output-preview">Output is shown only after full numerical validation</code></div></div>
+    <div class="kpi">
+      <span class="label">MAC/cycle</span>
+      <span class="value" id="kpi-mac-rate">—</span>
+      <span class="sub" id="kpi-mac-peak">—</span>
+    </div>
+    <div class="kpi">
+      <span class="label">DRAM B/cycle</span>
+      <span class="value" id="kpi-dram-rate">—</span>
+      <span class="sub" id="kpi-dram-peak">—</span>
+    </div>
+    <div class="kpi">
+      <span class="label">Arithmetic intensity</span>
+      <span class="value" id="kpi-intensity">—</span>
+      <span class="sub" id="kpi-ridge">—</span>
+    </div>
+    <div class="kpi">
+      <span class="label" title="Analytic lower bound in cycles; attained is that bound over the last completed job's cycles">Bound</span>
+      <span class="value" id="kpi-bound">—</span>
+      <span class="sub" id="kpi-bound-detail">—</span>
+    </div>
+    <div class="kpi">
+      <span class="label">Jobs bit-exact</span>
+      <span class="value" id="kpi-jobs">—</span>
+      <span class="sub" id="kpi-jobs-detail">vs scalar reference</span>
+    </div>
   </section>
-  <section class="lower-grid"><article class="history"><div class="section-title"><div><p class="eyebrow">RECENT OUTPUTS</p><h2>Checked, then repeated.</h2></div></div><div id="history"><p class="empty">Completed inferences appear here with their real output signature and validation.</p></div></article><article class="notes"><p class="eyebrow">READING THIS MODEL</p><h2>Architecture, made observable.</h2><p>Start runs repeated bounded inference jobs. Pause freezes simulated time; Step advances it explicitly. Counters and tile states come from the SystemC process, not an animation.</p><p>Wall-clock pacing makes the model inspectable. It is not hardware throughput. Target latency depends on the declared clock, memory and compute assumptions.</p><p>This is a local architectural simulator, not a physical NPU device or a calibrated commercial NPU emulator. The dashboard uses no external assets or network services.</p><a href="https://github.com/EylonKrause/NPU-architecture-modeling" rel="noreferrer">Source and modelling contracts ↗</a></article></section>
-  <footer><span>SystemC · discrete-event simulation · signed integer inference</span><span id="connection">Local controller</span></footer>
+
+  <section class="row row-a">
+    <figure class="panel">
+      <figcaption><h2>Roofline</h2><span class="meta" id="roofline-meta"></span></figcaption>
+      <svg id="roofline" class="chart" role="img" aria-label="Roofline"></svg>
+      <ul class="legend" id="roofline-legend">
+        <li><i class="key line-roof"></i>roofs</li>
+        <li id="legend-effective"><i class="key line-effective"></i>latency-inclusive DRAM roof</li>
+        <li><i class="key dot-current"></i>current job</li>
+        <li><i class="key dot-done"></i>completed jobs</li>
+        <li id="legend-bound"><i class="key dot-bound"></i>analytic lower bound</li>
+      </ul>
+    </figure>
+    <figure class="panel">
+      <figcaption><h2>Utilisation</h2><span class="meta" id="strip-meta"></span></figcaption>
+      <svg id="strip" class="chart" role="img" tabindex="0" aria-label="Utilisation per slice"></svg>
+      <ul class="legend">
+        <li><i class="key series-mac"></i>MAC array busy <b id="strip-mac">—</b></li>
+        <li><i class="key series-dma"></i>DMA busy, loads and stores <b id="strip-dma">—</b></li>
+      </ul>
+    </figure>
+  </section>
+
+  <section class="row row-b">
+    <figure class="panel">
+      <figcaption><h2>Pipeline</h2><span class="meta" id="gantt-meta"></span></figcaption>
+      <svg id="gantt" class="chart" role="img" aria-label="Pipeline timeline"></svg>
+      <ul class="legend" id="gantt-legend" hidden>
+        <li><i class="key cell unsampled"></i>not sampled: cycles a long step ran in one advance</li>
+      </ul>
+    </figure>
+    <figure class="panel">
+      <figcaption><h2>Output tiles</h2><span class="meta" id="tiles-meta"></span></figcaption>
+      <div class="tiles-body">
+        <svg id="tiles" role="img" aria-label="Output tile states"></svg>
+        <ul class="legend" id="tiles-legend"></ul>
+      </div>
+    </figure>
+  </section>
+
+  <section class="row row-c">
+    <div class="panel">
+      <div class="caption"><h2>Jobs</h2><span class="meta" id="jobs-meta"></span></div>
+      <div class="scroll">
+        <table class="data" id="jobs">
+          <thead><tr>
+            <th>Job</th><th>Cycles</th><th>µs</th><th>MAC/cycle</th><th>% peak</th>
+            <th>% bound</th><th>DRAM bytes</th><th>B/cycle</th><th>Output</th>
+          </tr></thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+    </div>
+    <div class="panel">
+      <div class="caption"><h2>Counters</h2><span class="meta">current job</span></div>
+      <dl class="counters" id="counters"></dl>
+      <div id="extra"></div>
+    </div>
+  </section>
+
+  <details class="panel previews">
+    <summary>Tensor previews</summary>
+    <div class="preview-grid">
+      <div><h3>Input activations, first 16</h3><code id="input-preview">—</code></div>
+      <div><h3>Last output, first 16</h3><code id="output-preview">—</code></div>
+    </div>
+  </details>
 </main>
+
+<footer class="status">
+  <span>SystemC · <span id="connection">—</span></span>
+  <span id="refreshed"></span>
+</footer>
 </body>
 </html>
