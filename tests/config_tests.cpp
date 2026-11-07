@@ -186,8 +186,10 @@ void check_json_reader() {
         {"// note\n{}", "unexpected character '/'"},
         {std::string(65, '[') + std::string(65, ']'), "nesting exceeds 64 levels"},
     };
-    for (const auto& [text, expected] : malformed)
-        rejects([&] { npu::parse_json(text, "test"); }, expected);
+    for (const auto& item : malformed) {
+        const auto& text = item.first;
+        rejects([&] { npu::parse_json(text, "test"); }, item.second);
+    }
 
     const auto nested = npu::parse_json(std::string(64, '[') + std::string(64, ']'), "test");
     require(nested.type == npu::JsonValue::Type::Array, "64 nesting levels are accepted");
@@ -308,9 +310,10 @@ void check_loader(const std::string& example_path) {
         {"{\"shape.m\":4}", "test:1:12: config key \"shape.m\" contains '.'"},
         {"{\".\":1}", "config key \".\" contains '.'"},
     };
-    for (const auto& [text, expected] : invalid) {
+    for (const auto& item : invalid) {
+        const auto& text = item.first;
         npu::ConfigBuilder fresh;
-        rejects([&] { load_text(fresh, text); }, expected);
+        rejects([&] { load_text(fresh, text); }, item.second);
     }
     npu::ConfigBuilder missing;
     rejects([&] { missing.load_file(example_path + ".missing"); }, "cannot open config file");
@@ -382,8 +385,10 @@ void check_command_line_values() {
         {{"--timing", "rtl"}, "--timing: expected event|cycle, got 'rtl'"},
         {{"--trace", ""}, "--trace: expected a nonempty path"},
     };
-    for (const auto& [arguments, expected] : invalid)
-        rejects([&] { builder.set(option(arguments.first), arguments.second); }, expected);
+    for (const auto& item : invalid) {
+        const auto& arguments = item.first;
+        rejects([&] { builder.set(option(arguments.first), arguments.second); }, item.second);
+    }
     rejects<std::logic_error>([&] { builder.set(option("--relu"), "1"); }, "no command-line value");
     rejects<std::logic_error>([&] { builder.set_switch(option("--m")); }, "not a switch");
     const auto detached = option("--m");
