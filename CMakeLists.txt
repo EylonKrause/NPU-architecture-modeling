@@ -109,6 +109,8 @@ if(BUILD_TESTING)
     SCRIPT tests/cluster_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(sim.design-points
     SCRIPT tests/design_point_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(sim.conv-traffic
+    SCRIPT tests/conv_traffic_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(graph.runtime
     SCRIPT tests/graph_runtime_tests.py BINARY npu-sim)
   npu_add_python_test(graph.fusion
