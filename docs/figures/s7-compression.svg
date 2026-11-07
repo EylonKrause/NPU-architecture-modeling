@@ -1,0 +1,108 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="500" viewBox="0 0 820 500" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Llama-3.2-1B decode: 4-bit palette weights</title>
+<rect width="820" height="500" fill="#ffffff"/>
+<defs><clipPath id="s7-plot"><rect x="62.04" y="58" width="543.28" height="388"/></clipPath></defs>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Llama-3.2-1B decode: 4-bit palette weights</text>
+<text x="14" y="52" font-size="12" fill="#52514e">tokens/s relative to dense INT8 weights; dashed: dense INT4; KV-cache matmuls stay INT8</text>
+<g stroke="#e6e5df" stroke-width="1" fill="none">
+<line x1="62.04" y1="446" x2="603.32" y2="446"/>
+<line x1="62.04" y1="358.27" x2="603.32" y2="358.27"/>
+<line x1="62.04" y1="270.55" x2="603.32" y2="270.55"/>
+<line x1="62.04" y1="182.82" x2="603.32" y2="182.82"/>
+<line x1="62.04" y1="95.09" x2="603.32" y2="95.09"/>
+<line x1="62.04" y1="60" x2="62.04" y2="446"/>
+<line x1="152.25" y1="60" x2="152.25" y2="446"/>
+<line x1="242.47" y1="60" x2="242.47" y2="446"/>
+<line x1="332.68" y1="60" x2="332.68" y2="446"/>
+<line x1="422.89" y1="60" x2="422.89" y2="446"/>
+<line x1="513.11" y1="60" x2="513.11" y2="446"/>
+<line x1="603.32" y1="60" x2="603.32" y2="446"/>
+</g>
+<g stroke="#9c9a93" stroke-width="1" fill="none">
+<line x1="62.04" y1="446" x2="603.32" y2="446"/>
+<line x1="62.04" y1="60" x2="62.04" y2="446"/>
+<line x1="62.04" y1="446" x2="62.04" y2="451"/>
+<line x1="152.25" y1="446" x2="152.25" y2="451"/>
+<line x1="242.47" y1="446" x2="242.47" y2="451"/>
+<line x1="332.68" y1="446" x2="332.68" y2="451"/>
+<line x1="422.89" y1="446" x2="422.89" y2="451"/>
+<line x1="513.11" y1="446" x2="513.11" y2="451"/>
+<line x1="603.32" y1="446" x2="603.32" y2="451"/>
+<line x1="57.04" y1="446" x2="62.04" y2="446"/>
+<line x1="57.04" y1="358.27" x2="62.04" y2="358.27"/>
+<line x1="57.04" y1="270.55" x2="62.04" y2="270.55"/>
+<line x1="57.04" y1="182.82" x2="62.04" y2="182.82"/>
+<line x1="57.04" y1="95.09" x2="62.04" y2="95.09"/>
+</g>
+<g style="font-variant-numeric: tabular-nums">
+<text x="62.04" y="465" font-size="12" fill="#52514e" text-anchor="middle">4</text>
+<text x="152.25" y="465" font-size="12" fill="#52514e" text-anchor="middle">8</text>
+<text x="242.47" y="465" font-size="12" fill="#52514e" text-anchor="middle">16</text>
+<text x="332.68" y="465" font-size="12" fill="#52514e" text-anchor="middle">32</text>
+<text x="422.89" y="465" font-size="12" fill="#52514e" text-anchor="middle">64</text>
+<text x="513.11" y="465" font-size="12" fill="#52514e" text-anchor="middle">128</text>
+<text x="603.32" y="465" font-size="12" fill="#52514e" text-anchor="middle">256</text>
+<text x="53.04" y="450.2" font-size="12" fill="#52514e" text-anchor="end">0.0</text>
+<text x="53.04" y="362.47" font-size="12" fill="#52514e" text-anchor="end">0.5</text>
+<text x="53.04" y="274.75" font-size="12" fill="#52514e" text-anchor="end">1.0</text>
+<text x="53.04" y="187.02" font-size="12" fill="#52514e" text-anchor="end">1.5</text>
+<text x="53.04" y="99.29" font-size="12" fill="#52514e" text-anchor="end">2.0</text>
+</g>
+<text x="332.68" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">weight decoder throughput (values per cycle per core)</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">decode tokens/s / dense INT8 tokens/s</text>
+<g clip-path="url(#s7-plot)">
+<path d="M62.04,355.94 L152.25,266.36 L242.47,99.69 L332.68,99.69 L422.89,99.69 L513.11,99.69 L603.32,99.69" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="62.04" cy="355.94" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="152.25" cy="266.36" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="242.47" cy="99.69" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="332.68" cy="99.69" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="422.89" cy="99.69" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="513.11" cy="99.69" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="603.32" cy="99.69" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M62.04,99.04 L603.32,99.04" fill="none" stroke="#2a78d6" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<path d="M62.04,412.49 L152.25,379.11 L242.47,312.69 L332.68,181.58 L422.89,102.99 L513.11,102.99 L603.32,102.99" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="58.44" y="408.89" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="148.65" y="375.51" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="238.87" y="309.09" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="329.08" y="177.98" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="419.29" y="99.39" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="509.51" y="99.39" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="599.72" y="99.39" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M62.04,102.13 L603.32,102.13" fill="none" stroke="#eb6834" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<path d="M62.04,308.58 L152.25,176.14 L242.47,113.99 L332.68,103.42 L422.89,103.42 L513.11,103.42 L603.32,103.42" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="62.04,303.98 66.64,312.03 57.44,312.03" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="152.25,171.54 156.85,179.59 147.65,179.59" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="242.47,109.39 247.07,117.44 237.87,117.44" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="332.68,98.82 337.28,106.87 328.08,106.87" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="422.89,98.82 427.49,106.87 418.29,106.87" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="513.11,98.82 517.71,106.87 508.51,106.87" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="603.32,98.82 607.92,106.87 598.72,106.87" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M62.04,102.03 L603.32,102.03" fill="none" stroke="#1baf7a" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<path d="M62.04,399.49 L152.25,354.58 L242.47,270.08 L332.68,169.01 L422.89,169.01 L513.11,169.01 L603.32,169.01" fill="none" stroke="#eda100" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<polygon points="62.04,394.49 67.04,399.49 62.04,404.49 57.04,399.49" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="152.25,349.58 157.25,354.58 152.25,359.58 147.25,354.58" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="242.47,265.08 247.47,270.08 242.47,275.08 237.47,270.08" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="332.68,164.01 337.68,169.01 332.68,174.01 327.68,169.01" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="422.89,164.01 427.89,169.01 422.89,174.01 417.89,169.01" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="513.11,164.01 518.11,169.01 513.11,174.01 508.11,169.01" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="603.32,164.01 608.32,169.01 603.32,174.01 598.32,169.01" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M62.04,152.79 L603.32,152.79" fill="none" stroke="#eda100" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<line x1="62.04" y1="270.55" x2="603.32" y2="270.55" stroke="#6f6e69" stroke-width="1.25" stroke-dasharray="5 4"/>
+</g>
+<text x="597.32" y="264.55" font-size="11" fill="#6f6e69" text-anchor="end">dense INT8</text>
+<g transform="translate(621.32,68)">
+<rect width="186.68" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<line x1="8" y1="14.5" x2="28" y2="14.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<circle cx="18" cy="14.5" r="3.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="18.7" font-size="12" fill="#0b0b0b">edge-256 palette</text>
+<line x1="8" y1="33.5" x2="28" y2="33.5" stroke="#eb6834" stroke-width="2" stroke-linecap="round"/>
+<rect x="14.85" y="30.35" width="6.3" height="6.3" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="37.7" font-size="12" fill="#0b0b0b">mobile-2k palette</text>
+<line x1="8" y1="52.5" x2="28" y2="52.5" stroke="#1baf7a" stroke-width="2" stroke-linecap="round"/>
+<polygon points="18,48.48 22.02,55.52 13.98,55.52" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="56.7" font-size="12" fill="#0b0b0b">client-16c palette</text>
+<line x1="8" y1="71.5" x2="28" y2="71.5" stroke="#eda100" stroke-width="2" stroke-linecap="round"/>
+<polygon points="18,67.12 22.38,71.5 18,75.88 13.62,71.5" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="75.7" font-size="12" fill="#0b0b0b">workstation-32c palette</text>
+</g>
+</svg>

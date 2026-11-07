@@ -55,7 +55,11 @@ def _decade_ceil(value: float) -> float:
 def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofline",
            subtitle: str | None = None, effective_bw: float | None = None,
            label_points: Sequence[str] | bool = True, width: int = 760,
-           height: int = 480) -> svg.Figure:
+           height: int = 480, group_order: Sequence[str] = GROUP_ORDER,
+           hollow: bool = False) -> svg.Figure:
+    """``group_order`` fixes the colour of each group (others follow, sorted); ``hollow``
+    draws every group's markers as outlines, so coinciding points of different groups
+    stay visible."""
     peak, bw = float(design.peak_macs_per_cycle), design.bandwidth
     ridge = peak / bw
     xs = [p.intensity for p in points] + [ridge]
@@ -84,7 +88,7 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
                            offset=15, color=svg.INK_MUTED)
     # Model points take categorical colours by op class; simulated points are hollow ink
     # rings drawn last, so a simulated point on top of its model point leaves both visible.
-    groups = [g for g in GROUP_ORDER if any(p.group == g for p in points) and g != "simulated"]
+    groups = [g for g in group_order if any(p.group == g for p in points) and g != "simulated"]
     groups += sorted({p.group for p in points} - set(groups) - {"simulated"})
     if any(p.group == "simulated" for p in points):
         groups.append("simulated")
@@ -99,7 +103,8 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
                     label=(group + " (npu-sim)" if simulated else group) or None,
                     color=svg.INK if simulated else svg.PALETTE[index % len(svg.PALETTE)],
                     marker="circle" if simulated else svg.MARKERS[index % len(svg.MARKERS)],
-                    point_labels=labels, hollow=simulated, size=5 if simulated else 4.5)
+                    point_labels=labels, hollow=simulated or hollow,
+                    size=5 if simulated else 4.5)
         index += 0 if simulated else 1
     return fig
 

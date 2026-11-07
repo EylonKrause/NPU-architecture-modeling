@@ -163,6 +163,31 @@ jobs:
           name: coverage
           path: coverage/
 
+  # The quick studies of docs/results.md, regenerated and compared with the committed tables.
+  results-drift:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    env:
+      CC: gcc
+      CXX: g++
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install $BUILD_TOOLS
+      - id: systemc
+        uses: ./.github/actions/systemc
+        with:
+          toolchain: linux-x64-gcc
+      - name: Configure
+        run: >-
+          cmake --preset release -DNPU_FETCH_SYSTEMC=OFF
+          -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
+      - run: cmake --build --preset release --target npu-sim
+      - name: Committed generated tables match a fresh run
+        run: python -m npuperf.reproduce --quick --check --build-dir build/release
+
   onnx:
     name: onnx-runtime-differential
     runs-on: ubuntu-24.04

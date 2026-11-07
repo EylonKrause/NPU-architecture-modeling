@@ -1,0 +1,146 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="500" viewBox="0 0 820 500" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Mapping search: ResNet-50 res3 3x3 conv on mobile-2k</title>
+<rect width="820" height="500" fill="#ffffff"/>
+<defs><clipPath id="s8-plot"><rect x="71.52" y="58" width="726.48" height="388"/></clipPath></defs>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Mapping search: ResNet-50 res3 3x3 conv on mobile-2k</text>
+<text x="14" y="52" font-size="12" fill="#52514e">784x128x1152; 62 feasible tile and slot choices of 64, all bit-exact; weight cache off unless noted</text>
+<g stroke="#e6e5df" stroke-width="1" fill="none">
+<line x1="71.52" y1="446" x2="796" y2="446"/>
+<line x1="71.52" y1="368.8" x2="796" y2="368.8"/>
+<line x1="71.52" y1="291.6" x2="796" y2="291.6"/>
+<line x1="71.52" y1="214.4" x2="796" y2="214.4"/>
+<line x1="71.52" y1="137.2" x2="796" y2="137.2"/>
+<line x1="71.52" y1="60" x2="796" y2="60"/>
+<line x1="71.52" y1="60" x2="71.52" y2="446"/>
+<line x1="216.42" y1="60" x2="216.42" y2="446"/>
+<line x1="361.31" y1="60" x2="361.31" y2="446"/>
+<line x1="506.21" y1="60" x2="506.21" y2="446"/>
+<line x1="651.1" y1="60" x2="651.1" y2="446"/>
+<line x1="796" y1="60" x2="796" y2="446"/>
+</g>
+<g stroke="#9c9a93" stroke-width="1" fill="none">
+<line x1="71.52" y1="446" x2="796" y2="446"/>
+<line x1="71.52" y1="60" x2="71.52" y2="446"/>
+<line x1="71.52" y1="446" x2="71.52" y2="451"/>
+<line x1="216.42" y1="446" x2="216.42" y2="451"/>
+<line x1="361.31" y1="446" x2="361.31" y2="451"/>
+<line x1="506.21" y1="446" x2="506.21" y2="451"/>
+<line x1="651.1" y1="446" x2="651.1" y2="451"/>
+<line x1="796" y1="446" x2="796" y2="451"/>
+<line x1="66.52" y1="446" x2="71.52" y2="446"/>
+<line x1="66.52" y1="368.8" x2="71.52" y2="368.8"/>
+<line x1="66.52" y1="291.6" x2="71.52" y2="291.6"/>
+<line x1="66.52" y1="214.4" x2="71.52" y2="214.4"/>
+<line x1="66.52" y1="137.2" x2="71.52" y2="137.2"/>
+<line x1="66.52" y1="60" x2="71.52" y2="60"/>
+</g>
+<g style="font-variant-numeric: tabular-nums">
+<text x="71.52" y="465" font-size="12" fill="#52514e" text-anchor="middle">0</text>
+<text x="216.42" y="465" font-size="12" fill="#52514e" text-anchor="middle">200</text>
+<text x="361.31" y="465" font-size="12" fill="#52514e" text-anchor="middle">400</text>
+<text x="506.21" y="465" font-size="12" fill="#52514e" text-anchor="middle">600</text>
+<text x="651.1" y="465" font-size="12" fill="#52514e" text-anchor="middle">800</text>
+<text x="796" y="465" font-size="12" fill="#52514e" text-anchor="middle">1,000</text>
+<text x="62.52" y="450.2" font-size="12" fill="#52514e" text-anchor="end">0</text>
+<text x="62.52" y="373" font-size="12" fill="#52514e" text-anchor="end">100k</text>
+<text x="62.52" y="295.8" font-size="12" fill="#52514e" text-anchor="end">200k</text>
+<text x="62.52" y="218.6" font-size="12" fill="#52514e" text-anchor="end">300k</text>
+<text x="62.52" y="141.4" font-size="12" fill="#52514e" text-anchor="end">400k</text>
+<text x="62.52" y="64.2" font-size="12" fill="#52514e" text-anchor="end">500k</text>
+</g>
+<text x="433.76" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">SRAM reserved (KiB)</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">cycles</text>
+<g clip-path="url(#s8-plot)">
+<circle cx="157.19" cy="181.93" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="242.86" cy="238.75" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="96.33" cy="62.22" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="121.15" cy="83.82" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="113.72" cy="144.11" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="155.92" cy="165.71" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="148.5" cy="182.71" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="225.47" cy="204.31" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="216.78" cy="228.56" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="362.04" cy="277.79" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="115.35" cy="188.47" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="159.18" cy="202.36" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="144.33" cy="229.41" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="217.14" cy="243.31" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="202.29" cy="248.71" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="333.06" cy="262.61" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="190.52" cy="253.64" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="309.51" cy="307.1" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="109.37" cy="187.69" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="147.23" cy="205.75" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="132.56" cy="250.61" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="193.59" cy="267.07" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="178.92" cy="270.68" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="286.33" cy="287.15" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="257.35" cy="294.73" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="443.18" cy="341.47" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="135.64" cy="281.52" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="199.75" cy="293.02" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="170.41" cy="312.98" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="269.3" cy="321.89" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="239.96" cy="318.97" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="408.4" cy="331.81" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="257.17" cy="289.49" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="442.82" cy="340.56" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="135.46" cy="260.6" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="199.39" cy="276.89" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="170.23" cy="304.99" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="268.94" cy="319.65" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="239.78" cy="313.18" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="408.04" cy="329.02" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="338.49" cy="327.81" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="605.46" cy="372.64" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="176.21" cy="333.13" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="280.89" cy="343.61" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="222.57" cy="355.32" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="373.63" cy="364.46" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="315.31" cy="351.56" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="559.1" cy="369.25" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="390.47" cy="307.42" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="709.42" cy="353.35" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="187.62" cy="297.05" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="303.72" cy="312.46" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="245.58" cy="332.18" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="419.63" cy="345.42" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="361.49" cy="332.25" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="651.47" cy="350.96" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="500.77" cy="344.35" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="257.35" cy="358.93" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="443.18" cy="368.66" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="326.9" cy="374.26" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="582.28" cy="384.61" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<circle cx="466" cy="367.86" r="3.5" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<path d="M96.33,62.22 L109.37,62.22 L109.37,187.69 L115.35,187.69 L115.35,188.47 L132.56,188.47 L132.56,250.61 L135.46,250.61 L135.46,260.6 L135.64,260.6 L135.64,281.52 L170.23,281.52 L170.23,304.99 L170.41,304.99 L170.41,312.98 L176.21,312.98 L176.21,333.13 L222.57,333.13 L222.57,355.32 L257.35,355.32 L257.35,358.93 L326.9,358.93 L326.9,374.26 L582.28,374.26 L582.28,384.61" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="96.33" cy="62.22" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="109.37" cy="187.69" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="115.35" cy="188.47" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="132.56" cy="250.61" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="135.46" cy="260.6" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="135.64" cy="281.52" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="170.23" cy="304.99" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="170.41" cy="312.98" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="176.21" cy="333.13" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="222.57" cy="355.32" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="257.35" cy="358.93" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="326.9" cy="374.26" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="582.28" cy="384.61" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="257.35,350.18 266.1,358.93 257.35,367.68 248.6,358.93" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="264.96,350.88 273.01,364.97 256.91,364.97" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<line x1="264.96" y1="60" x2="264.96" y2="446" stroke="#52514e" stroke-width="1.25" stroke-dasharray="5 4"/>
+</g>
+<text x="269.96" y="73" font-size="11" fill="#52514e">mobile-2k SRAM 267 KiB</text>
+<g transform="translate(486.76,68)">
+<rect width="299.24" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<circle cx="18" cy="14.5" r="4" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<text x="34" y="18.7" font-size="12" fill="#0b0b0b">feasible mapping</text>
+<line x1="8" y1="33.5" x2="28" y2="33.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<text x="34" y="37.7" font-size="12" fill="#0b0b0b">Pareto front</text>
+<polygon points="18,47.5 23,52.5 18,57.5 13,52.5" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="56.7" font-size="12" fill="#0b0b0b">npuperf.mapper, cache off</text>
+<polygon points="18,66.9 22.6,74.95 13.4,74.95" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="75.7" font-size="12" fill="#0b0b0b">npuperf.mapper, free SRAM as weight cache</text>
+</g>
+</svg>
