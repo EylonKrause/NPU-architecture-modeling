@@ -83,7 +83,8 @@ struct Options {
     std::vector<U64> priorities{0, 2, 1};
     std::string governor_name = "fixed", vcd;
     Governor governor = Governor::fixed;
-    bool dump = false, energy_provided = false;
+    bool dump = false, energy_provided = false, inject_fault = false;
+    U64 fault_job = 0;
     double mac_pj = 0, dram_byte_pj = 0, leakage_mw = 0, retention_mw = 0;
     double gated_mw = 0, wakeup_pj = 0, switch_pj = 0;
 };
@@ -135,6 +136,9 @@ void parse_value(Options& options, const std::string& flag, const std::string& v
     } else if (flag == "--priorities") {
         options.priorities.clear();
         for (const auto& item : split(value, ',')) options.priorities.push_back(integer(item));
+    } else if (flag == "--inject-output-fault") {
+        options.fault_job = integer(value);
+        options.inject_fault = true;
     } else {
         options.opps.clear();
         for (const auto& item : split(value, ',')) {
@@ -148,7 +152,8 @@ void parse_value(Options& options, const std::string& flag, const std::string& v
 bool known_flag(const std::string& flag) {
     for (const auto& entry : unsigned_flags) if (flag == entry.name) return true;
     for (const auto& entry : energy_flags) if (flag == entry.name) return true;
-    return flag == "--governor" || flag == "--vcd" || flag == "--priorities" || flag == "--opps";
+    return flag == "--governor" || flag == "--vcd" || flag == "--priorities" || flag == "--opps" ||
+           flag == "--inject-output-fault";
 }
 
 Options parse_options(int argc, char* argv[]) {
@@ -167,6 +172,8 @@ Options parse_options(int argc, char* argv[]) {
     require(options.cores >= 1 && options.cores <= 8, "--cores: must be 1..8");
     require(options.jobs >= 1 && options.jobs <= 128, "--jobs: must be 1..128");
     require(options.models >= 1 && options.models <= options.jobs, "--models: must be 1..--jobs");
+    require(!options.inject_fault || options.fault_job < options.jobs,
+            "--inject-output-fault: must name a job id below --jobs");
     require(options.m >= 1 && options.m <= 64, "--m: must be 1..64");
     require(options.n >= 1 && options.n <= 64, "--n: must be 1..64");
     require(options.k >= 1 && options.k <= 256, "--k: must be 1..256");
@@ -543,13 +550,15 @@ void Core::run() {
         next.compute_begin_ns = nanoseconds(sc_time_stamp());
         set_state(CoreState::compute);
         npu::compute_tile(local, Platform::quant(), tile, next.output);
+        if (options_.inject_fault && options_.fault_job == next.id)
+            next.output.quantized[0] = static_cast<std::int8_t>(next.output.quantized[0] ^ 1);
         wait(ns(static_cast<double>(next.compute_cycles) * 1000.0 / static_cast<double>(opp.mhz)));
         next.compute_end_ns = nanoseconds(sc_time_stamp());
         set_state(CoreState::write);
         bus_.transfer(id_, next.id, true, 5 * options_.m * options_.n);
         next.finish_ns = nanoseconds(sc_time_stamp());
+        // Reported per job; sc_main exits 2 after the report if any job differs.
         next.numerical_match = next.output.accumulators == next.expected.accumulators && next.output.quantized == next.expected.quantized;
-        require(next.numerical_match, "core output differs from independent scalar reference");
         stats.active_ns += next.finish_ns - next.dispatch_ns;
         const auto voltage_ratio = static_cast<double>(opp.mv) / static_cast<double>(options_.reference_mv);
         stats.dynamic_pj += static_cast<double>(options_.m * options_.n * options_.k) * options_.mac_pj * voltage_ratio * voltage_ratio;
@@ -696,6 +705,8 @@ int sc_main(int argc, char* argv[]) {
                       << "  --sram-bytes N --cache-bytes N --gate-after-ns N --wakeup-ns N --switch-ns N\n"
                       << "  --mac-pj N --dram-byte-pj N --leakage-mw N --retention-mw N --gated-mw N\n"
                       << "  --wakeup-pj N --switch-pj N --reference-mv N --dump-output --vcd BASENAME\n"
+                      << "  --inject-output-fault JOB  flip one output bit of job JOB to exercise the\n"
+                      << "                             reference check (the run then exits 2)\n"
                       << "Energy is reported only when a coefficient flag is given.\n";
             return 0;
         }
@@ -732,6 +743,9 @@ int sc_main(int argc, char* argv[]) {
         trace.reset();
         require(platform.finished && platform.completed == options.jobs, "mobile platform timed out");
         report(platform);
+        for (const auto& job : platform.jobs)
+            require(job.numerical_match, "job " + std::to_string(job.id) +
+                    " output differs from the independent scalar reference");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "npu-mobile-demo: " << error.what() << '\n';

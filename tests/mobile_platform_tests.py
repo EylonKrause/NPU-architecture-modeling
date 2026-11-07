@@ -168,6 +168,22 @@ class MobilePlatformTests(unittest.TestCase):
                     same_instant += self.check_round_robin(report, cores)[1]
         self.assertGreater(same_instant, 0)
 
+    def test_injected_output_fault_is_reported_and_exits_2(self):
+        completed = invoke('--cores', '2', '--jobs', '4', '--inject-output-fault', '2', '--dump-output')
+        self.assertEqual(completed.returncode, 2)
+        self.assertTrue(completed.stderr.startswith(
+            'npu-mobile-demo: job 2 output differs from the independent scalar reference'),
+            completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report['numerical_match'])
+        self.assertEqual([job['numerical_match'] for job in report['jobs']], [True, True, False, True])
+        for job in report['jobs']:
+            accumulators, outputs = oracle(1, job['id'], job['model'], 4, 8, 16)
+            if job['id'] == 2:
+                outputs[0] ^= 1
+            self.assertEqual(job['accumulators'], accumulators)
+            self.assertEqual(job['outputs'], outputs)
+
     def test_concurrent_systemc_workers_reduce_compute_bound_makespan(self):
         flags = ('--jobs', '8', '--m', '8', '--n', '8', '--k', '64',
                  '--macs-per-cycle', '1', '--priorities', '0', '--cache-bytes', '0',
@@ -300,6 +316,7 @@ class MobilePlatformTests(unittest.TestCase):
             ('--governor', 'magic'), ('--mac-pj', 'nan'), ('--dram-byte-pj', '-1'),
             ('--leakage-mw', 'inf'), ('--mac-pj', 'abc'), ('--mac-pj', '1e999'),
             ('--wakeup-ns', '1000001'), ('--jobs',), ('--cores', 'two'), ('--unknown', '3'),
+            ('--inject-output-fault', '6'), ('--inject-output-fault', 'x'),
         ):
             with self.subTest(arguments=arguments):
                 completed = invoke(*arguments)
