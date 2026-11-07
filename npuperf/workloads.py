@@ -5,7 +5,9 @@ run ``calls`` times. Convolutions lower by im2col (M = out_h*out_w, N = out_c/G,
 K = kh*kw*in_c/G); depthwise is G = channels; attention matmuls run per KV head.
 ``split`` cuts a call only when it exceeds a per-call simulator limit, along groups first,
 then N, then M; a reduction too deep for one call cannot be split (the simulator does not
-accumulate partial sums across calls).
+accumulate partial sums across calls). ``call_options(binary)`` gives the limits of one
+npu-sim build: builds without --timing-only have the smaller legacy limits, and builds
+without --groups run a grouped layer as one call per group.
 """
 from __future__ import annotations
 
@@ -15,7 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import jsonio
+from . import jsonio, sim
 from .binary import ROOT
 
 WORKLOAD_DIR = ROOT / "workloads"
@@ -26,6 +28,8 @@ MAX_DIMENSION = 1 << 20
 MAX_FUNCTIONAL_MACS = 4_000_000_000
 MAX_TIMING_MACS = 10_000_000_000_000
 MAX_HOST_BYTES = 256 * 1024 * 1024
+# Builds without --timing-only accept dimensions up to 4096 and 1e8 MACs per call.
+LEGACY_LIMITS = {"max_dimension": 4096, "max_macs": 100_000_000}
 
 
 @dataclass(frozen=True)
@@ -102,22 +106,28 @@ def gemms(workload: dict[str, Any]) -> list[Gemm]:
     return [lower(layer) for layer in workload["layers"]]
 
 
-def host_bytes(gemm: Gemm, tile_m: int = 8, tile_n: int = 8) -> int:
+def host_bytes(gemm: Gemm, tile_m: int = 8, tile_n: int = 8, tile_k: int = 0) -> int:
     """Simulator working storage for a functional run: tensors, reference and simulated
-    outputs (10 B per output), and the per-panel trace budget (512 B)."""
+    outputs (10 B per output), INT64 tile scratch, and the per-panel trace budget (512 B)."""
     g = gemm.groups
     tiles = math.ceil(gemm.m / tile_m) * math.ceil(gemm.n / tile_n) * g
+    panels = math.ceil(gemm.k / tile_k) if tile_k else 1
     return (gemm.m * g * gemm.k + g * gemm.k * gemm.n + 4 * g * gemm.n
-            + 10 * gemm.m * g * gemm.n + 512 * tiles)
+            + 10 * gemm.m * g * gemm.n + 8 * min(gemm.m, tile_m) * min(gemm.n, tile_n)
+            + 512 * tiles * panels)
 
 
 def fits(gemm: Gemm, timing_only: bool = True, max_dimension: int = MAX_DIMENSION,
-         max_macs: int | None = None, max_host: int = MAX_HOST_BYTES) -> bool:
+         max_macs: int | None = None, max_host: int = MAX_HOST_BYTES, tile_m: int = 8,
+         tile_n: int = 8, tile_k: int = 0) -> bool:
+    """True when one npu-sim call runs ``gemm``. The activation row (G*K) and output row
+    (G*N) obey the dimension limit as well as M, N and K."""
     limit = max_macs if max_macs is not None else (MAX_TIMING_MACS if timing_only
                                                      else MAX_FUNCTIONAL_MACS)
-    if max(gemm.m, gemm.n, gemm.k) > max_dimension or gemm.macs > limit:
+    widest = max(gemm.m, gemm.groups * gemm.n, gemm.groups * gemm.k)
+    if widest > max_dimension or gemm.macs > limit:
         return False
-    return timing_only or host_bytes(gemm) <= max_host
+    return timing_only or host_bytes(gemm, tile_m, tile_n, tile_k) <= max_host
 
 
 def _halves(total: int, parts: int) -> list[tuple[int, int]]:
@@ -132,8 +142,9 @@ def split(gemm: Gemm, timing_only: bool = True, **limits: Any) -> list[Gemm]:
         return [gemm]
     max_dimension = limits.get("max_dimension", MAX_DIMENSION)
     if gemm.k > max_dimension:
-        raise ValueError(f"{gemm.name}: K={gemm.k} exceeds the per-call limit; a split K "
-                         "needs partial-sum accumulation across calls")
+        raise ValueError(f"{gemm.name}: K={gemm.k} exceeds the per-call limit of "
+                         f"{max_dimension}; a split K needs partial-sum accumulation across "
+                         "calls")
     for axis in ("n", "m"):
         extent = getattr(gemm, axis)
         if extent > max_dimension:
@@ -154,8 +165,26 @@ def split(gemm: Gemm, timing_only: bool = True, **limits: Any) -> list[Gemm]:
     raise ValueError(f"{gemm.name}: a single output element exceeds the per-call limits")
 
 
-def iter_calls(workload: dict[str, Any], timing_only: bool = True,
+def ungroup(gemm: Gemm) -> Gemm:
+    """The same work as one call per group, for builds without --groups."""
+    return replace(gemm, groups=1, calls=gemm.calls * gemm.groups)
+
+
+def call_options(binary: Path | str) -> dict[str, Any]:
+    """``iter_calls`` options for one npu-sim build, probed from its --help."""
+    timing_only = sim.supports(binary, "--timing-only")
+    options: dict[str, Any] = {"timing_only": timing_only,
+                               "grouped": sim.supports(binary, "--groups")}
+    if not timing_only:
+        options.update(LEGACY_LIMITS)
+    return options
+
+
+def iter_calls(workload: dict[str, Any], timing_only: bool = True, grouped: bool = True,
                **limits: Any) -> Iterator[tuple[dict[str, Any], Gemm]]:
     for layer in workload["layers"]:
-        for gemm in split(lower(layer), timing_only, **limits):
-            yield layer, gemm
+        gemm = lower(layer)
+        if not grouped and gemm.groups > 1:
+            gemm = ungroup(gemm)
+        for piece in split(gemm, timing_only, **limits):
+            yield layer, piece

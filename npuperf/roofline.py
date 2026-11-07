@@ -117,10 +117,12 @@ def _parse_set(text: str) -> tuple[str, Any]:
     return key.strip().replace("-", "_"), sim.from_flags(["--x", value])["x"]
 
 
-def analyse_workload(design: analytic.Design, workload: dict[str, Any], timing_only: bool = True
-                     ) -> list[dict[str, Any]]:
+def analyse_workload(design: analytic.Design, workload: dict[str, Any], timing_only: bool = True,
+                     **options: Any) -> list[dict[str, Any]]:
+    """One row per npu-sim call; ``options`` are ``workloads.iter_calls`` options."""
     rows = []
-    for layer, gemm in workloads.iter_calls(workload, timing_only):
+    tiles = {"tile_m": design.tile_m, "tile_n": design.tile_n, "tile_k": design.tile_k}
+    for layer, gemm in workloads.iter_calls(workload, timing_only, **{**tiles, **options}):
         call = design.replace(m=gemm.m, n=gemm.n, k=gemm.k, groups=gemm.groups)
         result = analytic.analyze(call)
         rows.append({"layer": layer["name"], "class": gemm.op_class, "gemm": gemm,
@@ -134,23 +136,34 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--workload", action="append", required=True,
                         help="workload name in workloads/ or a JSON path (repeatable)")
     parser.add_argument("--set", action="append", default=[], metavar="KEY=VALUE",
-                        help="npu-sim flag for the design point, e.g. macs_per_cycle=256")
+                        help="design parameter (an analytic.Design field, npu-sim flag name "
+                             "or config path), e.g. macs_per_cycle=256")
     parser.add_argument("--simulate", action="store_true",
-                        help="also run every layer on npu-sim (--timing-only when supported)")
+                        help="also run every layer on npu-sim: --timing-only calls when the "
+                             "build has it, else functional calls split to its smaller "
+                             "per-call limits; grouped layers run as one call per group "
+                             "when it has no --groups")
     parser.add_argument("--out", help="write the roofline SVG here")
     parser.add_argument("--label", action="append", default=[],
                         help="layer to label on the plot (default: none; repeatable)")
     cli.add_binary_options(parser)
     cli.add_format_option(parser)
     args = parser.parse_args(argv)
-    flags = dict(_parse_set(item) for item in args.set)
-    design = analytic.Design.from_flags(flags)
+    flags = analytic.Design.normalise(dict(_parse_set(item) for item in args.set))
+    design = analytic.Design.from_flags(flags, strict=True)
     binary = cli.simulator(args) if args.simulate else None
-    timing_only = bool(binary and sim.supports(binary, "--timing-only"))
+    options: dict[str, Any] = {"timing_only": True}
+    if binary is not None:
+        # Model the design the build runs: options it lacks keep its fixed behaviour
+        # (for example one panel buffer per slot).
+        probe = sim.run({**flags, "m": 8, "n": 8, "k": 8}, binary, args.timeout)
+        design = analytic.Design.from_result(probe)
+        options = workloads.call_options(binary)
+    timing_only = options["timing_only"]
     rows, points, analyses = [], [], []
     for name in args.workload:
         workload = workloads.load(name)
-        for row in analyse_workload(design, workload, timing_only or not args.simulate):
+        for row in analyse_workload(design, workload, **options):
             gemm, result = row["gemm"], row["analysis"]
             analyses.append(result)
             entry = {"workload": workload["name"], "layer": row["layer"], "class": row["class"],

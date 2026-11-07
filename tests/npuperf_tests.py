@@ -728,8 +728,34 @@ class WorkloadTests(unittest.TestCase):
                                  max_dimension=4096, max_macs=100_000_000)
         self.assertEqual(sum(p.total_macs for p in legacy), 12544 * 32 * 27)
         self.assertTrue(all(p.m <= 4096 for p in legacy))
-        with self.assertRaisesRegex(ValueError, "partial-sum"):
+        with self.assertRaisesRegex(ValueError, "limit of 4096; a split K needs partial-sum"):
             workloads.split(workloads.Gemm("deep", 1, 1, 8192), True, max_dimension=4096)
+
+    def test_grouped_rows_obey_the_dimension_limit(self):
+        # Activation rows hold G*K values and output rows G*N.
+        wide = workloads.Gemm("dw", 100, 1, 9, groups=1000)
+        self.assertFalse(workloads.fits(wide, True, max_dimension=4096))
+        pieces = workloads.split(wide, True, max_dimension=4096)
+        self.assertTrue(all(p.groups * p.k <= 4096 for p in pieces))
+        self.assertEqual(sum(p.total_macs for p in pieces), wide.total_macs)
+
+    def test_calls_follow_the_binary(self):
+        options = workloads.call_options(BINARY)
+        self.assertEqual(options["timing_only"], supports("--timing-only"))
+        self.assertEqual(options["grouped"], supports("--groups"))
+        if not options["timing_only"]:
+            self.assertEqual(options["max_dimension"], 4096)
+        mobilenet = workloads.load("mobilenet_v2_1.0_224")
+        calls = [gemm for _, gemm in workloads.iter_calls(mobilenet, **options)]
+        self.assertEqual(sum(g.total_macs for g in calls), self.TOTALS["mobilenet_v2_1.0_224"])
+        limit = options.get("max_dimension", workloads.MAX_DIMENSION)
+        for gemm in calls:
+            self.assertLessEqual(max(gemm.m, gemm.groups * gemm.n, gemm.groups * gemm.k), limit)
+            if not options["grouped"]:
+                self.assertEqual(gemm.groups, 1)
+        ungrouped = [g for _, g in workloads.iter_calls(mobilenet, grouped=False)]
+        self.assertTrue(all(g.groups == 1 for g in ungrouped))
+        self.assertEqual(sum(g.total_macs for g in ungrouped), self.TOTALS["mobilenet_v2_1.0_224"])
 
 
 class ExperimentScriptTests(unittest.TestCase):
@@ -764,6 +790,47 @@ class RooflineAndTraceTests(unittest.TestCase):
                                  text=True, timeout=60)
             self.assertEqual(bad.returncode, 2)
             self.assertTrue(bad.stderr.startswith("roofline: no workload"), bad.stderr)
+            typo = subprocess.run(command[:6] + ["macs_per_cyle=256"], cwd=ROOT,
+                                  capture_output=True, text=True, timeout=60)
+            self.assertEqual(typo.returncode, 2)
+            self.assertEqual(typo.stderr, "roofline: unknown design parameter 'macs_per_cyle'; "
+                                          "did you mean 'macs_per_cycle'?\n")
+
+    def test_roofline_simulate_on_a_small_workload(self):
+        # A depthwise layer (grouped) and a dense layer taller than the 4096-row legacy limit.
+        layers = [
+            {"name": "dw", "op": "depthwise_conv2d", "in_c": 8, "out_c": 8, "groups": 8,
+             "kernel_h": 3, "kernel_w": 3, "out_h": 6, "out_w": 6, "repeat": 1,
+             "macs": 6 * 6 * 8 * 9},
+            {"name": "fc", "op": "dense", "M": 5000, "N": 8, "K": 16, "repeat": 2,
+             "macs": 5000 * 8 * 16}]
+        workload = {"schema_version": 1, "name": "tiny", "layers": layers}
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "tiny.json"
+            path.write_text(json.dumps(workload), encoding="utf-8")
+            result = subprocess.run(
+                [sys.executable, "-m", "npuperf.roofline", "--workload", str(path), "--simulate",
+                 "--binary", str(BINARY), "--set", "tile_k=8", "--format", "json",
+                 "--out", str(Path(folder) / "roof.svg")],
+                cwd=ROOT, capture_output=True, text=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            rows = json.loads(result.stdout)["layers"]
+            ET.fromstring((Path(folder) / "roof.svg").read_text(encoding="utf-8"))
+        self.assertEqual(sum(row["macs"] for row in rows), 6 * 6 * 8 * 9 + 2 * 5000 * 8 * 16)
+        limit = 4096 if not supports("--timing-only") else workloads.MAX_DIMENSION
+        for row in rows:
+            self.assertGreater(row["simulated_cycles"], 0, row)
+            self.assertLessEqual(row["m"], limit)
+            self.assertEqual(row["g"] > 1, row["layer"] == "dw" and supports("--groups"))
+        # Each call: npu-sim cycles at or above the analytic lower bound of the same call.
+        for row in rows:
+            design = analytic.Design.from_result(run({"m": row["m"], "n": row["n"],
+                                                      "k": row["k"], "tile_k": 8,
+                                                      **({"groups": row["g"]} if row["g"] > 1
+                                                         else {})}))
+            model = analytic.analyze(design)
+            self.assertLessEqual(model.lower_bound_cycles * row["calls"],
+                                 row["simulated_cycles"], row)
 
     def test_trace_spans_match_counters(self):
         with tempfile.TemporaryDirectory() as folder:
