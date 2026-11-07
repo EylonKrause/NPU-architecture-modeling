@@ -70,7 +70,7 @@ endif()
 set(NPU_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
 npu_generate_version_header("${NPU_GENERATED_INCLUDE_DIR}/npu/version.hpp")
 
-add_library(npu_core STATIC src/core.cpp src/json.cpp src/options.cpp)
+add_library(npu_core STATIC src/core.cpp src/conv.cpp src/json.cpp src/options.cpp)
 target_include_directories(npu_core PUBLIC include "${NPU_GENERATED_INCLUDE_DIR}")
 npu_project_target(npu_core)
 

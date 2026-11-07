@@ -30,6 +30,11 @@ struct Statistics {
     std::uint64_t executed_macs = 0, skipped_macs = 0, weight_decode_cycles = 0;
     std::uint64_t decoded_weight_values = 0, weight_read_bytes = 0;
     std::uint64_t encoded_weight_storage_bytes = 0, dense_weight_storage_bytes = 0;
+    std::uint64_t activation_cache_hits = 0, activation_cache_misses = 0;
+    std::uint64_t activation_bytes_saved = 0, peak_cached_activation_bytes = 0;
+    std::uint64_t activation_read_bytes = 0;
+    // MACs the depthwise datapath ran.
+    std::uint64_t depthwise_macs = 0;
 };
 
 // A point-in-time view of one core's pipeline, or of the cluster. Resource
@@ -53,8 +58,8 @@ struct PipelineView {
 
 // The cluster, then each core. Cluster counters add the cores' and its memory
 // combines their ports; cycles is the makespan once every core completes;
-// peak_inflight_tiles and peak_cached_weight_bytes are the largest core's, as
-// slots and caches are per core; resource identifiers come from the
+// peak_inflight_tiles and the peak cached weight and activation bytes are the
+// largest core's, as slots and caches are per core; resource identifiers come from the
 // lowest-numbered busy core, else core 0. Tile ids are global.
 struct LiveSnapshot : PipelineView {
     std::vector<PipelineView> cores;
