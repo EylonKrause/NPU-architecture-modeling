@@ -79,7 +79,9 @@ jobs:
       - name: Build
         run: cmake --build --preset ${{ matrix.preset }}
       - name: Test
-        run: ctest --preset ${{ matrix.preset }} --output-junit "$PWD/junit-${{ matrix.name }}.xml"
+        run: >-
+          ctest --preset ${{ matrix.preset }}
+          --output-junit "${GITHUB_WORKSPACE}/junit-${{ matrix.name }}.xml"
       - name: Upload test report
         if: success() || failure()
         uses: actions/upload-artifact@v4
@@ -104,7 +106,8 @@ jobs:
           $bin/npu-transformer-demo --precision fp16 --prefill 4 --decode 3 \
             --vcd results/transformer.vcd --progress-jsonl results/transformer.jsonl \
             > results/transformer.json
-          $bin/npu-mobile-demo --cores 2 --jobs 6 --vcd results/mobile > results/mobile-platform.json
+          $bin/npu-mobile-demo --cores 2 --jobs 6 --vcd results/mobile \
+            > results/mobile-platform.json
           cp -R $bin/examples-mobile results/mobile-suite
       - name: Upload waveforms and result files
         if: matrix.name == 'linux-x64-gcc'

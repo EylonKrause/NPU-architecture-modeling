@@ -28,7 +28,8 @@ endif()
 set(NPU_TEST_TIMEOUT_SCALE "${_npu_timeout_scale}" CACHE STRING
   "Integer multiplier for test timeouts (sanitizer builds, slow hosts)")
 if(NOT NPU_TEST_TIMEOUT_SCALE MATCHES "^[1-9][0-9]*$")
-  message(FATAL_ERROR "NPU_TEST_TIMEOUT_SCALE must be a positive integer, got '${NPU_TEST_TIMEOUT_SCALE}'")
+  message(FATAL_ERROR
+    "NPU_TEST_TIMEOUT_SCALE must be a positive integer, got '${NPU_TEST_TIMEOUT_SCALE}'")
 endif()
 
 include(GNUInstallDirs)

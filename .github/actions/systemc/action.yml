@@ -26,10 +26,8 @@ runs:
       uses: actions/cache@v4
       with:
         path: .deps/systemc
-        key: >-
-          systemc-${{ inputs.toolchain }}-${{ steps.paths.outputs.image }}-${{
-          hashFiles('cmake/SystemCSource.cmake', 'cmake/BuildSystemC.cmake',
-                    'cmake/PatchSystemCMsvc.cmake') }}
+        # cmake/*SystemC*.cmake: the pin, the build script and the MSVC patch.
+        key: systemc-${{ inputs.toolchain }}-${{ steps.paths.outputs.image }}-${{ hashFiles('cmake/*SystemC*.cmake') }}
     - if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: >-
