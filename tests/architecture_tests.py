@@ -88,8 +88,18 @@ def derive(c, per_channel=False):
                         cache_bytes += weights
                         peak = max(peak, cache_bytes)
             if c.get('array_rows', 0):
-                waves = divup(rows, c['array_rows']) * divup(cols, c['array_cols'])
-                compute = waves * (k + c['array_rows'] + c['array_cols'] - 2) + c['pipeline_cycles']
+                ar, ac = c['array_rows'], c['array_cols']
+                skew = ar + ac - 2
+                if c.get('dataflow', 'os') == 'os':
+                    # Output waves of k cycles back to back, skew exposed once.
+                    compute = divup(rows, ar) * divup(cols, ac) * k + skew
+                else:
+                    # Weight folds: the first preload (ar cycles) is exposed, a
+                    # fold occupies max(rows, ar) while the next preload shifts
+                    # in, and the last fold streams rows.
+                    folds = divup(k, ar) * divup(cols, ac)
+                    compute = ar + (folds - 1) * max(rows, ar) + rows + skew
+                compute += c['pipeline_cycles']
             else:
                 compute = divup(rows * cols * k, c['macs_per_cycle']) + c['pipeline_cycles']
             jobs.append(dict(tile=tile, block=block, load_bytes=size,
@@ -206,7 +216,8 @@ class ArchitectureChecks(unittest.TestCase):
                      dma_burst_bytes=rng.choice([0, 1, 3, 5, 16]),
                      weight_cache_bytes=rng.choice([0, 1, 5, 256]))
             if trial % 3:
-                c.update(array_rows=rng.randint(1, 4), array_cols=rng.randint(1, 4))
+                c.update(array_rows=rng.randint(1, 4), array_cols=rng.randint(1, 4),
+                         dataflow=('os', 'ws')[trial % 2])
             if trial % 4 == 1:
                 c.update(groups=rng.randint(2, 4))
             q = bool(trial % 2)
@@ -250,12 +261,22 @@ class ArchitectureChecks(unittest.TestCase):
         channels, channels_trace = invoke(c, per_channel=True)
         self.assertEqual(plain['read_bytes'], 21)  # 3*(1A+ceil(3/2)W)+12bias
         self.assertEqual(channels['read_bytes'], 57)  # +3*4*3 channel metadata
-        self.assertEqual(plain['compute_busy_cycles'], 24)  # 3*(2waves*(1K+2fill)+2pipeline)
-        self.assertEqual(channels['compute_busy_cycles'], 24)
+        self.assertEqual(plain['compute_busy_cycles'], 18)  # 3*(2 waves*1 K + 2 skew + 2 pipeline)
+        self.assertEqual(channels['compute_busy_cycles'], 18)
         for actual, trace, quant in [(plain, plain_trace, False), (channels, channels_trace, True)]:
             expected = derive(c, quant)
             self.assert_metrics(actual, expected)
             self.assert_trace(c, actual, trace, expected)
+            self.assert_schedule(c, actual, trace, expected)
+        # ws: ceil(1/2) * ceil(3/2) = 2 folds of one row; the second 2-cycle
+        # preload is exposed: 3*(2 preload + 2 fold + 1 row + 2 skew + 2 pipeline).
+        ws = dict(c, dataflow='ws')
+        actual, trace = invoke(ws)
+        self.assertEqual(actual['compute_busy_cycles'], 27)
+        expected = derive(ws)
+        self.assert_metrics(actual, expected)
+        self.assert_trace(ws, actual, trace, expected)
+        self.assert_schedule(ws, actual, trace, expected)
 
     def test_cache_lru_and_payload_invariance(self):
         outputs = []
@@ -309,6 +330,8 @@ class ArchitectureChecks(unittest.TestCase):
             ['--array-rows', '2'], ['--array-cols', '2'],
             ['--array-rows', '257', '--array-cols', '2'],
             ['--array-rows', '2', '--array-cols', '2', '--macs-per-cycle', '4'],
+            ['--dataflow', 'ws'], ['--dataflow', 'os'], ['--dataflow', 'is'],
+            ['--panel-buffers', '0'], ['--panel-buffers', '3'],
             ['--dma-burst-bytes', '-1'], ['--weight-cache-bytes', '-1'],
             ['--dma-burst-bytes', '18446744073709551616'],
             ['--weight-cache-bytes', '18446744073709551615'],

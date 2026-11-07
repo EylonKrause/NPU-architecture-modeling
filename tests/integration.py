@@ -142,7 +142,33 @@ def transfer_cycles(c: dict, size: int) -> int:
     return c["memory_latency"] + ceildiv(size, c["memory_bytes_per_cycle"])
 
 
+def array_cycles(c: dict, rows: int, cols: int, depth: int) -> int:
+    """MAC cycles of one panel on an A_r x A_c array, stepped wave by wave (os)
+    or fold by fold (ws)."""
+    ar, ac = c["array_rows"], c["array_cols"]
+    skew = ar + ac - 2
+    clock = 0
+    if c.get("dataflow", "os") == "os":
+        # Each output wave holds an A_r x A_c block and streams the panel's K.
+        for _ in range(ceildiv(rows, ar) * ceildiv(cols, ac)):
+            clock += depth
+        return clock + skew
+    # Each fold holds an A_r x A_c weight block and streams the tile's rows.
+    # The next block shifts in, one array row per cycle, during the stream.
+    weights_ready = ar
+    for _ in range(ceildiv(depth, ar) * ceildiv(cols, ac)):
+        start = max(clock, weights_ready)
+        clock, weights_ready = start + rows, start + ar
+    return clock + skew
+
+
+def peak_macs(c: dict) -> int:
+    return c["array_rows"] * c["array_cols"] if c.get("array_rows") else c["macs_per_cycle"]
+
+
 def compute_cycles(c: dict, rows: int, cols: int, depth: int) -> int:
+    if c.get("array_rows"):
+        return array_cycles(c, rows, cols, depth) + c["pipeline_cycles"]
     return ceildiv(rows * cols * depth, c["macs_per_cycle"]) + c["pipeline_cycles"]
 
 
@@ -292,6 +318,8 @@ def command(c: dict, *, timing: str = "event", dump: bool = True, trace: Path | 
     for key, value in c.items():
         if input_path is not None and key in {"m", "n", "k"}:
             continue
+        if key == "macs_per_cycle" and c.get("array_rows"):
+            continue
         if key in {"relu", "timing_only"}:
             if value:
                 result.append("--" + key.replace("_", "-"))
@@ -424,7 +452,8 @@ class SimulatorIntegration(unittest.TestCase):
         self.assertTrue(math.isfinite(result["simulation_wall_seconds"]))
         self.assertAlmostEqual(result["compute_utilization"], metrics["compute_busy_cycles"] / result["cycles"])
         self.assertAlmostEqual(result["memory_utilization"], metrics["dma_busy_cycles"] / result["cycles"])
-        self.assertAlmostEqual(result["mac_utilization"], metrics["macs"] / (c["macs_per_cycle"] * result["cycles"]))
+        self.assertAlmostEqual(result["mac_utilization"], metrics["macs"] / (peak_macs(c) * result["cycles"]))
+        self.assertEqual(result["effective_macs_per_cycle"], peak_macs(c))
         total_bytes = metrics["read_bytes"] + metrics["write_bytes"]
         self.assertAlmostEqual(result["dma_payload_utilization"], total_bytes / (c["memory_bytes_per_cycle"] * result["cycles"]))
         self.assertAlmostEqual(result["arithmetic_intensity_macs_per_byte"], metrics["macs"] / total_bytes)
@@ -609,6 +638,92 @@ class SimulatorIntegration(unittest.TestCase):
                                       capture_output=True, text=True, timeout=15)
                 self.assert_rejected(proc, f"--panel-buffers {value}")
                 self.assertIn(fragment, proc.stderr.strip().splitlines()[-1])
+
+    def test_array_dataflows_match_the_independent_schedule(self):
+        rng = random.Random(5150)
+        cases = [{
+            "m": rng.randint(1, 11), "n": rng.randint(1, 11), "k": rng.randint(1, 19),
+            "tile_m": rng.randint(1, 6), "tile_n": rng.randint(1, 6),
+            "tile_k": rng.choice([0, rng.randint(1, 7)]),
+            "array_rows": rng.randint(1, 5), "array_cols": rng.randint(1, 5),
+            "dataflow": ("os", "ws")[index % 2],
+            "memory_bytes_per_cycle": rng.randint(1, 12), "memory_latency": rng.randint(0, 5),
+            "pipeline_cycles": rng.randint(0, 4), "buffer_slots": rng.randint(1, 3),
+            "panel_buffers": rng.choice([1, 2]),
+        } for index in range(24)]
+        with tempfile.TemporaryDirectory(prefix="npu-dataflow-") as directory:
+            for index, overrides in enumerate(cases):
+                with self.subTest(config=overrides):
+                    self.check_case(overrides)
+                    self.assert_schedule({**DEFAULTS, **overrides}, Path(directory) / f"d{index}.csv")
+
+    def test_dataflow_cycles_of_one_panel(self):
+        # One tile and one panel, so compute_busy_cycles is that panel's time.
+        for ar, ac, rows, cols, depth in [(4, 4, 8, 8, 16), (4, 4, 2, 8, 16), (3, 5, 7, 11, 13),
+                                          (8, 2, 1, 9, 30), (1, 1, 3, 2, 5)]:
+            base = {"m": rows, "n": cols, "k": depth, "tile_m": rows, "tile_n": cols,
+                    "array_rows": ar, "array_cols": ac, "pipeline_cycles": 3}
+            skew = ar + ac - 2
+            waves = ceildiv(rows, ar) * ceildiv(cols, ac)
+            folds = ceildiv(depth, ar) * ceildiv(cols, ac)
+            # A fold of at least A_r rows hides the next weight preload.
+            ws = folds * rows + ar + skew if rows >= ar else folds * ar + rows + skew
+            for dataflow, cycles in (("os", waves * depth + skew), ("ws", ws)):
+                with self.subTest(array=(ar, ac), tile=(rows, cols, depth), dataflow=dataflow):
+                    result = self.check_case({**base, "dataflow": dataflow})
+                    self.assertEqual(result["compute_busy_cycles"], cycles + 3)
+                    self.assertEqual(result["config"]["arch"]["compute"]["dataflow"], dataflow)
+
+    def test_each_dataflow_quantizes_a_different_dimension(self):
+        # os rounds the tile's rows up to A_r; ws rounds the panel's K up to A_r.
+        array = {"array_rows": 4, "array_cols": 4, "pipeline_cycles": 0, "n": 4, "tile_n": 4}
+        ragged_rows = {**array, "m": 5, "tile_m": 5, "k": 64}
+        shallow_k = {**array, "m": 64, "tile_m": 64, "k": 5}
+        busy = {}
+        for name, shape in (("ragged_rows", ragged_rows), ("shallow_k", shallow_k)):
+            for dataflow in ("os", "ws"):
+                busy[name, dataflow] = self.check_case(
+                    {**shape, "dataflow": dataflow})["compute_busy_cycles"]
+        self.assertLess(busy["ragged_rows", "ws"], busy["ragged_rows", "os"])
+        self.assertLess(busy["shallow_k", "os"], busy["shallow_k", "ws"])
+
+    def test_dataflow_requires_an_array(self):
+        for arguments, fragment in [
+            (["--dataflow", "ws"], "--dataflow requires --array-rows and --array-cols"),
+            (["--dataflow", "os"], "--dataflow requires --array-rows and --array-cols"),
+            (["--dataflow", "is", "--array-rows", "2", "--array-cols", "2"],
+             "--dataflow: expected os|ws, got 'is'"),
+            (["--dataflow", "ws", "--array-rows", "2", "--array-cols", "2", "--weight-encoding",
+              "sparse"], "sparse zero-skipping is supported only by the throughput datapath"),
+        ]:
+            with self.subTest(arguments=arguments):
+                proc = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True,
+                                      timeout=15)
+                self.assert_rejected(proc, f"dataflow: {arguments}")
+                self.assertIn(fragment, proc.stderr.strip().splitlines()[-1])
+        with tempfile.TemporaryDirectory(prefix="npu-dataflow-config-") as directory:
+            path = Path(directory) / "config.json"
+            path.write_text('{"arch": {"compute": {"dataflow": "ws"}}}')
+            proc = subprocess.run([str(BINARY), "--config", str(path)], capture_output=True,
+                                  text=True, timeout=15)
+            self.assert_rejected(proc, "ws without an array in a config file")
+            self.assertIn("weight-stationary dataflow requires --array-rows and --array-cols",
+                          proc.stderr.strip().splitlines()[-1])
+            # The echoed config of a vector run carries dataflow os and reloads.
+            echoed = subprocess.run([str(BINARY), "--describe-config"], capture_output=True,
+                                    text=True, timeout=15)
+            self.assertEqual(echoed.returncode, 0, echoed.stderr)
+            self.assertEqual(json.loads(echoed.stdout)["arch"]["compute"]["dataflow"], "os")
+            path.write_text(echoed.stdout)
+            proc = subprocess.run([str(BINARY), "--config", str(path)], capture_output=True,
+                                  text=True, timeout=15)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            # An array from a file and the dataflow from a flag combine.
+            path.write_text('{"arch": {"compute": {"array_rows": 2, "array_cols": 2}}}')
+            proc = subprocess.run([str(BINARY), "--config", str(path), "--dataflow", "ws"],
+                                  capture_output=True, text=True, timeout=15)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            self.assertEqual(json.loads(proc.stdout)["config"]["arch"]["compute"]["dataflow"], "ws")
 
     def test_resource_scaling_and_memory_bound(self):
         base = {**DEFAULTS, "m": 16, "n": 16, "k": 32, "tile_m": 8, "tile_n": 8, "buffer_slots": 3}

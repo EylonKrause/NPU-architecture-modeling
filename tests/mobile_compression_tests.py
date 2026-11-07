@@ -221,8 +221,9 @@ class CompressionChecks(unittest.TestCase):
         result = self.run_case([1] * 10, [0, 1] * 10, [0] * 4, 2, 4, 5,
             codec="palette", palette_bits=1, tile_m=2, tile_n=4, tile_k=0,
             extra=["--array-rows", "2", "--array-cols", "2", "--pipeline-cycles", "3"])
-        # Two 2x2 waves, K plus fill/drain, pipeline plus LUT decoder.
-        self.assertEqual(result["compute_busy_cycles"], 2 * (5 + 2) + 3 + 2)
+        # Two 2x2 output waves of K = 5 back to back, skew 2 + 2 - 2 once,
+        # pipeline 3, plus the LUT decoder's ceil(20 / 16) cycles.
+        self.assertEqual(result["compute_busy_cycles"], 2 * 5 + 2 + 3 + 2)
 
 
 if __name__ == "__main__":

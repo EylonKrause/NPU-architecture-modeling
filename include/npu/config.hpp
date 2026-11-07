@@ -82,8 +82,10 @@ struct ShapeConfig {
 
 struct ComputeConfig {
     std::uint64_t macs_per_cycle = 64;
-    // Both zero selects the vector datapath; both nonzero an output-stationary array.
+    // Both zero selects the vector datapath; both nonzero a systolic array
+    // running `dataflow`. Weight-stationary needs the array.
     std::uint64_t array_rows = 0, array_cols = 0;
+    Dataflow dataflow = Dataflow::OutputStationary;
     std::uint64_t pipeline_cycles = 4;
     std::uint64_t weight_decode_values_per_cycle = 16;
 };

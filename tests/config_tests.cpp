@@ -421,12 +421,12 @@ void check_echo() {
     c.name = "round \"trip\"\n";
     c.description = "\xc3\xa9";
     c.shape = {5, 6, 7, 3, 1ULL << 40};
-    c.arch.compute = {3, 2, 4, 9, 11};
+    c.arch.compute = {3, 2, 4, npu::Dataflow::WeightStationary, 9, 11};
     c.arch.memory = {8, 30, 512};
     c.arch.sram_bytes = 1000000;
     c.arch.weight_cache_bytes = 4096;
     c.arch.frequency_mhz = 933.3333333333334;
-    c.mapping = {3, 4, 5, 6};
+    c.mapping = {3, 4, 5, 6, 1};
     c.weights = {4, npu::WeightEncoding::Sparse, 2, 16};
     c.quant.input_zero = -128;
     c.quant.weight_zero = 7;

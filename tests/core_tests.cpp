@@ -352,17 +352,37 @@ void check_reduction_panels_and_systolic() {
                 npu::tile_compute_cycles(c, tile) == 16,
             "vector pipeline charged for every K panel");
     c.arch.compute.array_rows = 2; c.arch.compute.array_cols = 3;
+    // os: ceil(3/2) * ceil(4/3) = 4 output waves of K cycles back to back,
+    // skew 2 + 3 - 2 once per panel, pipeline 2.
     require(npu::peak_macs_per_cycle(c) == 6 &&
-                npu::panel_compute_cycles(c, tile, 0) == 22 &&
-                npu::panel_compute_cycles(c, tile, 2) == 18 &&
-                npu::tile_compute_cycles(c, tile) == 62,
-            "systolic fold waves and fill/drain including edge K panel");
+                npu::panel_compute_cycles(c, tile, 0) == 4 * 2 + 3 + 2 &&
+                npu::panel_compute_cycles(c, tile, 2) == 4 * 1 + 3 + 2 &&
+                npu::tile_compute_cycles(c, tile) == 13 + 13 + 9,
+            "output-stationary waves including the edge K panel");
+    const npu::Tile row{0, 0, 0, 1, 4};
+    require(npu::panel_compute_cycles(c, row, 0) == 2 * 2 + 3 + 2, "one-row output waves");
+    c.arch.compute.dataflow = npu::Dataflow::WeightStationary;
+    // ws: ceil(2/2) * ceil(4/3) = 2 weight folds. Three rows hide the second
+    // 2-cycle preload: preload 2, fold 3, last fold 3, skew 3, pipeline 2.
+    require(npu::peak_macs_per_cycle(c) == 6 &&
+                npu::panel_compute_cycles(c, tile, 0) == 2 + 3 + 3 + 3 + 2 &&
+                npu::panel_compute_cycles(c, tile, 2) == 13 &&
+                npu::tile_compute_cycles(c, tile) == 3 * 13,
+            "weight-stationary folds including the edge K panel");
+    // One row cannot hide the preload, so the first fold occupies 2 cycles.
+    require(npu::panel_compute_cycles(c, row, 0) == 2 + 2 + 1 + 3 + 2,
+            "a preload longer than the row stream is exposed");
+    c.arch.compute.dataflow = npu::Dataflow::OutputStationary;
     rejects<std::invalid_argument>([&] { npu::panel_k(c, 3); }, "K block bounds");
     c.arch.compute.array_rows = 0;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "both array dimensions required");
     c.arch.compute.array_rows = 257;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
     c.arch.compute.array_rows = c.arch.compute.array_cols = 0;
+    c.arch.compute.dataflow = npu::Dataflow::WeightStationary;
+    rejects_with([&] { npu::validate(c); },
+                 "weight-stationary dataflow requires --array-rows and --array-cols");
+    c.arch.compute.dataflow = npu::Dataflow::OutputStationary;
     c.mapping.tile_k = npu::max_dimension + 1;
     rejects_with([&] { npu::validate(c); }, "reduction tile dimension must be zero (full K) or "
                                             "in 1..1048576");

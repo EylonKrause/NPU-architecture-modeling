@@ -130,6 +130,11 @@ Arguments parse(int argc, char* argv[]) {
         (compute.array_rows || compute.array_cols))
         throw std::invalid_argument(
             "choose --macs-per-cycle or --array-rows/--array-cols, not both");
+    // An echoed vector-mode config carries dataflow os with no array; the
+    // flag applies to an array only.
+    if (args.builder.source("arch.compute.dataflow") == npu::OptionSource::CommandLine &&
+        !compute.array_rows && !compute.array_cols)
+        throw std::invalid_argument("--dataflow requires --array-rows and --array-cols");
     if (args.slice_cycles == 0 || args.slice_cycles > 10000000)
         throw std::invalid_argument("slice cycles must be in 1..10000000");
     if (args.live_stdio && (args.dump || !args.builder.config.sim.trace_path.empty()))

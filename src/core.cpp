@@ -184,6 +184,8 @@ void validate_mapping(const Config& config) {
                 (compute.array_rows >= 1 && compute.array_rows <= 256 &&
                  compute.array_cols >= 1 && compute.array_cols <= 256),
             "systolic array dimensions must both be zero or in 1..256");
+    require(compute.dataflow == Dataflow::OutputStationary || compute.array_rows != 0,
+            "weight-stationary dataflow requires --array-rows and --array-cols");
 }
 
 std::uint64_t panel_size(const Config& config) {
@@ -225,19 +227,36 @@ std::uint64_t panel_bytes(const Config& config, std::uint64_t k,
     return checked_add(checked_add(activations, weights), metadata);
 }
 
+// MAC cycles of a rows x cols output tile over one K panel of depth k,
+// without the per-panel pipeline charge. On an A_r x A_c array:
+//   os: ceil(rows/A_r) * ceil(cols/A_c) output waves of k cycles, issued back
+//       to back; the skew fill and drain, A_r + A_c - 2, is exposed once.
+//   ws: ceil(k/A_r) * ceil(cols/A_c) weight folds. The first A_r-cycle weight
+//       preload is exposed; each later one shifts in while the previous fold
+//       streams the tile's rows, so a fold occupies max(rows, A_r) cycles and
+//       the last one rows. Then fill and drain once. Partial sums accumulate
+//       across folds in the accumulator buffer.
+std::uint64_t mac_cycles(const Config& config, std::uint64_t rows, std::uint64_t cols,
+                         std::uint64_t k) {
+    const auto& compute = config.arch.compute;
+    if (compute.array_rows == 0)
+        return ceil_div(checked_mul(checked_mul(rows, cols), k), compute.macs_per_cycle);
+    const auto array_rows = compute.array_rows;
+    const auto skew = array_rows + compute.array_cols - 2;
+    const auto column_folds = ceil_div(cols, compute.array_cols);
+    if (compute.dataflow == Dataflow::OutputStationary)
+        return checked_add(checked_mul(checked_mul(ceil_div(rows, array_rows), column_folds), k),
+                           skew);
+    const auto folds = checked_mul(ceil_div(k, array_rows), column_folds);
+    return checked_add(checked_add(array_rows,
+                                   checked_mul(folds - 1, std::max(rows, array_rows))),
+                       checked_add(rows, skew));
+}
+
 std::uint64_t compute_panel_cycles(const Config& config, std::uint64_t rows,
                                    std::uint64_t cols, std::uint64_t k) {
     const auto& compute = config.arch.compute;
-    std::uint64_t work = 0;
-    if (compute.array_rows != 0) {
-        const auto waves = checked_mul(ceil_div(rows, compute.array_rows),
-                                        ceil_div(cols, compute.array_cols));
-        const auto fill_drain = checked_add(compute.array_rows, compute.array_cols) - 2;
-        work = checked_mul(waves, checked_add(k, fill_drain));
-    } else {
-        work = ceil_div(checked_mul(checked_mul(rows, cols), k), compute.macs_per_cycle);
-    }
-    auto cycles = checked_add(work, compute.pipeline_cycles);
+    auto cycles = checked_add(mac_cycles(config, rows, cols, k), compute.pipeline_cycles);
     if (config.weights.encoding != WeightEncoding::Dense) {
         const auto count = checked_mul(k, cols);
         const auto rate = compute.weight_decode_values_per_cycle;
