@@ -45,7 +45,10 @@ class GraphRuntimeTests(unittest.TestCase):
         report = self.execute(self.example("cnn.json"))
         self.assertEqual(report["outputs"]["logits"]["data"], [21, -17])
         self.assertEqual(report["macs"], 44)
-        self.assertEqual([x["npu_invocations"] for x in report["layers"]], [1, 2, 0, 0, 1])
+        # The 2-channel depthwise layer is one grouped call when npu-sim has --groups.
+        depthwise_calls = 1 if graph.grouped_calls(BINARY) else 2
+        self.assertEqual([x["npu_invocations"] for x in report["layers"]],
+                         [1, depthwise_calls, 0, 0, 1])
         self.assertEqual(report["cpu_fallback_nodes"], ["average_pool", "flatten"])
         self.assertTrue(all(x["cycles"] == 0 for x in report["layers"] if x["execution"] == "cpu_fallback"))
 

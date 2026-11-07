@@ -172,7 +172,7 @@ class LauncherTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="npu-no-binary-") as directory:
             result = self.run_launcher(
                 ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
-            self.assert_friendly_failure(result, 1, "npu-sim")
+            self.assert_friendly_failure(result, 2, "npu-sim", "without --skip-build")
 
     def test_corrupt_executable_is_rejected_before_serving(self):
         with tempfile.TemporaryDirectory(prefix="npu-bad-binary-") as directory:

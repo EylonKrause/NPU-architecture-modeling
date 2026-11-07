@@ -13,6 +13,7 @@ import json
 import os
 import random
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -763,6 +764,9 @@ class ExperimentScriptTests(unittest.TestCase):
         return subprocess.run([sys.executable, "-m", *arguments], cwd=ROOT, capture_output=True,
                               text=True, timeout=300, env=env)
 
+    def build_dir(self) -> Path:
+        return BINARY.parent.parent if BINARY.parent.name == "Release" else BINARY.parent
+
     def test_sweep_rows_carry_the_numerical_match_column(self):
         with tempfile.TemporaryDirectory() as folder:
             result = self.tool("npuperf.sweep", "--binary", str(BINARY), "--output-dir", folder)
@@ -771,6 +775,31 @@ class ExperimentScriptTests(unittest.TestCase):
                 rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 15)
         self.assertTrue(all(row["numerical_match"] == "True" for row in rows))
+
+    def test_mobile_suite_takes_the_demos_from_the_npu_sim_build(self):
+        environment = {key: value for key, value in os.environ.items()
+                       if key not in ("NPU_SIM", "NPU_TRANSFORMER_DEMO", "NPU_MOBILE_DEMO")}
+        try:
+            binaries.find_in(self.build_dir(), "npu-transformer-demo")
+        except binaries.BinaryNotFound:
+            self.skipTest("this build directory has npu-sim only")
+        for given in (BINARY, self.build_dir()):
+            with self.subTest(binary=given), tempfile.TemporaryDirectory() as folder:
+                result = self.tool("npuperf.mobile_suite", "--binary", str(given),
+                                   "--output-dir", folder, "--format", "json", env=environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertTrue((Path(folder) / "summary.json").is_file())
+        # A build directory without the demos fails; it does not borrow them from another build.
+        with tempfile.TemporaryDirectory() as folder:
+            lone = Path(folder) / "build"
+            lone.mkdir()
+            shutil.copy2(BINARY, lone / BINARY.name)
+            result = self.tool("npuperf.mobile_suite", "--binary", str(lone), "--output-dir",
+                               str(Path(folder) / "out"), env=environment)
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertTrue(result.stderr.startswith("mobile_suite: npu-transformer-demo"),
+                        result.stderr)
+        self.assertIn(str(lone), result.stderr)
 
 
 class RooflineAndTraceTests(unittest.TestCase):

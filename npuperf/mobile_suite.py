@@ -2,15 +2,18 @@
 
 Compression cases run identical tensors dense and compressed and check both against a
 Python integer reference. Results go to --output-dir (default results/mobile), replacing
-the files of an earlier run.
+the files of an earlier run. The transformer and mobile demos come from the build directory
+that holds the chosen npu-sim ($NPU_TRANSFORMER_DEMO / $NPU_MOBILE_DEMO override them).
 """
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from pathlib import Path
 
+from . import binary as executables
 from . import cli, jsonio, quant, sim, table
-from .binary import ROOT, resolve
+from .binary import ROOT
 
 
 def compression_case(binary: Path, directory: Path, name: str, timeout: float) -> dict:
@@ -96,9 +99,13 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="directory for the per-case JSON files and summary.json")
     args = parser.parse_args(argv)
     binaries = {"npu-sim": cli.simulator(args)}
-    search = args.build_dir if args.build_dir else (args.binary.parent if args.binary else None)
+    build = binaries["npu-sim"].parent
+    if build.name == "Release":
+        build = build.parent
     for name in ("npu-transformer-demo", "npu-mobile-demo"):
-        binaries[name] = resolve(None, name, search)
+        binaries[name] = (executables.find_simulator(name)
+                          if os.environ.get(executables.environment_variable(name))
+                          else executables.find_in(build, name))
     report = run_suite(binaries, args.output_dir, args.timeout)
     path = args.output_dir / "summary.json"
     if args.format == "json":

@@ -65,7 +65,9 @@ def find_binary(build_dir: Path) -> Path:
     try:
         return binaries.find_in(build_dir, "npu-sim")
     except binaries.BinaryNotFound as error:
-        raise RuntimeError(f"{error}; run without --skip-build to build it") from error
+        # Still BinaryNotFound, so the exit status is 2 like every other npuperf tool.
+        hint = f"{error}; run without --skip-build to build it"
+        raise binaries.BinaryNotFound(hint) from error
 
 
 def verify_binary(binary: Path) -> None:
