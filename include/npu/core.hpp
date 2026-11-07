@@ -147,13 +147,14 @@ public:
     std::uint64_t reserve(std::uint64_t earliest, std::uint64_t bytes);
     // Forgets intervals ending at or before `time`.
     void release(std::uint64_t time);
+    // Touching reservations merge into one interval.
     std::size_t intervals() const { return busy_.size(); }
 
 private:
     struct Interval {
         std::uint64_t begin, end;
     };
-    std::vector<Interval> busy_;  // Sorted and disjoint.
+    std::vector<Interval> busy_;  // Sorted, disjoint and never touching.
 };
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile);
 std::uint64_t tile_write_bytes(const Tile& tile);

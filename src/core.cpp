@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <iterator>
 #include <limits>
 #include <stdexcept>
 #include <string>
@@ -1142,20 +1143,34 @@ Burst next_burst(const AxiConfig& axi, std::uint64_t address, std::uint64_t end)
 std::uint64_t DramTimeline::reserve(std::uint64_t earliest, std::uint64_t bytes) {
     if (!bytes) return earliest;
     auto begin = earliest;
-    auto next = busy_.begin();
-    while (next != busy_.end() && next->end <= begin) ++next;
+    // Intervals never touch, so a saturated DRAM is one interval and the walk
+    // below stays short however many requesters queue on it.
+    auto next = std::partition_point(busy_.begin(), busy_.end(),
+                                     [begin](const Interval& busy) { return busy.end <= begin; });
     // Walk the intervals that overlap [begin, begin + bytes) and move past
     // each; the first one starting at or after the end leaves a fitting gap.
     for (; next != busy_.end() && next->begin < checked_add(begin, bytes); ++next)
         begin = std::max(begin, next->end);
-    busy_.insert(next, {begin, checked_add(begin, bytes)});
+    const auto end = checked_add(begin, bytes);
+    const bool joins_previous = next != busy_.begin() && std::prev(next)->end == begin;
+    const bool joins_next = next != busy_.end() && next->begin == end;
+    if (joins_previous && joins_next) {
+        std::prev(next)->end = next->end;
+        busy_.erase(next);
+    } else if (joins_previous) {
+        std::prev(next)->end = end;
+    } else if (joins_next) {
+        next->begin = begin;
+    } else {
+        busy_.insert(next, {begin, end});
+    }
     return begin;
 }
 
 void DramTimeline::release(std::uint64_t time) {
-    auto first_live = busy_.begin();
-    while (first_live != busy_.end() && first_live->end <= time) ++first_live;
-    busy_.erase(busy_.begin(), first_live);
+    busy_.erase(busy_.begin(),
+                std::partition_point(busy_.begin(), busy_.end(),
+                                     [time](const Interval& busy) { return busy.end <= time; }));
 }
 
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile) {

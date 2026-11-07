@@ -924,15 +924,57 @@ void check_memory_map() {
     npu::DramTimeline dram;
     require(dram.reserve(100, 50) == 100, "empty timeline");
     require(dram.reserve(0, 100) == 0, "a gap of exactly the size fits");
+    require(dram.intervals() == 1, "touching reservations merge");
     require(dram.reserve(0, 10) == 150, "full up to 150");
     require(dram.reserve(400, 10) == 400, "a later reservation leaves a hole");
+    require(dram.intervals() == 2, "[0, 160) and [400, 410)");
     require(dram.reserve(120, 240) == 160, "the hole [160, 400) holds 240 bytes");
+    require(dram.intervals() == 1, "filling the hole joins both sides");
     require(dram.reserve(155, 1) == 410, "no hole remains before 410");
     require(dram.reserve(50, 0) == 50, "an empty reservation takes nothing");
-    require(dram.intervals() == 6, "six intervals reserved");
-    dram.release(150);
-    require(dram.intervals() == 4, "release drops intervals ending by then");
+    require(dram.reserve(500, 20) == 500 && dram.reserve(600, 5) == 600, "two more holes");
+    require(dram.intervals() == 3, "[0, 411), [500, 520) and [600, 605)");
+    dram.release(520);
+    require(dram.intervals() == 1, "release drops intervals ending by then");
     require(dram.reserve(0, 5) == 0, "released time is free again");
+    require(dram.reserve(590, 10) == 590 && dram.intervals() == 2, "joins the next interval");
+    // Against a timeline that keeps every reservation apart and forgets none.
+    struct Apart {
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> busy;
+        std::uint64_t reserve(std::uint64_t begin, std::uint64_t bytes) {
+            if (!bytes) return begin;
+            for (bool moved = true; moved;) {
+                moved = false;
+                for (const auto& [low, high] : busy)
+                    if (low < begin + bytes && begin < high) {
+                        begin = high;
+                        moved = true;
+                    }
+            }
+            busy.emplace_back(begin, begin + bytes);
+            return begin;
+        }
+    };
+    std::uint64_t seed = 5;
+    const auto pick = [&seed](std::uint64_t range) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (seed >> 33) % range;
+    };
+    for (int round = 0; round < 50; ++round) {
+        npu::DramTimeline merged;
+        Apart apart;
+        std::uint64_t now = 0;
+        for (int step = 0; step < 200; ++step) {
+            const auto earliest = now + pick(300);
+            const auto bytes = pick(40);
+            require(merged.reserve(earliest, bytes) == apart.reserve(earliest, bytes),
+                    "merging intervals leaves every gap in place");
+            if (pick(4) == 0) {
+                now += pick(50);
+                merged.release(now);
+            }
+        }
+    }
 
     npu::Config c;
     c.shape = {5, 7, 10, 3, 1};
