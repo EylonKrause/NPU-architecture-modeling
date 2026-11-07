@@ -108,6 +108,10 @@ struct MappingConfig {
     // Zero means one reduction panel spanning K.
     std::uint64_t tile_k = 0;
     std::uint64_t buffer_slots = 2;
+    // Reduction-panel buffers per slot, 1 or 2. Panel b of a tile reuses the
+    // buffer of panel b - panel_buffers, so its load waits for that panel's
+    // compute to finish.
+    std::uint64_t panel_buffers = 2;
 };
 
 struct WeightFormat {

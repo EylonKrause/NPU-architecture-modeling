@@ -2,8 +2,10 @@
 """Black-box architecture checks derived from integer formulas and trace ordering.
 
 The serial oracle does not copy SystemC thread code. It independently sums each
-panel's memory/compute duration with a single end-to-end tile slot. Multi-slot
-checks validate causal ordering, resource exclusion, and timing-mode equality.
+panel's memory/compute duration with one tile slot and one panel buffer. Other
+mappings run the per-panel durations derived here through the timestamp
+scheduler of integration.py, which shares no code with the simulator, and check
+causal ordering, resource exclusion and timing-mode equality.
 """
 
 from __future__ import annotations
@@ -15,8 +17,12 @@ import json
 from pathlib import Path
 import random
 import subprocess
+import sys
 import tempfile
 import unittest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from integration import schedule  # noqa: E402
 
 BINARY: Path
 DEFAULT = dict(m=3, n=5, k=5, tile_m=1, tile_n=3, tile_k=2, weight_bits=4,
@@ -38,6 +44,11 @@ def dma_cycles(c, size):
     limit = c['dma_burst_bytes'] or size
     return sum(c['memory_latency'] + divup(min(limit, size - offset), c['memory_bytes_per_cycle'])
                for offset in range(0, size, limit))
+
+
+def panel_buffers(c):
+    """Panel buffers per slot: the configured count (default 2), at most one per panel."""
+    return min(c.get('panel_buffers', 2), divup(c['k'], c['tile_k'] or c['k']))
 
 
 def derive(c, per_channel=False):
@@ -86,7 +97,10 @@ def derive(c, per_channel=False):
         stores.append(rows * cols)
     r, n = min(c['m'], c['tile_m']), min(c['n'], c['tile_n'])
     max_k = min(c['k'], tile_k)
-    slot = r * max_k + divup(max_k * n * c['weight_bits'], 8) + 4 * n + 5 * r * n
+    # Bias and channel metadata stay for the tile; each panel buffer holds the
+    # deepest panel; partial sums and outputs take 5 bytes per element.
+    panel = r * max_k + divup(max_k * n * c['weight_bits'], 8)
+    slot = 4 * n + panel_buffers(c) * panel + 5 * r * n
     if per_channel:
         slot += 12 * n
     reads, writes = sum(j['load_bytes'] for j in jobs), sum(stores)
@@ -140,6 +154,7 @@ class ArchitectureChecks(unittest.TestCase):
         by_key = {(s['tile_id'], s['block_id'], s['stage']): s for s in trace}
         self.assertEqual(len(by_key), len(trace), 'unique stage per panel')
         blocks = expected['reduction_blocks']
+        buffers = panel_buffers(c)
         for job in expected['jobs']:
             key = job['tile'], job['block']
             load, compute = by_key[(*key, 'load')], by_key[(*key, 'compute')]
@@ -150,7 +165,12 @@ class ArchitectureChecks(unittest.TestCase):
             self.assertEqual(compute['bytes'], 0)
             if job['block']:
                 previous = by_key[(job['tile'], job['block'] - 1, 'compute')]
-                self.assertGreaterEqual(load['start_cycle'], previous['end_cycle'], 'panel buffer cannot overwrite before ACK')
+                self.assertGreaterEqual(compute['start_cycle'], previous['end_cycle'])
+            if job['block'] >= buffers:
+                # Panel b reuses the buffer of panel b - buffers.
+                released = by_key[(job['tile'], job['block'] - buffers, 'compute')]
+                self.assertGreaterEqual(load['start_cycle'], released['end_cycle'],
+                                        'panel buffer overwritten before compute released it')
         for tile, size in enumerate(expected['stores']):
             store = by_key[(tile, blocks - 1, 'store')]
             self.assertEqual(store['bytes'], size)
@@ -165,12 +185,24 @@ class ArchitectureChecks(unittest.TestCase):
         self.assertLessEqual(actual['cycles'], expected['serial_cycles'])
         self.assertLessEqual(actual['peak_inflight_tiles'], c['buffer_slots'])
 
+    def assert_schedule(self, c, actual, trace, expected):
+        """Exact cycles, waits and spans from the independent timestamp scheduler."""
+        blocks = expected['reduction_blocks']
+        panels = [[(job['load_bytes'], job['dma_cycles'], job['compute_cycles'])
+                   for job in expected['jobs'][tile * blocks:(tile + 1) * blocks]]
+                  for tile in range(len(expected['stores']))]
+        stores = [(size, dma_cycles(c, size)) for size in expected['stores']]
+        oracle = schedule(panels, stores, c['buffer_slots'], panel_buffers(c))
+        for key in ('cycles', 'peak_inflight_tiles', 'slot_wait_cycles', 'panel_wait_cycles'):
+            self.assertEqual(actual[key], oracle[key], key)
+        self.assertEqual(trace, oracle['trace'], 'independent schedule trace differs')
+
     def test_serial_exact_integer_oracle(self):
         rng = random.Random(8921)
         for trial in range(14):
             c = dict(DEFAULT, m=rng.randint(1, 5), n=rng.randint(1, 7), k=rng.randint(1, 13),
                      tile_m=rng.randint(1, 4), tile_n=rng.randint(1, 4), tile_k=rng.randint(1, 6),
-                     weight_bits=4 if trial % 2 else 8,
+                     panel_buffers=1, weight_bits=4 if trial % 2 else 8,
                      dma_burst_bytes=rng.choice([0, 1, 3, 5, 16]),
                      weight_cache_bytes=rng.choice([0, 1, 5, 256]))
             if trial % 3:
@@ -184,6 +216,14 @@ class ArchitectureChecks(unittest.TestCase):
                 self.assert_metrics(actual, expected)
                 self.assertEqual(actual['cycles'], expected['serial_cycles'])
                 self.assert_trace(c, actual, trace, expected)
+                self.assert_schedule(c, actual, trace, expected)
+                # The same mapping with two panel buffers per slot.
+                double = dict(c, panel_buffers=2)
+                expected = derive(double, q)
+                actual, trace = invoke(double, per_channel=q)
+                self.assert_metrics(actual, expected)
+                self.assert_trace(double, actual, trace, expected)
+                self.assert_schedule(double, actual, trace, expected)
 
     def test_overlap_and_timing_modes(self):
         for slots in (2, 3):
@@ -195,6 +235,7 @@ class ArchitectureChecks(unittest.TestCase):
             cycle, cycle_trace = invoke(c, timing='cycle', per_channel=True)
             self.assert_metrics(event, expected)
             self.assert_trace(c, event, event_trace, expected)
+            self.assert_schedule(c, event, event_trace, expected)
             self.assertEqual(event_trace, cycle_trace)
             for key in event:
                 if key not in {'simulation_wall_seconds', 'config'}:
@@ -225,6 +266,7 @@ class ArchitectureChecks(unittest.TestCase):
             with self.subTest(cache_capacity=capacity):
                 self.assert_metrics(actual, expected)
                 self.assert_trace(c, actual, trace, expected)
+                self.assert_schedule(c, actual, trace, expected)
                 outputs.append((actual['accumulators'], actual['outputs'], actual['output_hash']))
                 self.assertLessEqual(actual['peak_cached_weight_bytes'], capacity)
                 if capacity == 13:
@@ -241,8 +283,8 @@ class ArchitectureChecks(unittest.TestCase):
         expected = derive(c)
         actual, trace = invoke(c)
         self.assert_metrics(actual, expected)
-        self.assertEqual(actual['cycles'], expected['serial_cycles'])
         self.assert_trace(c, actual, trace, expected)
+        self.assert_schedule(c, actual, trace, expected)
         self.assertEqual((actual['weight_cache_misses'], actual['weight_cache_hits']), (9, 9))
 
     def test_sram_reservation_boundary(self):

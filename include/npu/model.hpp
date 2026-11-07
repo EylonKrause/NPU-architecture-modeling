@@ -18,7 +18,9 @@ struct Span {
 struct Statistics {
     std::uint64_t cycles = 0, macs = 0, read_bytes = 0, write_bytes = 0;
     std::uint64_t compute_busy_cycles = 0, dma_busy_cycles = 0;
-    std::uint64_t peak_inflight_tiles = 0, slot_wait_cycles = 0;
+    // slot_wait_cycles: the loader waiting for a free slot; panel_wait_cycles:
+    // waiting for a panel buffer of the slot it holds.
+    std::uint64_t peak_inflight_tiles = 0, slot_wait_cycles = 0, panel_wait_cycles = 0;
     std::uint64_t dma_requests = 0, dma_bursts = 0;
     std::uint64_t weight_cache_hits = 0, weight_cache_misses = 0;
     std::uint64_t weight_bytes_saved = 0, peak_cached_weight_bytes = 0;
@@ -74,6 +76,7 @@ private:
     std::vector<EncodedWeightPanel> encoded_weights_;
     std::vector<Tile> tiles_;
     bool record_spans_;
+    std::uint64_t panel_buffers_;
     // Empty in a --timing-only run.
     Output output_;
     Statistics stats_;

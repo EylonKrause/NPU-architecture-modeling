@@ -46,7 +46,8 @@ const std::vector<ConfigOption> option_table = {
     {"--array-cols", "arch.compute.array_cols", "", "output-stationary array columns",
      NPU_FIELD(arch.compute.array_cols)},
     {"--pipeline-cycles", "arch.compute.pipeline_cycles", "",
-     "fill/drain cycles charged per reduction panel", NPU_FIELD(arch.compute.pipeline_cycles)},
+     "fixed cycles charged per reduction panel on top of MAC and decode time",
+     NPU_FIELD(arch.compute.pipeline_cycles)},
     {"--weight-decode-values-per-cycle", "arch.compute.weight_decode_values_per_cycle", "",
      "compressed-weight decoder throughput in values per cycle",
      NPU_FIELD(arch.compute.weight_decode_values_per_cycle)},
@@ -72,6 +73,9 @@ const std::vector<ConfigOption> option_table = {
      NPU_FIELD(mapping.tile_k)},
     {"--buffer-slots", "mapping.buffer_slots", "",
      "tiles in flight across load, compute and store", NPU_FIELD(mapping.buffer_slots)},
+    {"--panel-buffers", "mapping.panel_buffers", "1|2",
+     "reduction-panel buffers per slot; with 2 the DMA loads panel b+1 while compute reads "
+     "panel b", NPU_FIELD(mapping.panel_buffers)},
 
     {"--weight-bits", "weights.bits", "4|8", "signed weight precision", NPU_FIELD(weights.bits)},
     {"--weight-encoding", "weights.encoding", "", "lossless weight storage format",

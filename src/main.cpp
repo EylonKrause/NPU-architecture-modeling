@@ -404,6 +404,7 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << ",\n\"dma_busy_cycles\":" << s.dma_busy_cycles
         << ",\n\"peak_inflight_tiles\":" << s.peak_inflight_tiles
         << ",\n\"slot_wait_cycles\":" << s.slot_wait_cycles
+        << ",\n\"panel_wait_cycles\":" << s.panel_wait_cycles
         << ",\n\"reduction_blocks\":" << npu::reduction_blocks(c)
         << ",\n\"effective_macs_per_cycle\":" << npu::peak_macs_per_cycle(c)
         << ",\n\"dma_requests\":" << s.dma_requests << ",\n\"dma_bursts\":" << s.dma_bursts

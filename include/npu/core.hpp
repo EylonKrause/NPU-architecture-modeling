@@ -60,7 +60,11 @@ void validate(const Config& config);
 std::uint64_t total_macs(const ShapeConfig& shape);
 // G * ceil(M / tile_m) * ceil(N / tile_n).
 std::uint64_t tile_count(const Config& config);
+// SRAM reserved for the slots and the weight cache.
 std::uint64_t scratchpad_bytes(const Config& config);
+// Panel buffers in use per slot: mapping.panel_buffers, at most one per
+// reduction panel.
+std::uint64_t slot_panel_buffers(const Config& config);
 Problem make_problem(const Config& config);
 std::vector<Tile> make_tiles(const Config& config);
 Output reference(const Problem& problem, const Requant& quant);

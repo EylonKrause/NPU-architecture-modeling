@@ -18,8 +18,10 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
       encoded_weights_(config.sim.timing_only ? std::vector<EncodedWeightPanel>{} :
                        encode_weights(config, problem)),
       tiles_(make_tiles(config)), record_spans_(!config.sim.trace_path.empty()),
+      panel_buffers_(slot_panel_buffers(config)),
       free_slots_("free_slots", static_cast<int>(config.mapping.buffer_slots)),
-      loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots)),
+      // Every loaded panel waiting for compute occupies one panel buffer.
+      loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots * panel_buffers_)),
       computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)) {
     validate(config);
     for (const auto& panel : encoded_weights_) {
@@ -89,7 +91,7 @@ void Accelerator::changed() { state_changed_.notify(sc_core::SC_ZERO_TIME); }
 void Accelerator::observe() {
     const auto view = snapshot();
     if (view.inflight_tiles > config_.mapping.buffer_slots ||
-        view.loaded_tiles > config_.mapping.buffer_slots ||
+        view.loaded_tiles > config_.mapping.buffer_slots * panel_buffers_ ||
         view.computed_tiles > config_.mapping.buffer_slots ||
         cached_bytes_ > config_.arch.weight_cache_bytes ||
         ((view.dma_busy || view.compute_busy) && view.inflight_tiles == 0) ||
@@ -223,6 +225,7 @@ void Accelerator::transfer(const Tile& tile, bool read, std::uint64_t block) {
 }
 
 void Accelerator::load() {
+    const auto blocks = reduction_blocks(config_);
     for (const auto& tile : tiles_) {
         const auto start = now();
         std::uint64_t token = 0;
@@ -232,14 +235,22 @@ void Accelerator::load() {
         ++inflight_;
         stats_.peak_inflight_tiles = std::max(stats_.peak_inflight_tiles, inflight_);
         changed();
-        for (std::uint64_t block = 0; block < reduction_blocks(config_); ++block) {
+        const auto first_panel = checked_mul(tile.id, blocks);
+        for (std::uint64_t block = 0; block < blocks; ++block) {
+            // Panel b reuses the buffer of panel b - panel_buffers_. Compute
+            // takes panels in load order, so that buffer is free once the
+            // computed-panel count passes it.
+            if (block >= panel_buffers_) {
+                const auto released = checked_add(first_panel, block - panel_buffers_ + 1);
+                const auto wait_start = now();
+                while (stats_.computed_panels < released) wait(panel_consumed_);
+                stats_.panel_wait_cycles =
+                    checked_add(stats_.panel_wait_cycles, now() - wait_start);
+            }
             transfer(tile, true, block);
             ++stats_.loaded_panels;
-            loaded_.write(checked_add(checked_mul(tile.id, reduction_blocks(config_)), block));
+            loaded_.write(checked_add(first_panel, block));
             changed();
-            // A slot holds one reduction panel plus resident partial sums.
-            // Wait until compute consumed it before reusing that panel buffer.
-            if (block + 1 != reduction_blocks(config_)) wait(panel_consumed_);
         }
     }
 }
@@ -285,6 +296,7 @@ void Accelerator::compute() {
         compute_busy_ = false;
         changed();
         if (record_spans_) spans_.push_back({"compute", tile.id, start, now(), 0, block});
+        // A final panel's buffer is released with the slot after the store.
         if (block + 1 == blocks) computed_.write(tile.id);
         else panel_consumed_.notify(sc_core::SC_ZERO_TIME);
     }

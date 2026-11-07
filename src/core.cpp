@@ -178,6 +178,8 @@ void validate_mapping(const Config& config) {
             "sparse zero-skipping is supported only by the throughput datapath, not systolic timing");
     if (config.mapping.tile_k > max_dimension)
         fail("reduction tile dimension must be zero (full K) or in " + dimension_range());
+    require(config.mapping.panel_buffers == 1 || config.mapping.panel_buffers == 2,
+            "panel buffers must be 1 or 2");
     require((compute.array_rows == 0 && compute.array_cols == 0) ||
                 (compute.array_rows >= 1 && compute.array_rows <= 256 &&
                  compute.array_cols >= 1 && compute.array_cols <= 256),
@@ -414,9 +416,20 @@ std::uint64_t scratchpad_bytes(const Config& config) {
     const auto rows = std::min(map.tile_m, config.shape.m);
     const auto cols = std::min(map.tile_n, config.shape.n);
     const auto depth = std::min(config.shape.k, panel_size(config));
-    const auto per_slot = checked_add(panel_bytes(config, depth, rows, cols, true),
-                                      checked_mul(5, checked_mul(rows, cols)));
+    // A slot holds the tile's bias and channel metadata for its lifetime, its
+    // panel buffers, each sized for the deepest panel, and INT32 partial sums
+    // plus INT8 outputs.
+    const auto panel = checked_add(checked_mul(rows, depth),
+                                   encoded_weight_bound(config, checked_mul(depth, cols)));
+    const auto metadata = checked_add(checked_mul(4, cols), channel_metadata_bytes(config, cols));
+    const auto per_slot = checked_add(
+        checked_add(metadata, checked_mul(slot_panel_buffers(config), panel)),
+        checked_mul(5, checked_mul(rows, cols)));
     return checked_add(checked_mul(per_slot, map.buffer_slots), config.arch.weight_cache_bytes);
+}
+
+std::uint64_t slot_panel_buffers(const Config& config) {
+    return std::min(config.mapping.panel_buffers, reduction_blocks(config));
 }
 
 void validate(const Config& config) {

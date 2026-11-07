@@ -332,8 +332,21 @@ void check_reduction_panels_and_systolic() {
                 npu::panel_read_bytes(c, tile, 2) == 5 &&
                 npu::tile_read_bytes(c, tile) == 89,
             "INT4 panel traffic includes first-panel bias and quant metadata");
-    require(npu::scratchpad_bytes(c) == 268,
-            "SRAM fits one K panel plus persistent accumulators and metadata per slot");
+    // Per slot: 16 B bias + 48 B channel vectors, panel buffers of
+    // 3*2 activations + 4 INT4 weight bytes, 5 B per accumulator and output.
+    require(npu::slot_panel_buffers(c) == 2 && npu::scratchpad_bytes(c) == 2 * (64 + 2 * 10 + 60),
+            "SRAM holds two K panels plus persistent accumulators and metadata per slot");
+    c.mapping.panel_buffers = 1;
+    require(npu::slot_panel_buffers(c) == 1 && npu::scratchpad_bytes(c) == 2 * (64 + 10 + 60),
+            "one panel buffer per slot");
+    for (const std::uint64_t buffers : {0, 3}) {
+        c.mapping.panel_buffers = buffers;
+        rejects_with([&] { npu::validate(c); }, "panel buffers must be 1 or 2");
+    }
+    c.mapping.panel_buffers = 2;
+    c.mapping.tile_k = 0;
+    require(npu::slot_panel_buffers(c) == 1, "a single K panel uses one buffer");
+    c.mapping.tile_k = 2;
     require(npu::panel_compute_cycles(c, tile, 0) == 6 &&
                 npu::panel_compute_cycles(c, tile, 2) == 4 &&
                 npu::tile_compute_cycles(c, tile) == 16,

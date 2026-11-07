@@ -48,6 +48,16 @@ def read_vcd(path: Path) -> tuple[dict[str, list[tuple[int, int]]], dict[str, in
     return values, widths
 
 
+def states(changes: dict[str, list[tuple[int, int]]], names: set[str]):
+    """Yield the value of every named signal after each VCD timestamp."""
+    events = sorted((time, name, value) for name in names for time, value in changes[name])
+    current = {name: 0 for name in names}
+    for index, (time, name, value) in enumerate(events):
+        current[name] = value
+        if index + 1 == len(events) or events[index + 1][0] != time:
+            yield time, dict(current)
+
+
 class SystemCObservability(unittest.TestCase):
     def run_simulator(self, arguments: list[str]) -> dict:
         process = subprocess.run([str(BINARY), *arguments], capture_output=True,
@@ -60,7 +70,7 @@ class SystemCObservability(unittest.TestCase):
         self.assertTrue(result["numerical_match"])
         return result
 
-    def verify_waveform(self, path: Path, result: dict, slots: int) -> dict:
+    def verify_waveform(self, path: Path, result: dict, slots: int, panel_buffers: int) -> dict:
         self.assertTrue(path.is_file(), f"VCD missing: {path}")
         self.assertGreater(path.stat().st_size, 1000)
         text = path.read_text()
@@ -93,8 +103,11 @@ class SystemCObservability(unittest.TestCase):
             self.assertIn(1, [value for _, value in changes[name]], name)
             self.assertEqual(changes[name][-1][1], 0, name)
             self.assertGreater(len(changes[name]), 2, name)
-        for name in {"inflight_tiles", "loaded_tiles", "computed_tiles"}:
+        for name in {"inflight_tiles", "computed_tiles"}:
             self.assertTrue(all(0 <= value <= slots for _, value in changes[name]), name)
+        # Loaded panels waiting for compute each hold a panel buffer.
+        self.assertTrue(all(0 <= value <= slots * panel_buffers
+                            for _, value in changes["loaded_tiles"]))
         self.assertEqual(max(value for _, value in changes["inflight_tiles"]),
                          result["peak_inflight_tiles"])
         return changes
@@ -111,7 +124,7 @@ class SystemCObservability(unittest.TestCase):
             for key in baseline:
                 if key != "simulation_wall_seconds":
                     self.assertEqual(traced[key], baseline[key], key)
-            changes = self.verify_waveform(path, traced, 2)
+            changes = self.verify_waveform(path, traced, 2, 2)
             self.assertGreater(max(value for _, value in changes["dma_tile_id"]), 0)
             self.assertEqual(max(value for _, value in changes["dma_block_id"]), 2)
             self.assertEqual(max(value for _, value in changes["compute_block_id"]), 2)
@@ -126,7 +139,7 @@ class SystemCObservability(unittest.TestCase):
             for timing in ("event", "cycle"):
                 path = Path(directory) / (timing + ".vcd")
                 result = self.run_simulator([*arguments, "--timing", timing, "--vcd", str(path)])
-                self.verify_waveform(path, result, 1)
+                self.verify_waveform(path, result, 1, 2)
                 results.append(result)
         for key in results[0]:
             if key not in {"simulation_wall_seconds", "config"}:
@@ -144,11 +157,36 @@ class SystemCObservability(unittest.TestCase):
                         "--tile-n", "2", "--tile-k", "2", "--input-zero", "0",
                         "--weight-zero", "0", "--weight-encoding", codec, "--palette-bits", "2",
                         "--sparse-block", "2", "--vcd", str(path)])
-                    self.verify_waveform(path, result, 2)
+                    self.verify_waveform(path, result, 2, 2)
                     self.assertGreater(result["weight_decode_cycles"], 0)
                     self.assertEqual(result["executed_macs"] + result["skipped_macs"], 24)
                     if codec == "sparse":
                         self.assertGreater(result["skipped_macs"], 0)
+
+    def test_waveform_shows_panel_prefetch_under_compute(self):
+        # One slot: any load during a compute belongs to the same tile, so it
+        # can only be the next panel going into the second panel buffer.
+        arguments = ["--m", "4", "--n", "4", "--k", "12", "--tile-m", "4", "--tile-n", "4",
+                     "--tile-k", "3", "--buffer-slots", "1", "--macs-per-cycle", "4",
+                     "--memory-latency", "1"]
+        names = {"dma_busy", "dma_read", "compute_busy", "dma_tile_id", "compute_tile_id",
+                 "dma_block_id", "compute_block_id"}
+        with tempfile.TemporaryDirectory() as directory:
+            for buffers in (1, 2):
+                with self.subTest(panel_buffers=buffers):
+                    path = Path(directory) / f"panels{buffers}.vcd"
+                    result = self.run_simulator([*arguments, "--panel-buffers", str(buffers),
+                                                 "--vcd", str(path)])
+                    changes = self.verify_waveform(path, result, 1, buffers)
+                    overlap = [state for _, state in states(changes, names)
+                               if state["dma_busy"] and state["dma_read"] and state["compute_busy"]]
+                    if buffers == 1:
+                        self.assertEqual(overlap, [])
+                        continue
+                    self.assertTrue(overlap)
+                    for state in overlap:
+                        self.assertEqual(state["dma_tile_id"], state["compute_tile_id"])
+                        self.assertEqual(state["dma_block_id"], state["compute_block_id"] + 1)
 
     def test_vcd_in_unwritable_directory_fails_without_false_success(self):
         with tempfile.TemporaryDirectory() as directory:
