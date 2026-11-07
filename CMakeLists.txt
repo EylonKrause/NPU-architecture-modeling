@@ -134,4 +134,8 @@ if(BUILD_TESTING)
     set_tests_properties(onnx-runtime-conformance PROPERTIES TIMEOUT 180)
   endif()
   set_tests_properties(independent-integration PROPERTIES TIMEOUT 180)
+  add_test(NAME npuperf-package
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/npuperf_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  set_tests_properties(npuperf-package PROPERTIES TIMEOUT 300)
 endif()

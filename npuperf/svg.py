@@ -610,8 +610,9 @@ class Figure:
         if position == "auto":
             def cost(corner: str) -> float:
                 lx, ly = corners[corner]
-                inside = sum(1 for mx, my, _ in marks if lx - 6 <= mx <= lx + width + 6
-                             and ly - 6 <= my <= ly + height + 6)
+                pad = 14  # keep a clear margin between the legend and any mark
+                inside = sum(1 for mx, my, r in marks if lx - pad - r <= mx <= lx + width + pad + r
+                             and ly - pad - r <= my <= ly + height + pad + r)
                 text = sum(1 for b in self.boxes if not (b[2] <= lx or b[0] >= lx + width
                                                           or b[3] <= ly or b[1] >= ly + height))
                 return inside + 3 * text
