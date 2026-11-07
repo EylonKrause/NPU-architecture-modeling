@@ -210,6 +210,36 @@ class ConfigFile(unittest.TestCase):
                 self.assert_rejected(run("--live-stdio", *extra, stdin="stop\n"), "--live-stdio")
         self.assertFalse(trace.exists())
 
+    def test_outputs_never_overwrite_a_config_file(self):
+        directory = Path(self.directory.name)
+        plain = self.write("plain.json", json.dumps({"shape": {"m": 4}}))
+        waveform = self.write("waveform.vcd", json.dumps({"shape": {"m": 4}}))
+        # A file whose own trace path names itself, and one aimed at another
+        # config file loaded before it.
+        own = directory / "own.json"
+        own.write_text(json.dumps({"sim": {"trace_path": str(own)}}), encoding="utf-8")
+        other = self.write("other.json", json.dumps({"sim": {"trace_path": str(plain)}}))
+        cases = [
+            (["--config", plain, "--trace", plain], "CSV trace"),
+            (["--trace", plain, "--config", plain], "CSV trace"),
+            (["--config", plain, "--progress-jsonl", plain], "progress JSONL"),
+            (["--config", waveform, "--vcd", waveform], "VCD"),
+            (["--config", own], "CSV trace"),
+            (["--config", plain, "--config", other], "CSV trace"),
+            (["--config", plain, "--config", plain, "--trace", plain], "CSV trace"),
+        ]
+        files = {path: path.read_text(encoding="utf-8") for path in (plain, waveform, own, other)}
+        for arguments, output in cases:
+            with self.subTest(arguments=arguments):
+                self.assert_rejected(run(*arguments),
+                                     "output path conflicts with an input file: " + output)
+        for path, text in files.items():
+            self.assertEqual(path.read_text(encoding="utf-8"), text, path)
+        # A trace next to the config file is fine.
+        trace = directory / "trace.csv"
+        self.result("--config", plain, "--trace", trace)
+        self.assertTrue(trace.read_text(encoding="utf-8").startswith("stage,"))
+
     def test_version_and_help(self):
         proc = run("--version")
         self.assertEqual(proc.returncode, 0, proc.stderr)

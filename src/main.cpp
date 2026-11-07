@@ -18,6 +18,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actions& actions) {
@@ -28,6 +29,7 @@ void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actio
 
 struct Arguments {
     npu::ConfigBuilder builder;
+    std::vector<std::string> config_paths;
     std::string input_path;
     std::string quantization_path;
     std::string vcd_path, progress_path;
@@ -52,7 +54,10 @@ struct RunOption {
 
 const RunOption run_options[] = {
     {"--config", "FILE.json", "load config-file keys; later flags and files override them",
-     [](Arguments& a, std::string_view v) { a.builder.load_file(nonempty_path("--config", v)); }},
+     [](Arguments& a, std::string_view v) {
+         a.config_paths.push_back(nonempty_path("--config", v));
+         a.builder.load_file(a.config_paths.back());
+     }},
     {"--input", "PATH",
      "NPU1 tensor file: M N K, then activations (M x G*K), weights (G blocks of K x N) and "
      "bias (G*N); G is --groups",
@@ -172,7 +177,9 @@ void validate_paths(const Arguments& args) {
     const std::vector<std::pair<std::string, std::string>> outputs = {
         {"VCD", args.vcd_path}, {"progress JSONL", args.progress_path},
         {"CSV trace", args.builder.config.sim.trace_path}};
-    const std::vector<std::string> inputs = {args.input_path, args.quantization_path};
+    auto inputs = args.config_paths;
+    inputs.push_back(args.input_path);
+    inputs.push_back(args.quantization_path);
     for (std::size_t i = 0; i < outputs.size(); ++i) {
         if (outputs[i].second.empty()) continue;
         for (std::size_t j = i + 1; j < outputs.size(); ++j) {
