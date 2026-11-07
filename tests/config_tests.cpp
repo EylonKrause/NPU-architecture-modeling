@@ -111,8 +111,13 @@ void check_option_table() {
              "--input-zero", "--weight-zero", "--output-zero", "--multiplier", "--shift",
              "--rounding", "--relu", "--trace"})
         option(legacy);
-    require(npu::is_switch(option("--relu")) && !npu::is_switch(option("--m")), "switches");
-    require(npu::find_option_by_flag("--rescale")->path == "quant.rescale", "rescale option");
+    require(npu::is_switch(option("--relu")) && npu::is_switch(option("--timing-only")) &&
+                !npu::is_switch(option("--m")) && !npu::is_switch(option("--groups")),
+            "switches");
+    require(npu::find_option_by_flag("--rescale")->path == "quant.rescale" &&
+                npu::find_option_by_flag("--groups")->path == "shape.groups" &&
+                npu::find_option_by_flag("--timing-only")->path == "sim.timing_only",
+            "numerics options");
     std::ostringstream help;
     npu::write_config_help(help);
     for (const auto& entry : table) {
@@ -233,13 +238,13 @@ void check_loader(const std::string& example_path) {
               "\"memory\":{\"burst_bytes\":64}},\"quant\":{\"relu\":true,\"rounding\":\"even\","
               "\"shifts\":[1,-2,3,62],\"weight_zero_points\":[-1,0,1,2],"
               "\"rescale\":\"tosa-double\"},\"weights\":{\"encoding\":\"palette\"},"
-              "\"sim\":{\"timing\":\"cycle\"}}");
+              "\"sim\":{\"timing\":\"cycle\",\"timing_only\":true}}");
     const auto& c = builder.config;
     require(c.name == "probe" && c.shape.m == 4 && c.arch.frequency_mhz == 1500.0 &&
                 c.arch.memory.burst_bytes == 64 && c.quant.relu &&
                 c.quant.rounding == npu::Rounding::HalfToEven &&
                 c.quant.shifts == std::vector<std::int32_t>{1, -2, 3, 62} &&
-                c.quant.rescale == npu::RescaleMode::TosaDouble &&
+                c.quant.rescale == npu::RescaleMode::TosaDouble && c.sim.timing_only &&
                 c.quant.weight_zero_points == std::vector<std::int32_t>{-1, 0, 1, 2} &&
                 c.weights.encoding == npu::WeightEncoding::Palette &&
                 c.sim.timing == npu::TimingMode::Cycle,
@@ -268,6 +273,8 @@ void check_loader(const std::string& example_path) {
         {"{\"quant\":{\"multiplier\":2147483648}}", "quant.multiplier expects a signed 32-bit"},
         {"{\"quant\":{\"rescale\":\"tosa\"}}",
          "quant.rescale expects one of native|tosa-single|tosa-double, got \"tosa\""},
+        {"{\"shape\":{\"groups\":-1}}", "shape.groups expects an unsigned 64-bit integer, got -1"},
+        {"{\"sim\":{\"timing_only\":\"yes\"}}", "sim.timing_only expects true or false"},
         {"{\"quant\":{\"relu\":1}}", "quant.relu expects true or false, got 1"},
         {"{\"quant\":{\"rounding\":\"floor\"}}",
          "quant.rounding expects one of away|even, got \"floor\""},
@@ -329,6 +336,7 @@ void check_command_line_values() {
         {{"--multiplier", "2147483648"},
          "--multiplier: expected a signed 32-bit integer, got '2147483648'"},
         {{"--shift", "1.5"}, "--shift: expected a signed 32-bit integer, got '1.5'"},
+        {{"--groups", "-1"}, "--groups: expected an unsigned 64-bit integer, got '-1'"},
         {{"--rescale", "tosa"}, "--rescale: expected native|tosa-single|tosa-double, got 'tosa'"},
         {{"--frequency-mhz", "abc"}, "--frequency-mhz: expected a decimal number, got 'abc'"},
         {{"--frequency-mhz", "nan"}, "--frequency-mhz: expected a decimal number, got 'nan'"},
@@ -412,7 +420,7 @@ void check_echo() {
     npu::Config c;
     c.name = "round \"trip\"\n";
     c.description = "\xc3\xa9";
-    c.shape = {5, 6, 7, 1ULL << 40};
+    c.shape = {5, 6, 7, 3, 1ULL << 40};
     c.arch.compute = {3, 2, 4, 9, 11};
     c.arch.memory = {8, 30, 512};
     c.arch.sram_bytes = 1000000;
@@ -432,6 +440,7 @@ void check_echo() {
     c.quant.multipliers = {0, 1, 2147483647, 3, 4, 5};
     c.quant.shifts = {0, 31, -2, 62, 4, -2147483647 - 1};
     c.sim.timing = npu::TimingMode::Cycle;
+    c.sim.timing_only = true;
     c.sim.trace_path = "C:\\traces\\run 1.csv";
     const auto text = npu::config_json(c);
     npu::ConfigBuilder builder;
@@ -441,10 +450,10 @@ void check_echo() {
         require(builder.source(entry.path) == npu::OptionSource::File,
                 "echo assigns " + std::string(entry.path));
     const auto& r = builder.config;
-    require(r.shape.seed == (1ULL << 40) &&
+    require(r.shape.seed == (1ULL << 40) && r.shape.groups == 3 &&
                 r.arch.frequency_mhz == c.arch.frequency_mhz &&
                 r.quant.multipliers == c.quant.multipliers && r.quant.shifts == c.quant.shifts &&
-                r.quant.rescale == c.quant.rescale && r.name == c.name &&
+                r.quant.rescale == c.quant.rescale && r.sim.timing_only && r.name == c.name &&
                 r.sim.trace_path == c.sim.trace_path,
             "echoed values are exact");
 }

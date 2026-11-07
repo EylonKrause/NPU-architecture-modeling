@@ -29,8 +29,11 @@ const std::vector<ConfigOption> option_table = {
     {"", "description", "", "free-text description", NPU_FIELD(description)},
 
     {"--m", "shape.m", "", "output rows M", NPU_FIELD(shape.m)},
-    {"--n", "shape.n", "", "output channels N", NPU_FIELD(shape.n)},
-    {"--k", "shape.k", "", "reduction depth K", NPU_FIELD(shape.k)},
+    {"--n", "shape.n", "", "output channels N per group", NPU_FIELD(shape.n)},
+    {"--k", "shape.k", "", "reduction depth K per group", NPU_FIELD(shape.k)},
+    {"--groups", "shape.groups", "",
+     "independent GEMMs G sharing M; depthwise convolution is G channels, N 1, K kh*kw",
+     NPU_FIELD(shape.groups)},
     {"--seed", "shape.seed", "", "synthetic-tensor seed; the low 32 bits are used",
      NPU_FIELD(shape.seed)},
 
@@ -98,16 +101,20 @@ const std::vector<ConfigOption> option_table = {
     {"--rounding", "quant.rounding", "",
      "native rescale tie rounding: away from zero or to even", NPU_FIELD(quant.rounding)},
     {"", "quant.weight_zero_points", "",
-     "per-channel weight zero points, one per output channel; --quantization-file sets "
-     "all three per-channel vectors",
+     "per-channel weight zero points, one per output channel (G*N); --quantization-file "
+     "sets all three per-channel vectors",
      NPU_FIELD(quant.weight_zero_points)},
-    {"", "quant.multipliers", "", "per-channel multipliers, one per output channel",
+    {"", "quant.multipliers", "", "per-channel multipliers, one per output channel (G*N)",
      NPU_FIELD(quant.multipliers)},
-    {"", "quant.shifts", "", "per-channel signed shifts, one per output channel",
+    {"", "quant.shifts", "", "per-channel signed shifts, one per output channel (G*N)",
      NPU_FIELD(quant.shifts)},
 
     {"--timing", "sim.timing", "",
      "event jumps across stage waits; cycle waits one cycle at a time", NPU_FIELD(sim.timing)},
+    {"--timing-only", "sim.timing_only", "",
+     "time the schedule without tensors, numerics or the reference (dense weights; up to "
+     "1e13 MACs; results report numerics \"skipped\")",
+     NPU_FIELD(sim.timing_only)},
     {"--trace", "sim.trace_path", "PATH", "stage trace CSV written after a batch run",
      NPU_FIELD(sim.trace_path)},
 };

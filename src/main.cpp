@@ -52,10 +52,12 @@ struct RunOption {
 const RunOption run_options[] = {
     {"--config", "FILE.json", "load config-file keys; later flags and files override them",
      [](Arguments& a, std::string_view v) { a.builder.load_file(nonempty_path("--config", v)); }},
-    {"--input", "PATH", "NPU1 tensor file: M N K, then activations, weights and bias",
+    {"--input", "PATH",
+     "NPU1 tensor file: M N K, then activations (M x G*K), weights (G blocks of K x N) and "
+     "bias (G*N); G is --groups",
      [](Arguments& a, std::string_view v) { a.input_path = nonempty_path("--input", v); }},
     {"--quantization-file", "PATH",
-     "NPUQ1 file: N, then weight_zero multiplier shift per channel; signed shifts",
+     "NPUQ1 file: G*N, then weight_zero multiplier shift per output channel; signed shifts",
      [](Arguments& a, std::string_view v) {
          a.quantization_path = nonempty_path("--quantization-file", v);
      }},
@@ -133,6 +135,9 @@ Arguments parse(int argc, char* argv[]) {
     if (args.live_stdio && (args.dump || !args.builder.config.sim.trace_path.empty()))
         throw std::invalid_argument(
             "--live-stdio reports through snapshots; --trace and --dump-output need a batch run");
+    if (args.builder.config.sim.timing_only && (args.dump || !args.input_path.empty()))
+        throw std::invalid_argument(
+            "--timing-only runs without tensors; --input and --dump-output need a bit-exact run");
     const auto& quant = args.builder.config.quant;
     if (!args.quantization_path.empty() && (!quant.weight_zero_points.empty() ||
                                            !quant.multipliers.empty() || !quant.shifts.empty()))
@@ -175,6 +180,13 @@ bool input_token(std::istream& stream, std::string& token) {
 }
 
 npu::Problem input_problem(Arguments& args) {
+    if (args.builder.config.sim.timing_only) {
+        // The model reads only the shape; no tensors exist.
+        const auto& shape = args.builder.config.shape;
+        npu::Problem shell;
+        shell.m = shape.m; shell.n = shape.n; shell.k = shape.k; shell.groups = shape.groups;
+        return shell;
+    }
     if (args.input_path.empty()) return npu::make_problem(args.builder.config);
     const char* const dimensions[] = {"shape.m", "shape.n", "shape.k"};
     for (const auto* path : dimensions)
@@ -200,10 +212,12 @@ npu::Problem input_problem(Arguments& args) {
     }
     npu::validate(c);
     npu::Problem p;
-    p.m = c.shape.m; p.n = c.shape.n; p.k = c.shape.k;
-    p.activations.resize(static_cast<std::size_t>(npu::checked_mul(c.shape.m, c.shape.k)));
-    p.weights.resize(static_cast<std::size_t>(npu::checked_mul(c.shape.k, c.shape.n)));
-    p.bias.resize(static_cast<std::size_t>(c.shape.n));
+    p.m = c.shape.m; p.n = c.shape.n; p.k = c.shape.k; p.groups = c.shape.groups;
+    const auto channels = npu::checked_mul(c.shape.groups, c.shape.n);
+    p.activations.resize(static_cast<std::size_t>(
+        npu::checked_mul(c.shape.m, npu::checked_mul(c.shape.groups, c.shape.k))));
+    p.weights.resize(static_cast<std::size_t>(npu::checked_mul(c.shape.k, channels)));
+    p.bias.resize(static_cast<std::size_t>(channels));
     for (auto* values : {&p.activations, &p.weights}) {
         for (auto& value : *values) {
             std::string token;
@@ -232,11 +246,14 @@ void input_quantization(Arguments& args) {
     std::ifstream file(args.quantization_path);
     if (!file) throw std::invalid_argument("cannot open quantization parameter file");
     std::string magic, count;
+    const auto& shape = args.builder.config.shape;
+    const auto channels = npu::checked_mul(shape.groups, shape.n);
     if (!input_token(file, magic) || !input_token(file, count) || magic != "NPUQ1" ||
-        npu::parse_uint64(count, "NPUQ1 header") != args.builder.config.shape.n)
-        throw std::invalid_argument("quantization header must be NPUQ1 N matching output channels");
+        npu::parse_uint64(count, "NPUQ1 header") != channels)
+        throw std::invalid_argument(
+            "quantization header must be NPUQ1 G*N matching output channels");
     auto& q = args.builder.config.quant;
-    for (std::uint64_t channel = 0; channel < args.builder.config.shape.n; ++channel) {
+    for (std::uint64_t channel = 0; channel < channels; ++channel) {
         std::string zero, multiplier, shift;
         if (!input_token(file, zero) || !input_token(file, multiplier) || !input_token(file, shift))
             throw std::invalid_argument("truncated quantization parameters");
@@ -258,7 +275,13 @@ template<class T> void array_json(const std::vector<T>& values, std::ostream& st
     stream << ']';
 }
 
-void check_numerics(const npu::Accelerator& model, const npu::Output& expected) {
+const char* numerics_name(const npu::Config& c) {
+    return c.sim.timing_only ? "skipped" : "bit-exact";
+}
+
+void check_numerics(const npu::Config& c, const npu::Accelerator& model,
+                    const npu::Output& expected) {
+    if (c.sim.timing_only) return;
     if (model.completed() && (model.output().accumulators != expected.accumulators ||
         model.output().quantized != expected.quantized))
         throw std::runtime_error("numerical validation failed");
@@ -268,8 +291,9 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
                    const npu::Accelerator& model, const char* type = "snapshot") {
     const auto snap = model.snapshot();
     const auto& s = snap.statistics;
-    const auto tiles = npu::checked_mul(npu::ceil_div(c.shape.m, c.mapping.tile_m),
-                                        npu::ceil_div(c.shape.n, c.mapping.tile_n));
+    const auto tiles = npu::tile_count(c);
+    // A timing-only run has nothing to validate or hash.
+    const bool checked = snap.completed && !c.sim.timing_only;
     const auto ratio = [cycles = snap.cycles](std::uint64_t busy) {
         return cycles ? static_cast<double>(busy) / static_cast<double>(cycles) : 0.0;
     };
@@ -278,8 +302,9 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
         << ",\"config\":";
     npu::write_config_json(stream, c);
     stream << ",\"cycles\":" << snap.cycles
-        << ",\"completed\":" << snap.completed << ",\"validated\":" << snap.completed
-        << ",\"numerical_match\":" << (snap.completed ? "true" : "null")
+        << ",\"completed\":" << snap.completed << ",\"validated\":" << checked
+        << ",\"numerics\":\"" << numerics_name(c) << '"'
+        << ",\"numerical_match\":" << (checked ? "true" : "null")
         << ",\"macs\":" << s.macs << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
         << ",\"executed_macs\":" << s.executed_macs << ",\"skipped_macs\":" << s.skipped_macs
         << ",\"weight_decode_cycles\":" << s.weight_decode_cycles
@@ -304,7 +329,7 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
     if (snap.dma_busy) stream << (snap.dma_read ? "\"load\"" : "\"store\"");
     if (snap.compute_busy) stream << (snap.dma_busy ? ",\"compute\"" : "\"compute\"");
     stream << "],\"output_hash\":";
-    if (snap.completed) stream << '"' << npu::output_hash(model.output()) << '"'; else stream << "null";
+    if (checked) stream << '"' << npu::output_hash(model.output()) << '"'; else stream << "null";
     stream << ",\"input_preview\":";
     array_json(std::vector<std::int8_t>(problem.activations.begin(),
         problem.activations.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(16, problem.activations.size()))), stream);
@@ -320,7 +345,7 @@ void live_commands(const npu::Config& c, const npu::Problem& problem,
                    npu::Accelerator& model, const npu::Output& expected, std::ostream* progress) {
     sc_core::sc_start(sc_core::SC_ZERO_TIME);
     const auto emit = [&](const char* type = "snapshot") {
-        check_numerics(model, expected);
+        check_numerics(c, model, expected);
         snapshot_json(std::cout, c, problem, model, type);
         if (progress) snapshot_json(*progress, c, problem, model, type);
     };
@@ -387,8 +412,11 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << ",\n\"weight_bytes_saved\":" << s.weight_bytes_saved
         << ",\n\"peak_cached_weight_bytes\":" << s.peak_cached_weight_bytes
         << ",\n\"scratchpad_bytes\":" << npu::scratchpad_bytes(c)
-        << ",\n\"output_hash\":" << npu::output_hash(model.output())
-        << ",\n\"numerical_match\":true"
+        << ",\n\"numerics\":\"" << numerics_name(c) << '"';
+    if (c.sim.timing_only) std::cout << ",\n\"output_hash\":null,\n\"numerical_match\":null";
+    else std::cout << ",\n\"output_hash\":" << npu::output_hash(model.output())
+                   << ",\n\"numerical_match\":true";
+    std::cout
         << ",\n\"simulation_wall_seconds\":" << seconds
         << ",\n\"compute_utilization\":" << static_cast<double>(s.compute_busy_cycles) / static_cast<double>(s.cycles)
         << ",\n\"memory_utilization\":" << static_cast<double>(s.dma_busy_cycles) / static_cast<double>(s.cycles)
@@ -427,7 +455,8 @@ int sc_main(int argc, char* argv[]) {
             std::cout << '\n';
             return 0;
         }
-        const auto expected = npu::reference(problem, config.quant);
+        const auto expected = config.sim.timing_only ? npu::Output{} :
+                                                       npu::reference(problem, config.quant);
         sc_core::sc_set_time_resolution(1, sc_core::SC_NS);
         sc_core::sc_report_handler::set_handler(diagnostic_report);
         sc_core::sc_report_handler::set_actions(sc_core::SC_INFO, sc_core::SC_DO_NOTHING);
@@ -465,13 +494,13 @@ int sc_main(int argc, char* argv[]) {
                 sc_core::sc_start(sc_core::sc_time::from_value(args.slice_cycles), sc_core::SC_RUN_TO_TIME);
                 if (!model.completed() && (sc_core::sc_time_stamp() == previous || !sc_core::sc_pending_activity()))
                     throw std::runtime_error("simulation stalled before completion");
-                check_numerics(model, expected);
+                check_numerics(config, model, expected);
                 snapshot_json(progress, config, problem, model);
             }
         } else sc_core::sc_start();
         const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
         if (!model.completed()) throw std::runtime_error("model deadlocked before completion");
-        check_numerics(model, expected);
+        check_numerics(config, model, expected);
         if (!config.sim.trace_path.empty()) {
             std::ofstream trace(config.sim.trace_path);
             if (!trace) throw std::runtime_error("cannot open trace output");

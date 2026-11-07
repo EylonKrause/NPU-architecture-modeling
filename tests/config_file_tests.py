@@ -161,7 +161,7 @@ class ConfigFile(unittest.TestCase):
         tensors = self.write("t.npu", "NPU1 1 2 1\n3\n1 -1\n5 7\n")
         matching = self.write("match.json", '{"shape": {"m": 1, "n": 2, "k": 1}}')
         first = self.result("--input", tensors, "--config", matching, "--dump-output")
-        self.assertEqual(first["config"]["shape"], {"m": 1, "n": 2, "k": 1, "seed": 1})
+        self.assertEqual(first["config"]["shape"], {"m": 1, "n": 2, "k": 1, "groups": 1, "seed": 1})
         echo = self.write("echo.json", json.dumps(first["config"]))
         second = self.result("--input", tensors, "--config", echo, "--dump-output")
         self.assertEqual(first["accumulators"], second["accumulators"])
@@ -170,6 +170,31 @@ class ConfigFile(unittest.TestCase):
                                  self.write("wrong.json", '{"shape": {"n": 3}}')),
                              "--input header gives shape.n = 2 but the config file sets 3")
         self.assert_rejected(run("--input", tensors, "--m", 1), "omit --m/--n/--k")
+
+    def test_numerics_keys_round_trip(self):
+        path = self.write("numerics.json", json.dumps({
+            "shape": {"m": 6, "n": 1, "k": 9, "groups": 5},
+            "quant": {"rescale": "tosa-double", "shift": 40, "multiplier": 1518500250,
+                      "shifts": [40, 41, 42, 43, 44]}}))
+        first = self.result("--config", path, "--dump-output")
+        self.assertEqual(first["config"]["shape"]["groups"], 5)
+        self.assertEqual(first["config"]["quant"]["rescale"], "tosa-double")
+        self.assertEqual(len(first["outputs"]), 6 * 5)
+        echo = self.write("echo.json", json.dumps(first["config"]))
+        second = self.result("--config", echo, "--dump-output")
+        for value in (first, second):
+            value.pop("simulation_wall_seconds")
+        self.assertEqual(first, second)
+        timed = self.result("--config", echo, "--timing-only")
+        self.assertIs(timed["config"]["sim"]["timing_only"], True)
+        self.assertEqual(timed["numerics"], "skipped")
+        self.assertEqual(timed["cycles"], first["cycles"])
+        self.assert_rejected(run("--config", self.write("short.json", json.dumps(
+            {"shape": {"groups": 2}, "quant": {"shifts": [1] * 16}}))),
+            "per-channel shift count must equal G*N")
+        self.assert_rejected(run("--config", self.write("tosa.json", json.dumps(
+            {"quant": {"rescale": "tosa-single", "shift": 1}}))),
+            "requantization shift must be in 2..62 for tosa-single rescale")
 
     def test_frequency_errors_name_the_flag(self):
         for value in ("abc", "1e999", " 200", "0x10", "", "200MHz"):

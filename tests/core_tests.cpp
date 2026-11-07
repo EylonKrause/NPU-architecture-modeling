@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -349,8 +350,9 @@ void check_reduction_panels_and_systolic() {
     c.arch.compute.array_rows = 257;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
     c.arch.compute.array_rows = c.arch.compute.array_cols = 0;
-    c.mapping.tile_k = 4097;
-    rejects<std::invalid_argument>([&] { npu::validate(c); }, "K tile bound");
+    c.mapping.tile_k = npu::max_dimension + 1;
+    rejects_with([&] { npu::validate(c); }, "reduction tile dimension must be zero (full K) or "
+                                            "in 1..1048576");
     c = npu::Config{};
     c.shape.m = 1; c.shape.n = 3; c.shape.k = 3;
     c.mapping.tile_m = 1; c.mapping.tile_n = 3; c.mapping.tile_k = 1; c.weights.bits = 4;
@@ -561,6 +563,177 @@ void check_tosa_rescale() {
     rejects<std::overflow_error>([&] { npu::reference(p, q); }, "10 is outside [-8, 8)");
 }
 
+// G blocks: a grouped GEMM equals G independent GEMMs placed side by side.
+void check_grouped_gemm() {
+    std::uint32_t state = 0x6e0u;
+    const auto next = [&state]() {
+        state = state * UINT32_C(1664525) + UINT32_C(1013904223);
+        return state;
+    };
+    for (unsigned trial = 0; trial < 24; ++trial) {
+        npu::Config c;
+        c.shape.groups = 1 + next() % 6;
+        c.shape.m = 1 + next() % 7;
+        c.shape.n = trial % 4 == 0 ? 1 : 1 + next() % 5;  // n = 1: depthwise
+        c.shape.k = trial % 4 == 0 ? 9 : 1 + next() % 8;
+        c.shape.seed = next();
+        c.mapping.tile_m = 1 + next() % 4;
+        c.mapping.tile_n = 1 + next() % 3;
+        c.mapping.tile_k = next() % 4;
+        const auto channels = c.shape.groups * c.shape.n;
+        c.quant.input_zero = static_cast<std::int32_t>(next() % 31) - 15;
+        if (trial % 2) {
+            c.quant.rescale = npu::RescaleMode::TosaDouble;
+            for (std::uint64_t channel = 0; channel < channels; ++channel) {
+                c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 31) - 15);
+                const auto multiplier = (1U << 30) + next() % (1U << 30);
+                c.quant.multipliers.push_back(static_cast<std::int32_t>(multiplier));
+                c.quant.shifts.push_back(static_cast<std::int32_t>(33 + next() % 10));
+            }
+        } else {
+            c.quant.shift = static_cast<std::int32_t>(next() % 9);
+        }
+        const auto p = npu::make_problem(c);
+        require(p.groups == c.shape.groups &&
+                    p.activations.size() == c.shape.m * c.shape.groups * c.shape.k &&
+                    p.weights.size() == c.shape.groups * c.shape.k * c.shape.n &&
+                    p.bias.size() == channels,
+                "grouped tensor sizes");
+        const auto grouped = npu::reference(p, c.quant);
+        for (std::uint64_t g = 0; g < c.shape.groups; ++g) {
+            npu::Problem single;
+            single.m = c.shape.m; single.n = c.shape.n; single.k = c.shape.k;
+            for (std::uint64_t row = 0; row < c.shape.m; ++row)
+                for (std::uint64_t k = 0; k < c.shape.k; ++k)
+                    single.activations.push_back(p.activations[static_cast<std::size_t>(
+                        row * c.shape.groups * c.shape.k + g * c.shape.k + k)]);
+            const auto block = static_cast<std::ptrdiff_t>(g * c.shape.k * c.shape.n);
+            single.weights.assign(p.weights.begin() + block,
+                                  p.weights.begin() + block +
+                                      static_cast<std::ptrdiff_t>(c.shape.k * c.shape.n));
+            const auto first = static_cast<std::ptrdiff_t>(g * c.shape.n);
+            const auto last = first + static_cast<std::ptrdiff_t>(c.shape.n);
+            single.bias.assign(p.bias.begin() + first, p.bias.begin() + last);
+            auto lane = c.quant;
+            for (auto* vector : {&lane.weight_zero_points, &lane.multipliers, &lane.shifts})
+                if (!vector->empty())
+                    *vector = std::vector<std::int32_t>(vector->begin() + first,
+                                                        vector->begin() + last);
+            const auto part = npu::reference(single, lane);
+            for (std::uint64_t row = 0; row < c.shape.m; ++row)
+                for (std::uint64_t col = 0; col < c.shape.n; ++col) {
+                    const auto at = static_cast<std::size_t>(row * channels + g * c.shape.n + col);
+                    const auto from = static_cast<std::size_t>(row * c.shape.n + col);
+                    require(grouped.accumulators[at] == part.accumulators[from] &&
+                                grouped.quantized[at] == part.quantized[from],
+                            "group " + std::to_string(g) + " equals its own GEMM, trial " +
+                                std::to_string(trial));
+                }
+        }
+        auto tiles = npu::make_tiles(c);
+        require(tiles.size() == npu::tile_count(c), "tile count includes groups");
+        for (std::size_t i = 0; i < tiles.size(); ++i) {
+            const auto& t = tiles[i];
+            require(t.id == i && t.group < c.shape.groups && t.col + t.cols <= c.shape.n,
+                    "tiles stay inside one group");
+            if (i) {
+                const auto& before = tiles[i - 1];
+                require(std::tie(before.group, before.row, before.col) <
+                            std::tie(t.group, t.row, t.col),
+                        "tile order is group-major, then row, then column");
+            }
+        }
+        std::reverse(tiles.begin(), tiles.end());
+        npu::Output tiled;
+        for (const auto& tile : tiles) npu::compute_tile(p, c.quant, tile, tiled);
+        require(tiled.accumulators == grouped.accumulators && tiled.quantized == grouped.quantized,
+                "grouped tiled datapath equals the reference, trial " + std::to_string(trial));
+        for (const auto encoding : {npu::WeightEncoding::Palette, npu::WeightEncoding::Sparse}) {
+            auto e = c;
+            e.weights.encoding = encoding;
+            e.weights.palette_bits = 8;
+            const auto panels = npu::encode_weights(e, p);
+            require(panels.size() == c.shape.groups * npu::ceil_div(c.shape.n, c.mapping.tile_n) *
+                                         npu::reduction_blocks(c),
+                    "one encoded panel per group, column panel and K panel");
+            npu::Output encoded;
+            for (const auto& tile : npu::make_tiles(e)) {
+                for (std::uint64_t block = 0; block < npu::reduction_blocks(e); ++block)
+                    require(npu::weight_panel(e, panels, tile, block).group == tile.group,
+                            "panel lookup is group-aware");
+                npu::compute_tile_encoded(p, e, panels, tile, encoded);
+            }
+            require(encoded.accumulators == grouped.accumulators &&
+                        encoded.quantized == grouped.quantized,
+                    "grouped encoded datapath equals the reference");
+        }
+    }
+
+    // Per-channel vectors cover G*N channels.
+    npu::Config depthwise;
+    depthwise.shape.groups = 8; depthwise.shape.m = 4; depthwise.shape.n = 1; depthwise.shape.k = 9;
+    depthwise.quant.shifts.assign(8, 3);
+    npu::validate(depthwise);
+    depthwise.quant.shifts.assign(1, 3);
+    rejects_with([&] { npu::validate(depthwise); }, "per-channel shift count must equal G*N");
+    depthwise.quant.shifts.clear();
+    npu::Problem wrong = npu::make_problem(npu::Config{});
+    wrong.groups = 2;
+    rejects_with([&] { npu::reference(wrong, npu::Requant{}); },
+                 "activation vector size does not match M*G*K");
+    npu::Output output;
+    rejects_with([&] {
+        npu::compute_tile(npu::make_problem(depthwise), npu::Requant{}, {0, 0, 0, 1, 1, 8}, output);
+    }, "tile is outside the output matrix");
+}
+
+void check_limits() {
+    const auto shape_error = [](const std::function<void(npu::Config&)>& mutation,
+                                const std::string& expected) {
+        npu::Config c;
+        mutation(c);
+        rejects_with([&] { npu::validate(c); }, expected);
+    };
+    shape_error([](auto& c) { c.shape.m = npu::max_dimension + 1; },
+                "matrix dimensions must be in 1..1048576");
+    shape_error([](auto& c) { c.shape.groups = npu::max_dimension + 1; },
+                "groups must be in 1..1048576");
+    shape_error([](auto& c) { c.shape.groups = 1024; c.shape.n = 1025; },
+                "groups*N and groups*K must be at most 1048576");
+    // Exactly 4e9 MACs is a legal bit-exact run; one more row is not.
+    npu::Config functional;
+    functional.shape.m = 62500; functional.shape.n = 64; functional.shape.k = 1000;
+    require(npu::total_macs(functional.shape) == npu::max_functional_macs, "boundary workload");
+    npu::validate(functional);
+    ++functional.shape.m;
+    rejects_with([&] { npu::validate(functional); },
+                 "workload exceeds 4000000000 MACs for a bit-exact run; --timing-only allows up "
+                 "to 10000000000000");
+    functional.sim.timing_only = true;
+    npu::validate(functional);
+    rejects_with([&] { npu::make_problem(functional); }, "--timing-only runs generate no tensors");
+    // The timing-only limit, with tiles large enough for the host budget.
+    npu::Config timing;
+    timing.sim.timing_only = true;
+    timing.shape.m = 1000000; timing.shape.n = 1000; timing.shape.k = 10000;
+    timing.mapping.tile_m = timing.mapping.tile_n = 1000;
+    timing.arch.sram_bytes = UINT64_C(1) << 30;
+    require(npu::total_macs(timing.shape) == npu::max_timing_only_macs, "timing-only boundary");
+    npu::validate(timing);
+    ++timing.shape.k;
+    rejects_with([&] { npu::validate(timing); },
+                 "workload exceeds 10000000000000 MACs, the --timing-only limit");
+    // Largest dimensions without materialized tensors.
+    npu::Config wide;
+    wide.sim.timing_only = true;
+    wide.shape.m = 1; wide.shape.n = npu::max_dimension; wide.shape.k = npu::max_dimension;
+    wide.mapping.tile_n = 4096; wide.mapping.tile_k = 4096;
+    wide.arch.sram_bytes = UINT64_C(1) << 30;
+    npu::validate(wide);
+    wide.weights.encoding = npu::WeightEncoding::Palette;
+    rejects_with([&] { npu::validate(wide); }, "--timing-only supports dense weights only");
+}
+
 void check_validation() {
     npu::validate(npu::Config{});
     const auto bad = [](const std::function<void(npu::Config&)>& mutation) {
@@ -569,11 +742,12 @@ void check_validation() {
         rejects([&] { npu::validate(c); }, "invalid configuration");
     };
     bad([](auto& c) { c.shape.m = 0; });
-    bad([](auto& c) { c.shape.n = 4097; });
+    bad([](auto& c) { c.shape.n = npu::max_dimension + 1; });
+    bad([](auto& c) { c.shape.groups = 0; });
     bad([](auto& c) { c.shape.k = UINT64_MAX; });
     bad([](auto& c) { c.shape.m = c.shape.n = c.shape.k = 4096; });
     bad([](auto& c) { c.mapping.tile_m = 0; });
-    bad([](auto& c) { c.mapping.tile_n = 4097; });
+    bad([](auto& c) { c.mapping.tile_n = npu::max_dimension + 1; });
     bad([](auto& c) { c.arch.compute.macs_per_cycle = 0; });
     bad([](auto& c) { c.arch.memory.bytes_per_cycle = 0; });
     bad([](auto& c) { c.arch.memory.latency = UINT64_MAX; });
@@ -594,7 +768,12 @@ void check_validation() {
     bad([](auto& c) {
         c.shape.m = c.shape.n = 1000; c.shape.k = 1;
         c.mapping.tile_m = c.mapping.tile_n = 1;
-    }); // Trace/metadata storage alone exceeds the host safety budget.
+        c.sim.trace_path = "trace.csv";
+    }); // Trace storage for 10^6 tiles alone exceeds the host safety budget.
+    npu::Config untraced;
+    untraced.shape.m = untraced.shape.n = 1000; untraced.shape.k = 1;
+    untraced.mapping.tile_m = untraced.mapping.tile_n = 1;
+    npu::validate(untraced); // Without a trace, 10^6 tile records fit.
     npu::Config c;
     c.arch.frequency_mhz = 1e-6;
     npu::validate(c); // A 1 Hz target remains representable and valid.
@@ -638,6 +817,8 @@ int main() {
         check_random_edges();
         check_overflow_and_shapes();
         check_tosa_rescale();
+        check_grouped_gemm();
+        check_limits();
         check_validation();
         std::cout << "core tests: all checks passed\n";
         return 0;

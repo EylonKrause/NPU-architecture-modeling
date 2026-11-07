@@ -70,8 +70,12 @@ std::string enum_choices() {
     return result;
 }
 
+// G independent GEMMs share M. Activations are M x (G*K) row-major, weights are
+// G blocks of K x N, bias and outputs hold G*N channels. Depthwise convolution
+// is G channels with N = 1 and K = kh*kw.
 struct ShapeConfig {
     std::uint64_t m = 16, n = 16, k = 32;
+    std::uint64_t groups = 1;
     // Synthetic tensors use the low 32 bits.
     std::uint64_t seed = 1;
 };
@@ -125,7 +129,8 @@ struct Requant {
     bool relu = false;
     RescaleMode rescale = RescaleMode::Native;
     Rounding rounding = Rounding::HalfAwayFromZero;
-    // Per-channel overrides; each is empty or holds one entry per output channel.
+    // Per-channel overrides; each is empty or holds one entry per output
+    // channel, G*N in all.
     std::vector<std::int32_t> weight_zero_points;
     std::vector<std::int32_t> multipliers;
     std::vector<std::int32_t> shifts;
@@ -133,6 +138,8 @@ struct Requant {
 
 struct SimOptions {
     TimingMode timing = TimingMode::Event;
+    // Times the schedule without tensors, numerics or the reference.
+    bool timing_only = false;
     // Empty writes no stage trace.
     std::string trace_path;
 };

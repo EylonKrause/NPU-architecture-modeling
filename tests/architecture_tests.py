@@ -47,39 +47,43 @@ def derive(c, per_channel=False):
     jobs, stores = [], []
     cache = OrderedDict()
     cache_bytes = peak = hits = misses = saved = 0
-    for row in range(0, c['m'], c['tile_m']):
-        for col in range(0, c['n'], c['tile_n']):
-            rows, cols = min(c['tile_m'], c['m'] - row), min(c['tile_n'], c['n'] - col)
-            tile = len(stores)
-            for block, inner in enumerate(panels):
-                k = min(tile_k, c['k'] - inner)
-                weights = divup(k * cols * c['weight_bits'], 8)
-                metadata = (4 * cols + (12 * cols if per_channel else 0)) if block == 0 else 0
-                size = rows * k + weights + metadata
-                key = (col, block)
-                if c['weight_cache_bytes']:
-                    if key in cache:
-                        cache.move_to_end(key)
-                        hits += 1
-                        saved += weights
-                        size -= weights
-                    else:
-                        misses += 1
-                        if weights <= c['weight_cache_bytes']:
-                            while cache_bytes + weights > c['weight_cache_bytes']:
-                                _, old_size = cache.popitem(last=False)
-                                cache_bytes -= old_size
-                            cache[key] = weights
-                            cache_bytes += weights
-                            peak = max(peak, cache_bytes)
-                if c.get('array_rows', 0):
-                    waves = divup(rows, c['array_rows']) * divup(cols, c['array_cols'])
-                    compute = waves * (k + c['array_rows'] + c['array_cols'] - 2) + c['pipeline_cycles']
+    # Tile ids run group-major, then row, then column.
+    origins = [(group, row, col) for group in range(c.get('groups', 1))
+               for row in range(0, c['m'], c['tile_m'])
+               for col in range(0, c['n'], c['tile_n'])]
+    for group, row, col in origins:
+        rows, cols = min(c['tile_m'], c['m'] - row), min(c['tile_n'], c['n'] - col)
+        tile = len(stores)
+        for block, inner in enumerate(panels):
+            k = min(tile_k, c['k'] - inner)
+            weights = divup(k * cols * c['weight_bits'], 8)
+            metadata = (4 * cols + (12 * cols if per_channel else 0)) if block == 0 else 0
+            size = rows * k + weights + metadata
+            # One cache line per (group, column panel, K panel).
+            key = (group, col, block)
+            if c['weight_cache_bytes']:
+                if key in cache:
+                    cache.move_to_end(key)
+                    hits += 1
+                    saved += weights
+                    size -= weights
                 else:
-                    compute = divup(rows * cols * k, c['macs_per_cycle']) + c['pipeline_cycles']
-                jobs.append(dict(tile=tile, block=block, load_bytes=size,
-                                 compute_cycles=compute, dma_cycles=dma_cycles(c, size)))
-            stores.append(rows * cols)
+                    misses += 1
+                    if weights <= c['weight_cache_bytes']:
+                        while cache_bytes + weights > c['weight_cache_bytes']:
+                            _, old_size = cache.popitem(last=False)
+                            cache_bytes -= old_size
+                        cache[key] = weights
+                        cache_bytes += weights
+                        peak = max(peak, cache_bytes)
+            if c.get('array_rows', 0):
+                waves = divup(rows, c['array_rows']) * divup(cols, c['array_cols'])
+                compute = waves * (k + c['array_rows'] + c['array_cols'] - 2) + c['pipeline_cycles']
+            else:
+                compute = divup(rows * cols * k, c['macs_per_cycle']) + c['pipeline_cycles']
+            jobs.append(dict(tile=tile, block=block, load_bytes=size,
+                             compute_cycles=compute, dma_cycles=dma_cycles(c, size)))
+        stores.append(rows * cols)
     r, n = min(c['m'], c['tile_m']), min(c['n'], c['tile_n'])
     max_k = min(c['k'], tile_k)
     slot = r * max_k + divup(max_k * n * c['weight_bits'], 8) + 4 * n + 5 * r * n
@@ -110,7 +114,8 @@ def invoke(c, *, timing='event', per_channel=False):
             command += ['--' + name.replace('_', '-'), str(value)]
         if per_channel:
             qpath = directory / 'channel.npuq'
-            qpath.write_text(f"NPUQ1 {c['n']}\n" + '0 1 7\n' * c['n'])
+            channels = c.get('groups', 1) * c['n']
+            qpath.write_text(f"NPUQ1 {channels}\n" + '0 1 7\n' * channels)
             command += ['--quantization-file', str(qpath)]
         proc = subprocess.run(command, text=True, capture_output=True, timeout=30)
         if proc.returncode:
@@ -128,7 +133,7 @@ class ArchitectureChecks(unittest.TestCase):
             if key not in {'jobs', 'stores', 'serial_cycles'}:
                 self.assertEqual(actual[key], value, key)
         shape = actual['config']['shape']
-        self.assertEqual(actual['macs'], shape['m'] * shape['n'] * shape['k'])
+        self.assertEqual(actual['macs'], shape['groups'] * shape['m'] * shape['n'] * shape['k'])
 
     def assert_trace(self, c, actual, trace, expected):
         self.assertEqual(len(trace), len(expected['jobs']) * 2 + len(expected['stores']))
@@ -170,6 +175,8 @@ class ArchitectureChecks(unittest.TestCase):
                      weight_cache_bytes=rng.choice([0, 1, 5, 256]))
             if trial % 3:
                 c.update(array_rows=rng.randint(1, 4), array_cols=rng.randint(1, 4))
+            if trial % 4 == 1:
+                c.update(groups=rng.randint(2, 4))
             q = bool(trial % 2)
             expected = derive(c, q)
             with self.subTest(trial=trial, config=c):
@@ -226,6 +233,18 @@ class ArchitectureChecks(unittest.TestCase):
                     self.assertEqual(actual['weight_bytes_saved'], 26)
         self.assertTrue(all(result == outputs[0] for result in outputs))
 
+    def test_grouped_weight_cache_lines_are_per_group(self):
+        # Each group's two row tiles share that group's weight panels; no group
+        # may hit another group's line for the same column panel.
+        c = dict(DEFAULT, groups=3, m=4, n=3, k=5, tile_m=2, tile_n=3, tile_k=2,
+                 buffer_slots=1, weight_cache_bytes=256)
+        expected = derive(c)
+        actual, trace = invoke(c)
+        self.assert_metrics(actual, expected)
+        self.assertEqual(actual['cycles'], expected['serial_cycles'])
+        self.assert_trace(c, actual, trace, expected)
+        self.assertEqual((actual['weight_cache_misses'], actual['weight_cache_hits']), (9, 9))
+
     def test_sram_reservation_boundary(self):
         c = dict(DEFAULT, weight_cache_bytes=13, buffer_slots=2)
         expected = derive(c)
@@ -243,7 +262,8 @@ class ArchitectureChecks(unittest.TestCase):
 
     def test_bad_architecture_flags(self):
         for flags in [
-            ['--tile-k', '-1'], ['--tile-k', '4097'], ['--weight-bits', '3'],
+            ['--tile-k', '-1'], ['--tile-k', '1048577'], ['--weight-bits', '3'],
+            ['--groups', '0'], ['--groups', '-1'], ['--groups', '1048577'],
             ['--array-rows', '2'], ['--array-cols', '2'],
             ['--array-rows', '257', '--array-cols', '2'],
             ['--array-rows', '2', '--array-cols', '2', '--macs-per-cycle', '4'],

@@ -13,6 +13,7 @@ import csv
 import json
 import math
 from pathlib import Path
+import random
 import subprocess
 import sys
 import tempfile
@@ -39,9 +40,17 @@ def ceildiv(value: int, divisor: int) -> int:
     return (value + divisor - 1) // divisor
 
 
+def groups(c: dict) -> int:
+    return c.get("groups", 1)
+
+
 def fixtures(c: dict) -> tuple[list[int], list[int], list[int]]:
-    """Explicit portable fixture stream, without C/C++ random libraries."""
+    """Portable fixture stream, without C/C++ random libraries.
+
+    Activations are M x (G*K) row-major, weights G blocks of K x N, bias G*N.
+    """
     state = c["seed"] & MASK32
+    g = groups(c)
 
     def values(count: int, modulus: int, offset: int) -> list[int]:
         nonlocal state
@@ -52,35 +61,48 @@ def fixtures(c: dict) -> tuple[list[int], list[int], list[int]]:
         return result
 
     return (
-        values(c["m"] * c["k"], 31, 15),
-        values(c["k"] * c["n"], 31, 15),
-        values(c["n"], 127, 63),
+        values(c["m"] * g * c["k"], 31, 15),
+        values(g * c["k"] * c["n"], 31, 15),
+        values(g * c["n"], 127, 63),
     )
 
 
+def native_requantize(c: dict, acc: int) -> int:
+    product = acc * c["multiplier"]
+    if c["shift"]:
+        magnitude = (abs(product) + (1 << (c["shift"] - 1))) // (1 << c["shift"])
+        rounded = magnitude if product >= 0 else -magnitude
+    else:
+        rounded = product
+    quantized = rounded + c["output_zero"]
+    if c["relu"]:
+        quantized = max(quantized, c["output_zero"])
+    return min(127, max(-128, quantized))
+
+
+def output_value(c: dict, problem, row: int, channel: int) -> tuple[int, int]:
+    """Accumulator and INT8 output at row, global channel G*N index."""
+    activations, weights, biases = problem
+    g, n, k = groups(c), c["n"], c["k"]
+    group, col = divmod(channel, n)
+    acc = biases[channel] + sum(
+        (activations[row * g * k + group * k + inner] - c["input_zero"])
+        * (weights[(group * k + inner) * n + col] - c["weight_zero"])
+        for inner in range(k)
+    )
+    if not -(1 << 31) <= acc < (1 << 31):
+        raise OverflowError("reference accumulator is outside INT32")
+    return acc, native_requantize(c, acc)
+
+
 def expected_outputs(c: dict, problem: tuple[list[int], list[int], list[int]] | None = None) -> tuple[list[int], list[int]]:
-    activations, weights, biases = fixtures(c) if problem is None else problem
+    problem = fixtures(c) if problem is None else problem
     accumulators, outputs = [], []
     for row in range(c["m"]):
-        for col in range(c["n"]):
-            acc = biases[col] + sum(
-                (activations[row * c["k"] + inner] - c["input_zero"])
-                * (weights[inner * c["n"] + col] - c["weight_zero"])
-                for inner in range(c["k"])
-            )
-            if not -(1 << 31) <= acc < (1 << 31):
-                raise OverflowError("reference accumulator is outside INT32")
+        for channel in range(groups(c) * c["n"]):
+            acc, out = output_value(c, problem, row, channel)
             accumulators.append(acc)
-            product = acc * c["multiplier"]
-            if c["shift"]:
-                magnitude = (abs(product) + (1 << (c["shift"] - 1))) // (1 << c["shift"])
-                rounded = magnitude if product >= 0 else -magnitude
-            else:
-                rounded = product
-            quantized = rounded + c["output_zero"]
-            if c["relu"]:
-                quantized = max(quantized, c["output_zero"])
-            outputs.append(min(127, max(-128, quantized)))
+            outputs.append(out)
     return accumulators, outputs
 
 
@@ -96,8 +118,10 @@ def expected_hash(accumulators: list[int], outputs: list[int]) -> int:
 
 
 def tiles(c: dict) -> list[tuple[int, int]]:
+    """Tile extents in id order: group-major, then row, then column."""
     return [
         (min(c["tile_m"], c["m"] - row), min(c["tile_n"], c["n"] - col))
+        for _ in range(groups(c))
         for row in range(0, c["m"], c["tile_m"])
         for col in range(0, c["n"], c["tile_n"])
     ]
@@ -120,7 +144,7 @@ def expected_metrics(c: dict) -> dict[str, int]:
         max_rows * c["k"] + c["k"] * max_cols + 4 * max_cols + 5 * max_rows * max_cols
     )
     return {
-        "macs": c["m"] * c["n"] * c["k"],
+        "macs": groups(c) * c["m"] * c["n"] * c["k"],
         "read_bytes": reads, "write_bytes": writes,
         "compute_busy_cycles": compute, "dma_busy_cycles": dma,
         "scratchpad_bytes": scratchpad, "serial_cycles": serial_cycles,
@@ -214,9 +238,9 @@ def command(c: dict, *, timing: str = "event", dump: bool = True, trace: Path | 
     for key, value in c.items():
         if input_path is not None and key in {"m", "n", "k"}:
             continue
-        if key == "relu":
+        if key in {"relu", "timing_only"}:
             if value:
-                result.append("--relu")
+                result.append("--" + key.replace("_", "-"))
         else:
             result.extend(["--" + key.replace("_", "-"), str(value)])
     result.extend(["--timing", timing])
@@ -229,8 +253,8 @@ def command(c: dict, *, timing: str = "event", dump: bool = True, trace: Path | 
     return result
 
 
-def invoke(c: dict, **kwargs) -> tuple[dict, subprocess.CompletedProcess]:
-    proc = subprocess.run(command(c, **kwargs), capture_output=True, text=True, timeout=30)
+def invoke(c: dict, *, timeout: float = 30, **kwargs) -> tuple[dict, subprocess.CompletedProcess]:
+    proc = subprocess.run(command(c, **kwargs), capture_output=True, text=True, timeout=timeout)
     if proc.returncode:
         raise AssertionError(f"simulator failed ({proc.returncode}): {proc.stderr.strip()}")
     try:
@@ -307,6 +331,7 @@ class SimulatorIntegration(unittest.TestCase):
         self.assertEqual(result["accumulators"], accumulators)
         self.assertEqual(result["outputs"], outputs)
         self.assertIs(result["numerical_match"], True)
+        self.assertEqual(result["numerics"], "bit-exact")
         self.assertEqual(result["output_hash"], expected_hash(accumulators, outputs))
         metrics = expected_metrics(c)
         for key, value in metrics.items():
@@ -444,6 +469,136 @@ class SimulatorIntegration(unittest.TestCase):
         compute_slow, _ = invoke(compute_bound)
         compute_fast, _ = invoke({**compute_bound, "macs_per_cycle": 2})
         self.assertLess(compute_fast["cycles"], compute_slow["cycles"] * 0.65)
+
+    def test_grouped_gemm_numerics_traffic_and_schedule(self):
+        cases = [
+            {"groups": 2},
+            {"groups": 3, "m": 5, "n": 3, "k": 4, "tile_m": 2, "tile_n": 2},
+            # Depthwise 3x3: N = 1, K = 9, one group per channel.
+            {"groups": 12, "m": 7, "n": 1, "k": 9, "tile_m": 4, "tile_n": 1, "buffer_slots": 3},
+            {"groups": 4, "m": 3, "n": 5, "k": 2, "tile_m": 3, "tile_n": 4, "buffer_slots": 1},
+        ]
+        with tempfile.TemporaryDirectory(prefix="npu-groups-") as directory:
+            for index, overrides in enumerate(cases):
+                with self.subTest(config=overrides):
+                    result = self.check_case(overrides)
+                    c = {**DEFAULTS, **overrides}
+                    self.assertEqual(result["config"]["shape"]["groups"], c["groups"])
+                    # The independent scheduler walks tiles group-major, then
+                    # row, then column; trace ids must follow the same order.
+                    oracle = timing_oracle(c)
+                    path = Path(directory) / f"groups{index}.csv"
+                    traced, _ = invoke(c, trace=path)
+                    for key in ("cycles", "peak_inflight_tiles", "slot_wait_cycles"):
+                        self.assertEqual(traced[key], oracle[key], key)
+                    records = list(csv.DictReader(path.read_text().splitlines()))
+                    parsed = [{key: value if key == "stage" else int(value)
+                               for key, value in row.items()} for row in records]
+                    self.assertEqual(parsed, oracle["trace"])
+                    self.check_trace(path.read_text(), c, traced)
+
+    def test_timing_only_reproduces_the_bit_exact_schedule(self):
+        cases = [
+            {},
+            {"groups": 3, "m": 9, "n": 5, "k": 11, "tile_m": 4, "tile_n": 2},
+            {"m": 33, "n": 17, "k": 65, "tile_m": 8, "tile_n": 8, "tile_k": 16,
+             "weight_cache_bytes": 2048, "dma_burst_bytes": 32},
+        ]
+        for overrides in cases:
+            with self.subTest(config=overrides):
+                c = {**DEFAULTS, **overrides}
+                exact, _ = invoke(c, dump=False)
+                timed, _ = invoke({**c, "timing_only": True}, dump=False)
+                self.assertEqual(exact["numerics"], "bit-exact")
+                self.assertEqual(timed["numerics"], "skipped")
+                self.assertIsNone(timed["output_hash"])
+                self.assertIsNone(timed["numerical_match"])
+                self.assertIs(timed["config"]["sim"]["timing_only"], True)
+                # Dense timing never reads tensor values.
+                for key, value in exact.items():
+                    if key not in {"numerics", "output_hash", "numerical_match",
+                                   "simulation_wall_seconds", "config"}:
+                        self.assertEqual(timed[key], value, key)
+
+    def test_timing_only_beyond_the_bit_exact_limit(self):
+        # Llama-3.2-1B FFN up-projection over a 2048-token prompt: 3.4e10 MACs.
+        c = {**DEFAULTS, "m": 2048, "n": 8192, "k": 2048, "tile_m": 128, "tile_n": 128,
+             "sram_bytes": 4 << 20, "macs_per_cycle": 1024, "memory_bytes_per_cycle": 64}
+        rejected = subprocess.run(command(c, dump=False), capture_output=True, text=True,
+                                  timeout=30)
+        self.assert_rejected(rejected, "bit-exact runs stop at 4e9 MACs")
+        self.assertIn("workload exceeds 4000000000 MACs for a bit-exact run", rejected.stderr)
+        result, _ = invoke({**c, "timing_only": True}, dump=False, timeout=120)
+        self.assertEqual(result["numerics"], "skipped")
+        self.assertEqual(result["macs"], 2048 * 8192 * 2048)
+        self.assertGreaterEqual(result["cycles"], result["macs"] // 1024)
+        self.assertGreaterEqual(result["cycles"], result["resource_lower_bound_cycles"])
+        for extra, fragment in ((["--dump-output"], "--timing-only runs without tensors"),
+                                (["--weight-encoding", "palette"], "dense weights only"),
+                                (["--k", "10001", "--m", "1000000", "--n", "1000",
+                                  "--tile-m", "1000", "--tile-n", "1000"],
+                                 "the --timing-only limit")):
+            with self.subTest(extra=extra):
+                proc = subprocess.run([str(BINARY), "--timing-only", *extra],
+                                      capture_output=True, text=True, timeout=30)
+                self.assert_rejected(proc, "timing-only misuse")
+                self.assertIn(fragment, proc.stderr)
+        with tempfile.TemporaryDirectory(prefix="npu-timing-only-") as directory:
+            path = Path(directory) / "t.npu"
+            path.write_text("NPU1 1 1 1\n0\n0\n0\n")
+            proc = subprocess.run([str(BINARY), "--timing-only", "--input", str(path)],
+                                  capture_output=True, text=True, timeout=30)
+            self.assert_rejected(proc, "--input needs a bit-exact run")
+            self.assertIn("--input and --dump-output need a bit-exact run", proc.stderr)
+
+    def test_resnet50_conv1_gemm_is_bit_exact(self):
+        # conv1 lowered to GEMM: 112*112 output pixels, 64 filters, 7*7*3 taps.
+        c = {**DEFAULTS, "m": 12544, "n": 64, "k": 147, "tile_m": 64, "tile_n": 64,
+             "macs_per_cycle": 256, "memory_bytes_per_cycle": 32}
+        result, _ = invoke(c, timeout=120)
+        self.assertIs(result["numerical_match"], True)
+        self.assertEqual(result["numerics"], "bit-exact")
+        self.assertEqual(result["macs"], 12544 * 64 * 147)
+        accumulators, outputs = result["accumulators"], result["outputs"]
+        self.assertEqual(len(outputs), 12544 * 64)
+        self.assertEqual(result["output_hash"], expected_hash(accumulators, outputs))
+        problem = fixtures(c)
+        rng = random.Random(147)
+        for _ in range(512):
+            row, channel = rng.randrange(12544), rng.randrange(64)
+            index = row * 64 + channel
+            self.assertEqual((accumulators[index], outputs[index]),
+                             output_value(c, problem, row, channel), (row, channel))
+        # A different tiling, panel depth and slot count computes the same tensor.
+        other, _ = invoke({**c, "tile_m": 8, "tile_n": 16, "tile_k": 32, "buffer_slots": 3},
+                          dump=False, timeout=120)
+        self.assertEqual(other["output_hash"], result["output_hash"])
+
+    def test_llama_gemv_runs(self):
+        # Llama-3.2-1B decode: one token through a 2048 -> 8192 projection.
+        c = {**DEFAULTS, "m": 1, "n": 8192, "k": 2048, "tile_m": 1, "tile_n": 256,
+             "sram_bytes": 4 << 20, "memory_bytes_per_cycle": 64}
+        result, _ = invoke(c, dump=False, timeout=120)
+        self.assertIs(result["numerical_match"], True)
+        self.assertEqual(result["macs"], 8192 * 2048)
+        # Every weight byte is read once: a GEMV is bound by weight traffic.
+        self.assertGreaterEqual(result["read_bytes"], 8192 * 2048)
+        timed, _ = invoke({**c, "timing_only": True}, dump=False, timeout=120)
+        self.assertEqual(timed["cycles"], result["cycles"])
+
+    def test_dimension_and_group_limits(self):
+        for arguments, fragment in [
+            (["--m", "1048577"], "matrix dimensions must be in 1..1048576"),
+            (["--groups", "0"], "groups must be in 1..1048576"),
+            (["--groups", "1024", "--n", "1025"], "groups*N and groups*K must be at most 1048576"),
+            (["--groups", "2", "--n", "1", "--k", "524289"], "groups*N and groups*K"),
+            (["--tile-m", "1048577"], "tile dimensions must be in 1..1048576"),
+        ]:
+            with self.subTest(arguments=arguments):
+                proc = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True,
+                                      timeout=15)
+                self.assert_rejected(proc, f"limit: {arguments}")
+                self.assertIn(fragment, proc.stderr)
 
     def test_frequency_changes_latency_not_cycles(self):
         slow, _ = invoke({**DEFAULTS, "frequency_mhz": 100})

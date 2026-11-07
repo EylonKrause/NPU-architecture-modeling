@@ -15,7 +15,9 @@ std::uint64_t packed_weight_bytes(const Config& config, std::uint64_t k, std::ui
 Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
                          const Problem& problem)
     : sc_module(name), config_(config), problem_(problem),
-      encoded_weights_(encode_weights(config, problem)), tiles_(make_tiles(config)),
+      encoded_weights_(config.sim.timing_only ? std::vector<EncodedWeightPanel>{} :
+                       encode_weights(config, problem)),
+      tiles_(make_tiles(config)), record_spans_(!config.sim.trace_path.empty()),
       free_slots_("free_slots", static_cast<int>(config.mapping.buffer_slots)),
       loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots)),
       computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)) {
@@ -35,11 +37,15 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
         }
         stats_.encoded_weight_storage_bytes = stats_.dense_weight_storage_bytes;
     }
-    const auto size = static_cast<std::size_t>(checked_mul(config.shape.m, config.shape.n));
-    output_.accumulators.resize(size);
-    output_.quantized.resize(size);
-    spans_.reserve(static_cast<std::size_t>(
-        checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
+    if (!config.sim.timing_only) {
+        const auto size = static_cast<std::size_t>(checked_mul(config.shape.m,
+            checked_mul(config.shape.groups, config.shape.n)));
+        output_.accumulators.resize(size);
+        output_.quantized.resize(size);
+    }
+    if (record_spans_)
+        spans_.reserve(static_cast<std::size_t>(
+            checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
     for (std::uint64_t i = 0; i < config.mapping.buffer_slots; ++i) {
         if (!free_slots_.nb_write(i)) throw std::logic_error("cannot initialize slots");
     }
@@ -159,7 +165,10 @@ void Accelerator::advance(std::uint64_t cycles) {
 
 bool Accelerator::weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes) {
     if (!config_.arch.weight_cache_bytes) return false;
-    const auto key = checked_add(checked_mul(tile.col, reduction_blocks(config_)), block);
+    // One line per (output channel panel, reduction block); channels are
+    // numbered across groups.
+    const auto channel = checked_add(checked_mul(tile.group, config_.shape.n), tile.col);
+    const auto key = checked_add(checked_mul(channel, reduction_blocks(config_)), block);
     const auto found = weight_lines_.find(key);
     if (found != weight_lines_.end()) {
         weight_lru_.splice(weight_lru_.begin(), weight_lru_, found->second);
@@ -256,7 +265,7 @@ void Accelerator::compute() {
         changed();
         // Integer arithmetic is evaluated once at the final reduction panel;
         // the timing model retains the partial-sum allocation across panels.
-        if (block + 1 == blocks) {
+        if (block + 1 == blocks && !config_.sim.timing_only) {
             if (encoded) compute_tile_encoded(problem_, config_, encoded_weights_, tile, output_);
             else compute_tile(problem_, config_.quant, tile, output_);
         }
@@ -275,7 +284,7 @@ void Accelerator::compute() {
         ++stats_.computed_panels;
         compute_busy_ = false;
         changed();
-        spans_.push_back({"compute", tile.id, start, now(), 0, block});
+        if (record_spans_) spans_.push_back({"compute", tile.id, start, now(), 0, block});
         if (block + 1 == blocks) computed_.write(tile.id);
         else panel_consumed_.notify(sc_core::SC_ZERO_TIME);
     }
@@ -320,7 +329,9 @@ void Accelerator::dma() {
         dma_busy_ = true;
         changed();
         advance(duration);
-        spans_.push_back({read ? "load" : "store", request->tile.id, start, now(), request->bytes, request->block});
+        if (record_spans_)
+            spans_.push_back({read ? "load" : "store", request->tile.id, start, now(),
+                              request->bytes, request->block});
         ++stats_.dma_requests;
         const auto burst = config_.arch.memory.burst_bytes;
         stats_.dma_bursts = checked_add(stats_.dma_bursts,

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Independent integer oracles for requantization, per-channel scales and INT4 weights.
+"""Independent integer oracles for requantization, per-channel scales, INT4 weights
+and grouped GEMM.
 
 The TOSA rescale modes are checked against TFLite MultiplyByQuantizedMultiplier
 and CMSIS-NN arm_nn_requantize, each written here from its own source (TFLite
@@ -144,7 +145,7 @@ def oracle(a, w, bias, m, n, k, input_zero, zeros, multipliers, shifts, output_z
     return accumulators, outputs
 
 
-def run_tensor(a, w, bias, m, n, k, *, zeros, multipliers, shifts,
+def run_tensor(a, w, bias, m, n, k, *, zeros, multipliers, shifts, groups=1,
                bits=8, input_zero=0, output_zero=0, relu=False, rounding="away",
                rescale_mode="native", extra=()):
     with tempfile.TemporaryDirectory() as temporary:
@@ -153,12 +154,12 @@ def run_tensor(a, w, bias, m, n, k, *, zeros, multipliers, shifts,
                         "\n".join(" ".join(map(str, values)) for values in (a, w, bias)) + "\n")
         quant_path = Path(temporary) / "quantization.npuq"
         # Keep malformed lengths malformed: the CLI must reject truncated files.
-        quant_path.write_text(f"NPUQ1 {n}\n" + "\n".join(
+        quant_path.write_text(f"NPUQ1 {groups * n}\n" + "\n".join(
             " ".join(map(str, row)) for row in zip(zeros, multipliers, shifts)) + "\n")
         command = [str(BINARY), "--input", str(path), "--dump-output", "--weight-bits", str(bits),
                    "--input-zero", str(input_zero), "--weight-zero", "0", "--output-zero", str(output_zero),
                    "--quantization-file", str(quant_path), "--rounding", rounding,
-                   "--rescale", rescale_mode, *extra]
+                   "--rescale", rescale_mode, "--groups", str(groups), *extra]
         if relu:
             command.append("--relu")
         return subprocess.run(command, capture_output=True, text=True, timeout=60)
@@ -192,6 +193,7 @@ class QuantizationChecks(unittest.TestCase):
         self.assertEqual(proc.returncode, 0, proc.stderr)
         result = json.loads(proc.stdout)
         self.assertIs(result["numerical_match"], True)
+        self.assertEqual(result["numerics"], "bit-exact")
         return result
 
     def test_known_asymmetric_channels(self):
@@ -346,9 +348,12 @@ class QuantizationChecks(unittest.TestCase):
             self.assertTrue(low <= acc < high)
             # The verified equivalences, within the oracle.
             tfl = 31 - shift
-            self.assertEqual(tflite_single(acc, multiplier, tfl), cmsis_single(acc, multiplier, tfl))
-            self.assertEqual(tflite_double(acc, multiplier, tfl), cmsis_double(acc, multiplier, tfl))
-        differ = sum(rescale("tosa-single", *case) != rescale("tosa-double", *case) for case in cases)
+            self.assertEqual(tflite_single(acc, multiplier, tfl),
+                             cmsis_single(acc, multiplier, tfl))
+            self.assertEqual(tflite_double(acc, multiplier, tfl),
+                             cmsis_double(acc, multiplier, tfl))
+        differ = sum(rescale("tosa-single", *case) != rescale("tosa-double", *case)
+                     for case in cases)
         self.assertGreater(differ, 50, "the sample must separate single from double rounding")
         unsaturated = sum(-128 <= rescale("tosa-double", *case) <= 127 for case in cases)
         self.assertGreater(unsaturated, len(cases) // 2)
@@ -369,7 +374,8 @@ class QuantizationChecks(unittest.TestCase):
             with self.subTest(shifts=shifts):
                 self.assert_rejected(run_rescale([0], [1], shifts, "tosa-single"), fragment)
         # Shift 2 accepts inputs in [-2, 2) only.
-        self.assertEqual(self.result(run_rescale([-2, 1], [1, 1], [2, 2], "tosa-single"))["outputs"],
+        edges = self.result(run_rescale([-2, 1], [1, 1], [2, 2], "tosa-single"))
+        self.assertEqual(edges["outputs"],
                          [rescale("tosa-single", -2, 1, 2), rescale("tosa-single", 1, 1, 2)])
         for acc in (2, -3):
             with self.subTest(acc=acc):
@@ -387,6 +393,62 @@ class QuantizationChecks(unittest.TestCase):
                               capture_output=True, text=True, timeout=30)
         self.assert_rejected(proc, "requantization shift must be in 2..62 for tosa-double rescale")
 
+    def test_grouped_and_depthwise_oracle(self):
+        rng = random.Random(1907)
+        cases = [dict(groups=g, m=rng.randint(1, 5), n=rng.randint(1, 4), k=rng.randint(1, 7))
+                 for g in (2, 3, 5)]
+        # Depthwise 3x3: N is the channel multiplier, K the window.
+        cases += [dict(groups=16, m=6, n=1, k=9), dict(groups=4, m=3, n=2, k=9)]
+        for index, case in enumerate(cases):
+            groups, m, n, k = case["groups"], case["m"], case["n"], case["k"]
+            channels = groups * n
+            mode = ("native", "tosa-single", "tosa-double")[index % 3]
+            a = [rng.randint(-128, 127) for _ in range(m * groups * k)]
+            w = [rng.randint(-128, 127) for _ in range(groups * k * n)]
+            bias = [rng.randint(-5000, 5000) for _ in range(channels)]
+            zeros = [rng.randint(-128, 127) for _ in range(channels)]
+            if mode == "native":
+                multipliers = [rng.randint(0, 255) for _ in range(channels)]
+                shifts = [rng.randint(8, 20) for _ in range(channels)]
+            else:
+                multipliers = [rng.randrange(1 << 30, 1 << 31) for _ in range(channels)]
+                shifts = [rng.randint(38, 45) for _ in range(channels)]
+            input_zero, output_zero = rng.randint(-128, 127), rng.randint(-20, 20)
+            relu = bool(index % 2)
+            expected = oracle(a, w, bias, m, n, k, input_zero, zeros, multipliers, shifts,
+                              output_zero, relu, groups=groups, mode=mode)
+            for tile_m, tile_n, tile_k in ((1, 1, 2), (2, 3, 0), (8, 8, 4)):
+                with self.subTest(case=case, mode=mode, tile=(tile_m, tile_n, tile_k)):
+                    proc = run_tensor(a, w, bias, m, n, k, zeros=zeros, multipliers=multipliers,
+                                      shifts=shifts, groups=groups, input_zero=input_zero,
+                                      output_zero=output_zero, relu=relu, rescale_mode=mode,
+                                      extra=["--tile-m", str(tile_m), "--tile-n", str(tile_n),
+                                             "--tile-k", str(tile_k)])
+                    result = self.result(proc)
+                    self.assertEqual((result["accumulators"], result["outputs"]), expected)
+                    self.assertEqual(result["config"]["shape"]["groups"], groups)
+                    self.assertEqual(result["macs"], m * channels * k)
+
+    def test_grouped_inputs_must_cover_every_group(self):
+        a, w, bias = [1, 2, 3, 4], [1, -1, 2, -2], [0, 0]
+        # G = 2, N = 1, K = 2: two channels need two NPUQ1 rows.
+        ok = run_tensor(a, w, bias, 1, 1, 2, zeros=[0, 0], multipliers=[1, 1], shifts=[0, 0],
+                        groups=2)
+        self.assertEqual(self.result(ok)["accumulators"], [1 * 1 + 2 * -1, 3 * 2 + 4 * -2])
+        with tempfile.TemporaryDirectory() as temporary:
+            quant = Path(temporary) / "q.npuq"
+            quant.write_text("NPUQ1 1\n0 1 0\n")
+            tensors = Path(temporary) / "t.npu"
+            tensors.write_text("NPU1 1 1 2\n1 2 3 4\n1 -1 2 -2\n0 0\n")
+            proc = subprocess.run([str(BINARY), "--input", str(tensors), "--groups", "2",
+                                   "--quantization-file", str(quant)],
+                                  capture_output=True, text=True, timeout=30)
+            self.assert_rejected(proc, "NPUQ1 G*N")
+            # One group's worth of tensors is truncated input for G = 2.
+            tensors.write_text("NPU1 1 1 2\n1 2\n1 -1\n0\n")
+            proc = subprocess.run([str(BINARY), "--input", str(tensors), "--groups", "2"],
+                                  capture_output=True, text=True, timeout=30)
+            self.assert_rejected(proc, "truncated")
 
 
 if __name__ == "__main__":

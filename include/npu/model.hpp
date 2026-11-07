@@ -50,8 +50,9 @@ public:
                 const Problem& problem);
     const Output& output() const { return output_; }
     const Statistics& statistics() const { return stats_; }
-    // Completed load, compute and store intervals. Not named trace(), which
-    // would hide sc_object::trace(sc_trace_file*).
+    // Completed load, compute and store intervals, recorded only when
+    // sim.trace_path is set. Not named trace(), which would hide
+    // sc_object::trace(sc_trace_file*).
     const std::vector<Span>& spans() const { return spans_; }
     bool completed() const { return completed_; }
     LiveSnapshot snapshot() const;
@@ -72,6 +73,8 @@ private:
     const Problem& problem_;
     std::vector<EncodedWeightPanel> encoded_weights_;
     std::vector<Tile> tiles_;
+    bool record_spans_;
+    // Empty in a --timing-only run.
     Output output_;
     Statistics stats_;
     std::vector<Span> spans_;
