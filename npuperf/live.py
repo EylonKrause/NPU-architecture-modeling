@@ -58,11 +58,17 @@ SLICE_COUNTERS = ("cycles", "compute_busy_cycles", "dma_busy_cycles")
 # Counters a slice also carries when both snapshots have them.
 SLICE_RATES = ("executed_macs", "read_bytes", "write_bytes")
 SLICE_HISTORY = 200
-# Every advance is split into sub-advances of at least this many cycles (at most
-# TIMELINE_SUBSTEPS of them) so the pipeline timeline sees stage changes inside a slice.
+# The pipeline timeline samples the stages every TIMELINE_STRIDE cycles over the last
+# TIMELINE_WINDOW cycles of an advance. A longer advance runs its earlier cycles in one
+# call and marks them unsampled, so the page never draws an unobserved interval as a stage.
 TIMELINE_STRIDE = 8
-TIMELINE_SUBSTEPS = 64
+TIMELINE_WINDOW = 512
 TIMELINE_TRANSITIONS = 512
+# Keys the live snapshot config does not echo take the behaviour of the simulator that emits
+# it: one panel buffer per slot, one group, serial memory, one core. These are the values
+# analytic.Design.from_result assumes for the same keys.
+SNAPSHOT_DEFAULTS = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
+                     "partition": "auto", "dram_bytes_per_cycle": 0}
 STAGE_KEYS = ("dma_busy", "dma_read", "dma_tile_id", "compute_busy", "compute_tile_id")
 WORKLOAD_KEYS = ("m", "n", "k", "groups", "weight_bits", "weight_encoding", "frequency_mhz")
 MACHINE_KEYS = ("source", "macs_per_cycle", "bytes_per_cycle", "ridge", "memory_model",
@@ -106,42 +112,28 @@ def stages(snapshot: dict) -> dict | None:
             "store": None if snapshot["dma_read"] else dma}
 
 
-def dma_split(before: dict, after: dict, split: list[int]) -> None:
-    """Add the DMA busy cycles between two sub-advance snapshots to ``split`` as [load,
-    store]. The snapshot gives the DMA direction only at its own instant: an interval that
-    starts and ends in one direction (or idle) goes to that direction, one that changes
-    direction is shared equally. The error is at most one sub-advance per direction change."""
-    try:
-        busy = after["dma_busy_cycles"] - before["dma_busy_cycles"]
-        ends = [("load" if s["dma_read"] else "store") if s["dma_busy"] else None
-                for s in (before, after)]
-    except (KeyError, TypeError):
-        return
-    known = {end for end in ends if end is not None}
-    if len(known) == 1:
-        split[0 if known == {"load"} else 1] += busy
-    else:
-        split[0] += busy // 2
-        split[1] += busy - busy // 2
+def profile_design(profile: str, config: object = None) -> analytic.Design:
+    """Design of ``profile`` as the simulator runs it: SNAPSHOT_DEFAULTS, then the profile's
+    flags, then every design key a snapshot ``config`` echoes."""
+    flags = {**SNAPSHOT_DEFAULTS, **sim.from_flags(PROFILE_ARGS[profile])}
+    if isinstance(config, dict):
+        for key in analytic.Design.__dataclass_fields__:
+            value = sim.config_value(config, key, None)
+            if value is not None and not isinstance(value, (dict, list)):
+                flags[key] = value
+    return analytic.Design.from_flags(flags)
 
 
 def machine_summary(profile: str, telemetry: dict) -> dict:
     """Peak rates, ridge point and analytic bound of the running design.
 
     A snapshot that echoes the complete config is read directly; an older one (shape and
-    weight format only) is completed from the profile's flags."""
-    config = telemetry.get("config")
+    weight format only) is completed by profile_design."""
     try:
         design = analytic.Design.from_result(telemetry)
         source = "snapshot"
     except (KeyError, TypeError, ValueError, AttributeError):
-        flags = sim.from_flags(PROFILE_ARGS[profile])
-        if isinstance(config, dict):
-            for key in analytic.Design.__dataclass_fields__:
-                value = sim.config_value(config, key, None)
-                if value is not None and not isinstance(value, (dict, list)):
-                    flags[key] = value
-        design = analytic.Design.from_flags(flags)
+        design = profile_design(profile, telemetry.get("config"))
         source = "profile"
     bandwidth = design.bandwidth
     summary = {"source": source, "macs_per_cycle": design.peak_macs_per_cycle,
@@ -178,7 +170,7 @@ def workload_summary(config: object) -> dict:
 def profile_bound(name: str) -> str | None:
     """Analytic bound class of a dense profile (compute, bandwidth or latency)."""
     try:
-        return analytic.analyze(analytic.Design.from_flags(sim.from_flags(PROFILE_ARGS[name]))).bound
+        return analytic.analyze(profile_design(name)).bound
     except ValueError:
         return None
 
@@ -206,6 +198,7 @@ class Controller:
         self.jobs_completed = 0
         self.total_cycles = 0
         self.total_macs = 0
+        self.total_executed_macs: int | None = 0  # None once a snapshot lacks the counter
         self.error = ""
         self.started_at: float | None = None
         self._published: dict = {}
@@ -222,7 +215,9 @@ class Controller:
         view = {"kind": "SystemC architectural simulator", "state": self.state,
                 "profile": self.profile, "slice_cycles": self.slice_cycles,
                 "jobs_completed": self.jobs_completed, "completed_job_cycles": self.total_cycles,
-                "completed_job_macs": self.total_macs, "telemetry": self.telemetry,
+                "completed_job_macs": self.total_macs,
+                "completed_job_executed_macs": self.total_executed_macs,
+                "telemetry": self.telemetry,
                 "slice": self.slice, "slices": list(self.slices),
                 "timeline": {"stride_cycles": TIMELINE_STRIDE,
                              "transitions": list(self.transitions)},
@@ -260,34 +255,37 @@ class Controller:
                 fixture.cleanup()
         self.started_at = time.monotonic()
 
-    def _record_stages(self, snapshot: dict) -> None:
+    def _record_stages(self, snapshot: dict, unsampled_from: int | None = None) -> None:
+        """Append the snapshot's stages when they changed. ``unsampled_from`` is the cycle
+        of the previous snapshot when the advance in between was not sampled; that
+        transition is always recorded so the page can show the gap."""
         current = stages(snapshot)
         if current is None:
             return
         job = self.jobs_completed + 1
         last = self.transitions[-1] if self.transitions else None
-        if last is None or last["job"] != job or any(last[k] != v for k, v in current.items()):
-            self.transitions.append({"job": job, "cycle": snapshot.get("cycles"), **current})
+        entry = {"job": job, "cycle": snapshot.get("cycles"), **current}
+        if unsampled_from is not None:
+            self.transitions.append({**entry, "unsampled_from": unsampled_from})
+        elif last is None or last["job"] != job or any(last[k] != v for k, v in current.items()):
+            self.transitions.append(entry)
 
     def _advance(self, cycles: int) -> None:
         if self.session is None:
             raise LiveError("Start a workload before advancing the simulator.")
         start = value = self.telemetry
-        stride = max(TIMELINE_STRIDE, -(-cycles // TIMELINE_SUBSTEPS))
         remaining = cycles
-        split = [0, 0]  # DMA busy cycles attributed to loads and to stores
+        if remaining > TIMELINE_WINDOW and not value.get("completed", False):
+            value = self.session.advance(remaining - TIMELINE_WINDOW)
+            remaining = TIMELINE_WINDOW
+            self._record_stages(value, unsampled_from=start.get("cycles"))
         while remaining > 0 and not value.get("completed", False):
-            step = min(stride, remaining)
-            before, value = value, self.session.advance(step)
+            step = min(TIMELINE_STRIDE, remaining)
+            value = self.session.advance(step)
             remaining -= step
             self._record_stages(value)
-            dma_split(before, value, split)
         self.slice = slice_delta(start, value)
         if self.slice is not None:
-            if stages(start) is not None and split[0] + split[1] == self.slice["dma_busy_cycles"]:
-                for name, busy in zip(("dma_read", "dma_write"), split):
-                    self.slice[f"{name}_busy_cycles"] = busy
-                    self.slice[f"{name}_busy_fraction"] = busy / self.slice["cycles"]
             self.slices.append({"job": self.jobs_completed + 1, "end_cycle": value["cycles"],
                                 **self.slice})
         self.telemetry = value
@@ -297,6 +295,10 @@ class Controller:
             self.jobs_completed += 1
             self.total_cycles += value["cycles"]
             self.total_macs += value["macs"]
+            executed = value.get("executed_macs")
+            self.total_executed_macs = (self.total_executed_macs + executed
+                                        if _count(executed) and self.total_executed_macs is not None
+                                        else None)
             self.history.appendleft({"job": self.jobs_completed, "profile": self.profile,
                                      "telemetry": value})
 
@@ -350,6 +352,7 @@ class Controller:
                     self.profile = command.get("profile", self.profile)
                     self.error = ""
                     self.jobs_completed = self.total_cycles = self.total_macs = 0
+                    self.total_executed_macs = 0
                     self.history.clear()
                     self.slices.clear()
                     self.transitions.clear()

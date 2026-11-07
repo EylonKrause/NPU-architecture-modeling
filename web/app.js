@@ -4,7 +4,8 @@
 //   workload   shape and weight format resolved from the snapshot config
 //   machine    peak rates, ridge point and analytic bound of the running design
 //   slices     counter deltas over the last advances (strip chart)
-//   timeline   stage transitions sampled inside each advance (pipeline chart)
+//   timeline   stage transitions sampled inside each advance (pipeline chart); a
+//              transition with unsampled_from ends an interval that was not sampled
 // Each panel renders only from fields that are present; a missing field shows as a dash.
 
 const $ = id => document.getElementById(id);
@@ -83,13 +84,28 @@ function tip(item, label) {
   return item;
 }
 
+// Keep a left-anchored label left of `right`; one that would cross it is anchored at its
+// end on `fallback` instead (never left of `left`).
+function inside(label, left, right, fallback) {
+  let length = 0;
+  try { length = label.getComputedTextLength(); } catch (error) { length = 0; }
+  if (length && Number(label.getAttribute("x")) + length > right) {
+    label.setAttribute("x", Math.max(left + length, fallback));
+    label.setAttribute("text-anchor", "end");
+  }
+  return label;
+}
+
 // Derived job metrics
 
+// macRate counts every MAC of the workload (roofline position); executedRate counts the
+// MACs the array ran, which is what "% of peak" compares with the array's peak.
 function jobMetrics(t) {
   const traffic = isNum(t.read_bytes) && isNum(t.write_bytes) ? t.read_bytes + t.write_bytes : null;
   return {
     cycles: t.cycles,
     macRate: ratio(t.macs, t.cycles),
+    executedRate: ratio(t.executed_macs, t.cycles),
     dramBytes: traffic,
     dramRate: ratio(traffic, t.cycles),
     intensity: ratio(t.macs, traffic),
@@ -173,7 +189,7 @@ function renderKpis(value) {
 
   $("kpi-mac-rate").textContent = sig(job.macRate);
   text("kpi-mac-peak", isNum(machine.macs_per_cycle)
-    ? `${percent(ratio(job.macRate, machine.macs_per_cycle))} of ${machine.macs_per_cycle} peak` : "—");
+    ? `${percent(ratio(job.executedRate, machine.macs_per_cycle))} of ${machine.macs_per_cycle} peak` : "—");
 
   text("kpi-dram-rate", sig(job.dramRate));
   text("kpi-dram-peak", isNum(machine.bytes_per_cycle)
@@ -196,13 +212,14 @@ function renderKpis(value) {
   const last = (value.recent_jobs || [])[0];
   if (analysis) {
     text("kpi-bound", BOUND_NAMES[analysis.bound] || analysis.bound);
-    const attained = last ? ratio(analysis.resource_bound_cycles, last.telemetry.cycles) : null;
-    text("kpi-bound-detail", `${int(analysis.resource_bound_cycles)} cyc` +
-      (attained === null ? " analytic" : ` · ${percent(attained)} attained`));
+    const attained = last ? ratio(analysis.lower_bound_cycles, last.telemetry.cycles) : null;
+    text("kpi-bound-detail", `${int(analysis.lower_bound_cycles)} cyc` +
+      (attained === null ? " lower bound" : ` · ${percent(attained)} attained`));
   } else if (isNum(t.compute_busy_cycles) && isNum(t.dma_busy_cycles) && t.cycles > 0) {
-    text("kpi-bound", t.compute_busy_cycles >= t.dma_busy_cycles ? "compute" : "DMA");
-    text("kpi-bound-detail", `measured · MAC ${percent(t.compute_busy_cycles / t.cycles, 0)}` +
-      ` DMA ${percent(t.dma_busy_cycles / t.cycles, 0)}`);
+    // No analytic model for this design: report busy fractions, not a bound class.
+    text("kpi-bound", "—");
+    text("kpi-bound-detail", `no analytic bound · MAC ${percent(t.compute_busy_cycles / t.cycles, 0)}` +
+      ` DMA ${percent(t.dma_busy_cycles / t.cycles, 0)} busy`);
   } else {
     text("kpi-bound", "—");
     text("kpi-bound-detail", "—");
@@ -231,9 +248,9 @@ function renderRoofline(value) {
   const t = value.telemetry || {};
   const current = jobMetrics(t);
   const done = (value.recent_jobs || []).map(job => ({job: job.job, ...jobMetrics(job.telemetry)}));
-  const boundPoint = analysis && isNum(analysis.resource_bound_cycles) && totalMacs(value.workload || {})
+  const boundPoint = analysis && isNum(analysis.lower_bound_cycles) && totalMacs(value.workload || {})
     ? {intensity: analysis.arithmetic_intensity,
-       macRate: totalMacs(value.workload) / analysis.resource_bound_cycles}
+       macRate: totalMacs(value.workload) / analysis.lower_bound_cycles}
     : null;
 
   const points = [...done, current, boundPoint].filter(p => p && isNum(p.intensity) && isNum(p.macRate)
@@ -298,7 +315,7 @@ function renderRoofline(value) {
     const x = sx(boundPoint.intensity), y = sy(boundPoint.macRate);
     tip(node("path", {d: `M${x},${y - 5.5}L${x + 5.5},${y}L${x},${y + 5.5}L${x - 5.5},${y}Z`,
                       class: "point-bound"}, svg),
-        `analytic bound: ${sig(boundPoint.macRate)} MAC/cycle`);
+        `analytic lower bound: ${sig(boundPoint.macRate)} MAC/cycle`);
   }
   if (points.includes(current))
     tip(node("circle", {cx: sx(current.intensity), cy: sy(current.macRate), r: 5, class: "point-current"}, svg),
@@ -312,10 +329,11 @@ function renderRoofline(value) {
 
 // Utilisation strip chart over the last STRIP_SLOTS slices.
 
+// The snapshot counts DMA busy cycles for loads and stores together, so the chart shows the
+// total; a load/store split sampled from the DMA direction would be an estimate.
 const STRIP_SERIES = [
-  {key: "compute_busy_fraction", className: "series-mac", legend: "strip-mac"},
-  {key: "dma_read_busy_fraction", className: "series-read", legend: "strip-read"},
-  {key: "dma_write_busy_fraction", className: "series-write", legend: "strip-write"},
+  {key: "compute_busy_fraction", className: "series-mac", legend: "strip-mac", name: "MAC"},
+  {key: "dma_busy_fraction", className: "series-dma", legend: "strip-dma", name: "DMA"},
 ];
 
 function renderStrip(value) {
@@ -338,12 +356,15 @@ function renderStrip(value) {
     empty(svg, width, height, "no slices yet");
     for (const series of STRIP_SERIES) text(series.legend, "—");
     text("strip-meta", `last ${STRIP_SLOTS} slices`);
+    svg.setAttribute("aria-label", "Utilisation per slice: no slices yet");
+    svg.onmousemove = svg.onmouseleave = svg.onkeydown = svg.onblur = null;
     return;
   }
   slices.forEach((slice, index) => {
     if (index && slice.job !== slices[index - 1].job) {
       node("line", {x1: sx(index), x2: sx(index), y1: pad.top, y2: pad.top + plotH, class: "job-edge"}, svg);
-      node("text", {x: sx(index) + 3, y: pad.top + 9}, svg, `job ${slice.job}`);
+      inside(node("text", {x: sx(index) + 3, y: pad.top + 9}, svg, `job ${slice.job}`),
+             pad.left, pad.left + plotW, sx(index) - 3);
     }
   });
   for (const series of STRIP_SERIES) {
@@ -376,30 +397,54 @@ function renderStrip(value) {
     node("line", {x1: sx(index + 0.5), x2: sx(index + 0.5), y1: pad.top, y2: pad.top + plotH, class: "cursor"}, svg);
   }
   for (const series of STRIP_SERIES) text(series.legend, percent(shown[series.key]));
-  text("strip-meta", `job ${shown.job} · cycles ${int(shown.end_cycle - shown.cycles)}–${int(shown.end_cycle)}` +
-    ` · line: ${STRIP_MEAN}-slice mean`);
+  const span = `job ${shown.job} · cycles ${int(shown.end_cycle - shown.cycles)}–${int(shown.end_cycle)}`;
+  text("strip-meta", `${span} · line: ${STRIP_MEAN}-slice mean`);
+  svg.setAttribute("aria-label", `Utilisation per slice, ${span}: ` +
+    STRIP_SERIES.map(series => `${series.name} ${percent(shown[series.key])} busy`).join(", ") +
+    ". Left and right arrows select a slice.");
 
-  svg.onmousemove = event => {
-    const box = svg.getBoundingClientRect();
-    const x = (event.clientX - box.left) * width / box.width;
-    const index = Math.floor((x - pad.left) / step) - offset;
-    const next = index >= 0 && index < slices.length ? index : null;
+  const select = next => {
     if (next !== stripHover) {
       stripHover = next;
       renderStrip(state);
     }
   };
-  svg.onmouseleave = () => {
-    stripHover = null;
-    renderStrip(state);
+  svg.onmousemove = event => {
+    const box = svg.getBoundingClientRect();
+    const x = (event.clientX - box.left) * width / box.width;
+    const index = Math.floor((x - pad.left) / step) - offset;
+    select(index >= 0 && index < slices.length ? index : null);
+  };
+  svg.onmouseleave = svg.onblur = () => select(null);
+  // Keyboard readout: the arrows move the selected slice; End, Escape or stepping past the
+  // last slice return to following the newest one.
+  svg.onkeydown = event => {
+    const lastIndex = slices.length - 1;
+    const at = stripHover === null ? lastIndex : stripHover;
+    const moves = {ArrowLeft: Math.max(0, at - 1), ArrowRight: at + 1, Home: 0, End: lastIndex,
+                   Escape: lastIndex};
+    if (!(event.key in moves)) return;
+    event.preventDefault();
+    const next = moves[event.key];
+    select(next >= lastIndex ? null : next);
   };
 }
 
 // Pipeline timeline: one lane per stage, one segment per tile, from stage transitions.
 
+// A stage holds a tile from the sample that first shows it to the sample that shows a change.
+// At an unsampled interval every open segment ends where the interval starts and the next
+// sample opens new ones, so nothing is drawn where the stages were not observed.
 function segments(transitions, now) {
-  const open = {}, result = [];
+  const open = {}, result = [], gaps = [];
   for (const transition of transitions) {
+    if (isNum(transition.unsampled_from)) {
+      gaps.push({start: transition.unsampled_from, end: transition.cycle});
+      for (const stage of STAGES) {
+        if (open[stage]) result.push({...open[stage], end: transition.unsampled_from, cut: true});
+        open[stage] = null;
+      }
+    }
     for (const stage of STAGES) {
       const tile = transition[stage];
       const current = open[stage];
@@ -409,7 +454,8 @@ function segments(transitions, now) {
     }
   }
   for (const stage of STAGES) if (open[stage]) result.push({...open[stage], end: now, open: true});
-  return result.filter(segment => isNum(segment.start) && isNum(segment.end) && segment.end > segment.start);
+  const valid = item => isNum(item.start) && isNum(item.end) && item.end > item.start;
+  return {segments: result.filter(valid), gaps: gaps.filter(valid)};
 }
 
 function renderGantt(value) {
@@ -419,16 +465,25 @@ function renderGantt(value) {
   const job = currentJob(value);
   const transitions = (Array.isArray(timeline.transitions) ? timeline.transitions : [])
     .filter(transition => transition.job === job);
-  const all = isNum(t.cycles) ? segments(transitions, t.cycles) : [];
+  const {segments: all, gaps} = isNum(t.cycles) ? segments(transitions, t.cycles)
+    : {segments: [], gaps: []};
   if (!all.length) {
     empty(svg, width, height, transitions.length ? "pipeline idle" : "no stage samples");
     text("gantt-meta", "");
+    $("gantt-legend").hidden = true;
     return;
   }
-  const recent = [...new Set(all.map(segment => segment.tile))].sort((a, b) => b - a).slice(0, GANTT_TILES);
+  // After an unsampled interval the chart shows the sampled cycles that follow it, with a
+  // sliver of the hatched interval on the left; earlier tiles would squeeze them flat.
+  const lastGap = gaps.length ? gaps[gaps.length - 1] : null;
+  const sampled = lastGap ? all.filter(segment => segment.start >= lastGap.end) : [];
+  const pool = sampled.length ? sampled : all;
+  const recent = [...new Set(pool.map(segment => segment.tile))].sort((a, b) => b - a).slice(0, GANTT_TILES);
   const oldest = Math.min(...recent);
-  const visible = all.filter(segment => segment.tile >= oldest);
-  const start = Math.min(...visible.map(segment => segment.start));
+  const visible = pool.filter(segment => segment.tile >= oldest);
+  let start = Math.min(...visible.map(segment => segment.start));
+  if (sampled.length && start <= lastGap.end)
+    start = Math.max(lastGap.start, lastGap.end - Math.max(16, (t.cycles - lastGap.end) / 16));
   const end = Math.max(t.cycles, start + 32);
 
   const pad = {left: 56, right: 8, top: 4, bottom: 20};
@@ -436,31 +491,46 @@ function renderGantt(value) {
   const plotW = width - pad.left - pad.right;
   const sx = cycle => pad.left + (cycle - start) / (end - start) * plotW;
 
+  const hatch = node("pattern", {id: "unsampled-hatch", width: 6, height: 6,
+                                 patternUnits: "userSpaceOnUse", patternTransform: "rotate(45)"},
+                     node("defs", {}, svg));
+  node("line", {x1: 0, y1: 0, x2: 0, y2: 6, class: "hatch"}, hatch);
   STAGES.forEach((stage, lane) => {
     const y = pad.top + lane * laneH;
     node("rect", {x: pad.left, y: y + 2, width: plotW, height: laneH - 4, class: "lane"}, svg);
     node("text", {x: 0, y: y + laneH / 2 + 3.5}, svg, stage);
   });
+  const shownGaps = gaps.filter(gap => gap.end > start);
+  for (const gap of shownGaps) {
+    const x = sx(Math.max(start, gap.start));
+    tip(node("rect", {x, y: pad.top + 2, width: Math.max(1, sx(gap.end) - x),
+                      height: STAGES.length * laneH - 4, class: "unsampled"}, svg),
+        `cycles ${int(gap.start)}–${int(gap.end)}: not sampled`);
+  }
   for (const segment of visible) {
     const lane = STAGES.indexOf(segment.stage);
     const x = sx(Math.max(start, segment.start));
     const w = Math.max(1, sx(segment.end) - x - 1);
     const y = pad.top + lane * laneH + 2;
-    const block = node("rect", {x, y, width: w, height: laneH - 4,
-                                class: `seg-${segment.stage}${segment.tile % 2 ? " seg-odd" : ""}`}, svg);
+    const block = node("rect", {x, y, width: w, height: laneH - 4, class: `seg-${segment.stage}`}, svg);
+    const until = segment.open ? ", in progress" : segment.cut ? ", then not sampled" : "";
     tip(block, `tile ${segment.tile} ${segment.stage}: cycles ${int(segment.start)}–${int(segment.end)}` +
-      ` (${int(segment.end - segment.start)})${segment.open ? ", in progress" : ""}`);
+      ` (${int(segment.end - segment.start)})${until}`);
     if (w >= 22) node("text", {x: x + w / 2, y: y + laneH / 2 + 1.5, "text-anchor": "middle",
-                               class: "seg-label"}, svg, String(segment.tile));
+                               class: `seg-label ink-${segment.stage}`}, svg, String(segment.tile));
   }
   node("line", {x1: sx(t.cycles), x2: sx(t.cycles), y1: pad.top, y2: height - pad.bottom, class: "now"}, svg);
   const span = end - start;
   const tick = 10 ** Math.floor(Math.log10(span / 4));
   const unit = [1, 2, 5, 10].map(f => f * tick).find(u => span / u <= 6) || tick * 10;
-  for (let c = Math.ceil(start / unit) * unit; c <= end; c += unit)
-    node("text", {x: sx(c), y: height - 5, "text-anchor": "middle"}, svg, int(c));
+  for (let c = Math.ceil(start / unit) * unit; c <= end; c += unit) {
+    // A tick at the plot's right edge is anchored there so it stays inside the panel.
+    const anchor = sx(c) > pad.left + plotW - 24 ? "end" : "middle";
+    node("text", {x: sx(c), y: height - 5, "text-anchor": anchor}, svg, int(c));
+  }
   const stride = isNum(timeline.stride_cycles) ? ` · ${timeline.stride_cycles}-cycle samples` : "";
   text("gantt-meta", `job ${job} · tiles ${oldest}–${Math.max(...recent)} · cycles ${int(start)}–${int(t.cycles)}${stride}`);
+  $("gantt-legend").hidden = !shownGaps.length;
 }
 
 // Output tile map, coloured by stage.
@@ -556,17 +626,18 @@ function renderJobs(value) {
   body.replaceChildren(...recent.map(job => {
     const t = job.telemetry;
     const metrics = jobMetrics(t);
-    const bound = analysis ? ratio(analysis.resource_bound_cycles, t.cycles) : null;
+    const bound = analysis ? ratio(analysis.lower_bound_cycles, t.cycles) : null;
     return cellRow([
       String(job.job), int(t.cycles), fixed(ratio(t.cycles, clock), 2), sig(metrics.macRate),
-      percent(ratio(metrics.macRate, machine.macs_per_cycle)), bound === null ? "—" : percent(bound),
+      percent(ratio(metrics.executedRate, machine.macs_per_cycle)), bound === null ? "—" : percent(bound),
       int(metrics.dramBytes), sig(metrics.dramRate), t.validated === true ? "bit-exact" : "—",
     ], ["", "", "", "", "", "", "", "", "pass"]);
   }));
   const cycles = value.completed_job_cycles, macs = value.completed_job_macs;
+  const executed = value.completed_job_executed_macs;
   foot.replaceChildren(cellRow([
     `all ${int(value.jobs_completed)}`, int(cycles), "", sig(ratio(macs, cycles)),
-    percent(ratio(ratio(macs, cycles), machine.macs_per_cycle)), "", "", "", "",
+    percent(ratio(ratio(executed, cycles), machine.macs_per_cycle)), "", "", "", "",
   ]));
   text("jobs-meta", `last ${recent.length} · ${value.profile}`);
 }

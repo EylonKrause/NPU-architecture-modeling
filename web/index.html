@@ -60,7 +60,7 @@
       <span class="sub" id="kpi-ridge">—</span>
     </div>
     <div class="kpi">
-      <span class="label">Bound</span>
+      <span class="label" title="Analytic lower bound in cycles; attained is that bound over the last completed job's cycles">Bound</span>
       <span class="value" id="kpi-bound">—</span>
       <span class="sub" id="kpi-bound-detail">—</span>
     </div>
@@ -80,16 +80,15 @@
         <li id="legend-effective"><i class="key line-effective"></i>latency-inclusive DRAM roof</li>
         <li><i class="key dot-current"></i>current job</li>
         <li><i class="key dot-done"></i>completed jobs</li>
-        <li id="legend-bound"><i class="key dot-bound"></i>analytic bound</li>
+        <li id="legend-bound"><i class="key dot-bound"></i>analytic lower bound</li>
       </ul>
     </figure>
     <figure class="panel">
       <figcaption><h2>Utilisation</h2><span class="meta" id="strip-meta"></span></figcaption>
-      <svg id="strip" class="chart" role="img" aria-label="Utilisation per slice"></svg>
+      <svg id="strip" class="chart" role="img" tabindex="0" aria-label="Utilisation per slice"></svg>
       <ul class="legend">
         <li><i class="key series-mac"></i>MAC array busy <b id="strip-mac">—</b></li>
-        <li><i class="key series-read"></i>DMA read busy <b id="strip-read">—</b></li>
-        <li><i class="key series-write"></i>DMA write busy <b id="strip-write">—</b></li>
+        <li><i class="key series-dma"></i>DMA busy, loads and stores <b id="strip-dma">—</b></li>
       </ul>
     </figure>
   </section>
@@ -98,6 +97,9 @@
     <figure class="panel">
       <figcaption><h2>Pipeline</h2><span class="meta" id="gantt-meta"></span></figcaption>
       <svg id="gantt" class="chart" role="img" aria-label="Pipeline timeline"></svg>
+      <ul class="legend" id="gantt-legend" hidden>
+        <li><i class="key cell unsampled"></i>not sampled: cycles a long step ran in one advance</li>
+      </ul>
     </figure>
     <figure class="panel">
       <figcaption><h2>Output tiles</h2><span class="meta" id="tiles-meta"></span></figcaption>

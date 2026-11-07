@@ -1,4 +1,7 @@
-/* npu-sim live. Tokens first; dark values replace them under prefers-color-scheme. */
+/* npu-sim live. Tokens first; dark values replace them under prefers-color-scheme.
+   Contrast (WCAG 2.2): text tokens reach 4.5:1 on --bg and --panel; chart marks reach 3:1
+   on --panel and on the lanes (--bg); --ink-* is the tile-number colour on each stage's bar
+   (4.5:1); white on --accent-fill is 4.5:1. */
 
 :root {
   color-scheme: light;
@@ -8,11 +11,15 @@
   --rule-soft: #ecebe7;
   --text: #1b1b1a;
   --muted: #62615c;
-  --faint: #8e8c85;
-  --accent: #2a78d6;
+  --faint: #6f6d66;
+  --accent: #2470cc;
+  --accent-fill: #2470cc;
   --accent-tint: #c9dcf4;
-  --series-read: #eb6834;
-  --series-write: #1baf7a;
+  --series-read: #e2622f;
+  --series-write: #169a6f;
+  --ink-load: #1b1b1a;
+  --ink-compute: #ffffff;
+  --ink-store: #1b1b1a;
   --cell: #e6e5e0;
   --cell-done: #9c9a93;
   --error: #c4332f;
@@ -30,11 +37,15 @@
     --rule-soft: #262624;
     --text: #ecebe6;
     --muted: #a5a39b;
-    --faint: #75736c;
+    --faint: #8a8880;
     --accent: #3987e5;
+    --accent-fill: #2b6cc4;
     --accent-tint: #24405f;
     --series-read: #d95926;
     --series-write: #199e70;
+    --ink-load: #111111;
+    --ink-compute: #111111;
+    --ink-store: #111111;
     --cell: #2b2b28;
     --cell-done: #6d6b65;
     --error: #ec6a66;
@@ -100,11 +111,11 @@ select { padding: 0 6px; }
 button { cursor: pointer; }
 button:hover:not(:disabled), select:hover:not(:disabled) { border-color: var(--faint); }
 button:disabled, select:disabled { color: var(--faint); cursor: default; }
-button:focus-visible, select:focus-visible, summary:focus-visible {
+button:focus-visible, select:focus-visible, summary:focus-visible, .chart:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
-#start:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #fff; }
+#start:not(:disabled) { background: var(--accent-fill); border-color: var(--accent-fill); color: #fff; }
 
 .joined { display: inline-flex; }
 .joined button { border-radius: 4px 0 0 4px; }
@@ -238,8 +249,9 @@ figcaption, .caption {
 .key.line-roof { border-color: var(--text); }
 .key.line-effective { border-top-style: dashed; border-color: var(--muted); }
 .key.series-mac { border-color: var(--accent); }
-.key.series-read { border-color: var(--series-read); }
-.key.series-write { border-color: var(--series-write); }
+.key.series-dma { border-color: var(--series-read); }
+.key.cell.unsampled { border: 1px solid var(--faint); background: repeating-linear-gradient(
+  45deg, var(--faint) 0 1px, transparent 1px 4px); }
 .key[class*="dot-"] { width: 8px; height: 8px; border: 0; border-radius: 50%; }
 .key.dot-current { background: var(--accent); }
 .key.dot-done { border: 1.5px solid var(--muted); }
@@ -261,16 +273,19 @@ svg .point-bound { fill: none; stroke: var(--accent); stroke-width: 1.5; }
 svg .series { fill: none; stroke-width: 1.75; stroke-linejoin: round; }
 svg .series.raw { stroke-width: 1; stroke-opacity: 0.3; }
 svg .series-mac { stroke: var(--accent); }
-svg .series-read { stroke: var(--series-read); }
-svg .series-write { stroke: var(--series-write); }
+svg .series-dma { stroke: var(--series-read); }
 svg .job-edge { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 2 2; }
 svg .cursor { stroke: var(--faint); stroke-width: 1; }
 svg .lane { fill: var(--bg); }
 svg .seg-load { fill: var(--series-read); }
 svg .seg-compute { fill: var(--accent); }
 svg .seg-store { fill: var(--series-write); }
-svg .seg-odd { fill-opacity: 0.68; }
-svg .seg-label { font-size: 9.5px; fill: #fff; }
+svg .seg-label { font-size: 9.5px; }
+svg .ink-load { fill: var(--ink-load); }
+svg .ink-compute { fill: var(--ink-compute); }
+svg .ink-store { fill: var(--ink-store); }
+svg .unsampled { fill: url(#unsampled-hatch); stroke: var(--faint); stroke-width: 1; }
+svg .hatch { stroke: var(--faint); stroke-width: 1; }
 svg .now { stroke: var(--text); stroke-width: 1; }
 svg .empty { font: 11px var(--sans); fill: var(--faint); }
 .tile-pending { fill: var(--cell); }
@@ -346,7 +361,11 @@ table.data td.empty { text-align: left; color: var(--faint); font-family: var(--
   .kpi:nth-child(4) { border-left: 0; }
   .kpi:nth-child(n + 4) { border-top: 1px solid var(--rule-soft); }
   .row-a, .row-b, .row-c { grid-template-columns: minmax(0, 1fr); }
-  .ident { flex-direction: column; gap: 0; }
+  /* Column layout: stretch the title block to the bar so the machine line ellipsizes
+     instead of widening the page. */
+  .ident { flex-direction: column; align-items: stretch; align-self: stretch; gap: 0;
+           width: 100%; min-width: 0; }
+  .machine { max-width: 100%; }
 }
 
 @media (max-width: 560px) {
@@ -356,4 +375,5 @@ table.data td.empty { text-align: left; color: var(--faint); font-family: var(--
   .kpi:nth-child(even) { border-left: 1px solid var(--rule-soft); }
   .counters, .preview-grid { grid-template-columns: minmax(0, 1fr); }
   #profile { min-width: 0; flex: 1 1 100%; }
+  .machine, .kpi .sub { white-space: normal; overflow-wrap: anywhere; }
 }

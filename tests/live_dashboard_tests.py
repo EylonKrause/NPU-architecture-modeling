@@ -86,6 +86,8 @@ class DashboardTests(unittest.TestCase):
             self.assertTrue(result["output_hash"].isdigit())
         self.assertNotEqual(first["telemetry"]["output_hash"], second["telemetry"]["output_hash"])
         self.assertEqual(state["completed_job_cycles"], sum(j["telemetry"]["cycles"] for j in (first, second)))
+        self.assertEqual(state["completed_job_executed_macs"],
+                         sum(j["telemetry"]["executed_macs"] for j in (first, second)))
         reset = self.controller.control({"action": "reset", "profile": "memory-bound"})
         self.assertEqual(reset["jobs_completed"], 0)
         self.assertEqual(reset["telemetry"]["cycles"], 0)
@@ -99,7 +101,17 @@ class DashboardTests(unittest.TestCase):
                 if state["jobs_completed"]:
                     break
             self.assertEqual(state["jobs_completed"], 1, profile)
-            self.assertTrue(state["recent_jobs"][0]["telemetry"]["validated"], profile)
+            result = state["recent_jobs"][0]["telemetry"]
+            self.assertTrue(result["validated"], profile)
+            analysis = state["machine"]["analysis"]
+            if analysis is None:
+                continue
+            # A lower bound of the simulated machine: no run may beat it.
+            self.assertGreaterEqual(result["cycles"], analysis["lower_bound_cycles"], profile)
+            if profile == "compute-bound" and state["machine"]["source"] == "profile":
+                # This simulator (one panel buffer per slot) meets the bound exactly on the
+                # compute-bound profile; a two-buffer design would claim fewer cycles.
+                self.assertEqual(result["cycles"], analysis["lower_bound_cycles"])
 
     def test_palette_decode_varies_inputs_and_cleans_fixture(self):
         self.controller.control({"action": "reset", "profile": "palette-weights"})
@@ -183,22 +195,28 @@ class DashboardTests(unittest.TestCase):
         self.assertIn("macs_per_cycle", machine)
         self.assertLessEqual(machine, set(dashboard.MACHINE_KEYS))
         analysis = set(re.findall(r"\banalysis[.](\w+)", script))
-        self.assertIn("resource_bound_cycles", analysis)
+        self.assertIn("lower_bound_cycles", analysis)
+        self.assertNotIn("resource_bound_cycles", analysis)
         self.assertLessEqual(analysis, set(dashboard.ANALYSIS_KEYS))
 
         self.controller.control({"action": "reset", "profile": "balanced"})
         state = self.controller.control({"action": "step", "cycles": 300})
         slice_keys = set(state["slices"][-1])
         series = set(re.findall(r'key: "(\w+)", className', script))
-        self.assertEqual(series, {"compute_busy_fraction", "dma_read_busy_fraction",
-                                  "dma_write_busy_fraction"})
+        self.assertEqual(series, {"compute_busy_fraction", "dma_busy_fraction"})
         self.assertLessEqual(series | set(re.findall(r"\bslice[.](\w+)", script)), slice_keys)
-        self.assertEqual(set(re.findall(r"\btransition[.](\w+)", script)), {"job", "cycle"})
+        self.assertEqual(set(re.findall(r"\btransition[.](\w+)", script)),
+                         {"job", "cycle", "unsampled_from"})
         self.assertIn('const STAGES = ["load", "compute", "store"];', script)
         self.assertLessEqual({"job", "cycle", "load", "compute", "store"},
                              set(state["timeline"]["transitions"][-1]))
-        for key in ("slices", "timeline", "machine", "max_step"):
+        for key in ("slices", "timeline", "machine", "max_step", "completed_job_executed_macs"):
             self.assertIn(f"value.{key}", script)
+            self.assertIn(key, state)
+        # "% of peak" divides executed MACs by the array peak; the roofline keeps all MACs.
+        self.assertIn("executedRate: ratio(t.executed_macs, t.cycles)", script)
+        self.assertEqual(len(re.findall(r"ratio\(\w+[.]executedRate, machine[.]macs_per_cycle\)",
+                                        script)), 2)
 
     def test_machine_slices_and_timeline(self):
         state = self.controller.control({"action": "reset", "profile": "balanced"})
@@ -209,16 +227,21 @@ class DashboardTests(unittest.TestCase):
         machine = state["machine"]
         self.assertEqual(set(machine), set(dashboard.MACHINE_KEYS))
         self.assertEqual(set(machine["analysis"]), set(dashboard.ANALYSIS_KEYS))
-        design = analytic.Design.from_flags(sim.from_flags(dashboard.PROFILE_ARGS["balanced"]))
+        # The snapshot config echoes the shape only, so the design comes from the profile
+        # with the simulator's single panel buffer per slot.
+        self.assertEqual(machine["source"], "profile")
+        design = analytic.Design.from_flags({**sim.from_flags(dashboard.PROFILE_ARGS["balanced"]),
+                                             "panel_buffers": 1})
         expected = analytic.analyze(design)
         self.assertEqual((machine["macs_per_cycle"], machine["bytes_per_cycle"], machine["ridge"]),
                          (64, 16.0, 4.0))
-        self.assertEqual(machine["analysis"]["resource_bound_cycles"],
-                         expected.resource_bound_cycles)
+        for key in ("lower_bound_cycles", "resource_bound_cycles", "estimate_cycles"):
+            self.assertEqual(machine["analysis"][key], getattr(expected, key), key)
         self.assertEqual(machine["analysis"]["bound"], expected.bound)
         self.assertEqual(machine["analysis"]["effective_bytes_per_cycle"],
                          expected.dram_bytes / expected.memory_cycles)
 
+        self.assertEqual(state["timeline"]["stride_cycles"], dashboard.TIMELINE_STRIDE)
         for cycles in (300, 1, 2000):
             before = state["telemetry"]
             state = self.controller.control({"action": "step", "cycles": cycles})
@@ -228,12 +251,25 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(last["cycles"], cycles)
             for key in ("executed_macs", "read_bytes", "write_bytes"):
                 self.assertEqual(last[key], state["telemetry"][key] - before[key])
-            # The load/store split covers every DMA busy cycle of the slice.
-            self.assertEqual(last["dma_read_busy_cycles"] + last["dma_write_busy_cycles"],
-                             last["dma_busy_cycles"])
-            for name in ("dma_read", "dma_write"):
-                self.assertEqual(last[f"{name}_busy_fraction"],
-                                 last[f"{name}_busy_cycles"] / cycles)
+            # The snapshot has no per-direction DMA counters, so a slice carries none.
+            self.assertFalse({"dma_read_busy_cycles", "dma_write_busy_cycles"} & set(last))
+            # Sampled transitions sit on a stride grid from the start of the sampled window
+            # (the step's last cycle may close a shorter sample); the cycles before that
+            # window are one unsampled interval.
+            window_start = max(before["cycles"], state["telemetry"]["cycles"]
+                               - dashboard.TIMELINE_WINDOW)
+            new = [t for t in state["timeline"]["transitions"] if t["cycle"] > before["cycles"]]
+            gaps = [t for t in new if "unsampled_from" in t]
+            if cycles > dashboard.TIMELINE_WINDOW:
+                self.assertEqual([(t["unsampled_from"], t["cycle"]) for t in gaps],
+                                 [(before["cycles"], window_start)])
+            else:
+                self.assertEqual(gaps, [])
+            end = state["telemetry"]["cycles"]
+            for transition in new:
+                if "unsampled_from" not in transition and transition["cycle"] != end:
+                    self.assertEqual((transition["cycle"] - window_start)
+                                     % dashboard.TIMELINE_STRIDE, 0, transition)
         self.assertEqual(len(state["slices"]), 3)
 
         transitions = state["timeline"]["transitions"]
@@ -242,7 +278,12 @@ class DashboardTests(unittest.TestCase):
         stages = ("load", "compute", "store")
         for previous, current in zip(transitions, transitions[1:]):
             self.assertLess(previous["cycle"], current["cycle"])
-            self.assertNotEqual([previous[k] for k in stages], [current[k] for k in stages])
+            if "unsampled_from" in current:
+                # The stages held from the previous transition up to the last sample.
+                self.assertLessEqual(previous["cycle"], current["unsampled_from"])
+                self.assertLess(current["unsampled_from"], current["cycle"])
+            else:  # a sampled transition is recorded only when a stage changed
+                self.assertNotEqual([previous[k] for k in stages], [current[k] for k in stages])
             for stage in stages:
                 self.assertTrue(current[stage] is None or 0 <= current[stage] < tiles)
             self.assertFalse(current["load"] is not None and current["store"] is not None)
@@ -258,19 +299,14 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(state["machine"]["macs_per_cycle"], 64)
         self.assertEqual(len(state["timeline"]["transitions"]), 1)
 
-    def test_dma_split_and_machine_summary(self):
-        def snap(busy_cycles, busy, read):
-            return {"dma_busy_cycles": busy_cycles, "dma_busy": busy, "dma_read": read}
-        cases = [((snap(0, True, True), snap(8, True, True)), [8, 0]),
-                 ((snap(0, False, True), snap(5, True, False)), [0, 5]),
-                 ((snap(0, True, True), snap(7, True, False)), [3, 4]),
-                 ((snap(0, False, False), snap(0, False, False)), [0, 0]),
-                 (({}, snap(4, True, True)), [0, 0])]
-        for (before, after), expected in cases:
-            with self.subTest(before=before, after=after):
-                split = [0, 0]
-                dashboard.dma_split(before, after, split)
-                self.assertEqual(split, expected)
+    def test_machine_summary(self):
+        # SNAPSHOT_DEFAULTS are the values from_result assumes for the keys it lets a
+        # result config omit.
+        partial = {key: value for key, value in dataclasses.asdict(analytic.Design()).items()
+                   if key not in dashboard.SNAPSHOT_DEFAULTS}
+        design = analytic.Design.from_result({"config": partial})
+        self.assertEqual({key: getattr(design, key) for key in dashboard.SNAPSHOT_DEFAULTS},
+                         dashboard.SNAPSHOT_DEFAULTS)
 
         full = dataclasses.asdict(analytic.Design(macs_per_cycle=128, memory_bytes_per_cycle=32))
         machine = dashboard.machine_summary("balanced", {"config": full})
@@ -284,10 +320,14 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual((machine["macs_per_cycle"], machine["bytes_per_cycle"],
                           machine["memory_latency"], machine["frequency_mhz"]), (256, 4.0, 24, 500))
         flags = {**sim.from_flags(dashboard.PROFILE_ARGS["memory-bound"]), "m": 32,
-                 "frequency_mhz": 500}
+                 "frequency_mhz": 500, "panel_buffers": 1}
         expected = analytic.analyze(analytic.Design.from_flags(flags))
-        self.assertEqual(machine["analysis"]["resource_bound_cycles"],
-                         expected.resource_bound_cycles)
+        self.assertEqual(machine["analysis"]["lower_bound_cycles"], expected.lower_bound_cycles)
+        # A config that echoes panel_buffers overrides the single-buffer default.
+        echoed = {"config": {**older["config"], "panel_buffers": 2}}
+        design = dashboard.profile_design("balanced", echoed["config"])
+        self.assertEqual((design.panel_buffers, design.m), (2, 32))
+        self.assertEqual(dashboard.profile_design("balanced").panel_buffers, 1)
 
     def test_bounded_commands_and_state_transitions(self):
         for value in ({}, [], {"action": []}, {"action": "shell"},
