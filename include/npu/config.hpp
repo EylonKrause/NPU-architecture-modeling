@@ -119,6 +119,9 @@ struct ArchConfig {
     std::uint64_t sram_bytes = 262144;
     std::uint64_t weight_cache_bytes = 0;
     double frequency_mhz = 200.0;
+    // Core pipelines; each owns its slots, SRAM budget, weight cache and
+    // memory port, and all share one DRAM timeline (axi model only).
+    std::uint64_t cores = 1;
 };
 
 struct MappingConfig {
@@ -130,6 +133,8 @@ struct MappingConfig {
     // buffer of panel b - panel_buffers, so its load waits for that panel's
     // compute to finish.
     std::uint64_t panel_buffers = 2;
+    // How a cluster splits the output tiles; see ClusterPlan in core.hpp.
+    Partition partition = Partition::Auto;
 };
 
 struct WeightFormat {

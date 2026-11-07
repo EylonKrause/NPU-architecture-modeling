@@ -1057,6 +1057,156 @@ void check_memory_map() {
         "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
 }
 
+// Replays one core's weight-cache lookups in load order, as the loader makes
+// them: an LRU over (channel panel, block) keys holding whole panels.
+std::uint64_t replay_weight_reads(const npu::Config& c, const std::vector<npu::Tile>& tiles) {
+    struct Line { std::uint64_t key, bytes; };
+    std::vector<Line> lru;  // Most recent first.
+    std::uint64_t cached = 0, reads = 0;
+    const auto cache = c.arch.weight_cache_bytes;
+    const auto blocks = npu::reduction_blocks(c);
+    for (const auto& tile : tiles) {
+        for (std::uint64_t block = 0; block < blocks; ++block) {
+            const auto bytes = (npu::panel_k(c, block) * tile.cols * c.weights.bits + 7) / 8;
+            const auto key = (tile.group * c.shape.n + tile.col) * blocks + block;
+            const auto hit = std::find_if(lru.begin(), lru.end(),
+                                          [key](const Line& line) { return line.key == key; });
+            if (cache && hit != lru.end()) {
+                const auto line = *hit;
+                lru.erase(hit);
+                lru.insert(lru.begin(), line);
+                continue;
+            }
+            reads += bytes;
+            if (!cache || bytes > cache) continue;
+            while (cached + bytes > cache) {
+                cached -= lru.back().bytes;
+                lru.pop_back();
+            }
+            lru.insert(lru.begin(), {key, bytes});
+            cached += bytes;
+        }
+    }
+    return reads;
+}
+
+void check_cluster_plan() {
+    // Units split into contiguous runs whose sizes differ by at most one.
+    for (std::uint64_t units = 1; units <= 40; ++units) {
+        for (std::uint64_t cores = 1; cores <= 9; ++cores) {
+            npu::ClusterPlan plan;
+            plan.cores = cores;
+            plan.units = units;
+            std::uint64_t next = 0;
+            for (std::uint64_t core = 0; core < cores; ++core) {
+                const auto count = plan.unit_count(core);
+                require(plan.first_unit(core) == next, "runs are contiguous");
+                require(count == units / cores || count == units / cores + 1, "balanced runs");
+                require(core == 0 || count <= plan.unit_count(core - 1), "longer runs first");
+                for (auto unit = next; unit < next + count; ++unit)
+                    require(plan.unit_core(unit) == core, "a unit belongs to its run");
+                next += count;
+            }
+            require(next == units, "every unit has a core");
+        }
+    }
+
+    npu::Config c;
+    c.arch.memory.model = npu::MemoryModel::Axi;
+    c.shape = {10, 7, 9, 2, 1};
+    c.mapping.tile_m = 3;
+    c.mapping.tile_n = 2;
+    c.arch.cores = 2;
+    require(npu::cluster_plan(c, npu::Partition::M).split == npu::ClusterSplit::Groups &&
+                npu::cluster_plan(c, npu::Partition::M).units == 2,
+            "groups >= cores go to cores whole");
+    c.arch.cores = 3;
+    const auto rows = npu::cluster_plan(c, npu::Partition::M);
+    const auto columns = npu::cluster_plan(c, npu::Partition::N);
+    require(rows.split == npu::ClusterSplit::Rows && rows.units == 2 * 4, "row units");
+    require(columns.split == npu::ClusterSplit::Columns && columns.units == 2 * 4, "column units");
+    require(npu::to_string(npu::ClusterSplit::Columns) == "columns", "split names");
+    rejects_with([&] { npu::cluster_plan(c, npu::Partition::Auto); }, "splits by m or n");
+
+    // The closed-form estimate against a replay of every core's tiles: exact
+    // read, weight and write bytes, MACs and compute cycles per core.
+    std::uint64_t state = 99;
+    const auto draw = [&state](std::uint64_t low, std::uint64_t high) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return low + (state >> 33) % (high - low + 1);
+    };
+    for (int round = 0; round < 400; ++round) {
+        npu::Config r;
+        r.arch.memory.model = npu::MemoryModel::Axi;
+        r.shape = {draw(1, 30), draw(1, 30), draw(1, 40), draw(1, 4), 1};
+        r.mapping.tile_m = draw(1, 9);
+        r.mapping.tile_n = draw(1, 9);
+        r.mapping.tile_k = draw(0, 1) ? 0 : draw(1, r.shape.k);
+        r.arch.cores = draw(1, 9);
+        r.arch.weight_cache_bytes = draw(0, 2) ? std::uint64_t{0} : draw(1, 600);
+        r.weights.bits = draw(0, 1) ? 4 : 8;
+        r.arch.compute.macs_per_cycle = draw(1, 64);
+        r.arch.sram_bytes = 1ULL << 26;
+        npu::validate(r);
+        const auto tiles = npu::make_tiles(r);
+        for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
+            const auto plan = npu::cluster_plan(r, partition);
+            const auto estimate = npu::estimate_cluster(r, plan, npu::dense_column_weights(r));
+            std::vector<std::vector<npu::Tile>> assigned(plan.cores);
+            for (const auto& tile : tiles)
+                assigned[plan.unit_core(npu::tile_unit(r, plan, tile))].push_back(tile);
+            std::uint64_t reads = 0;
+            for (std::uint64_t core = 0; core < plan.cores; ++core) {
+                const auto& e = estimate.cores[core];
+                std::uint64_t activations = 0, params = 0, writes = 0, macs = 0, cycles = 0;
+                for (const auto& tile : assigned[core]) {
+                    activations += tile.rows * r.shape.k;
+                    params += tile.cols * npu::param_record_bytes(r);
+                    writes += npu::tile_write_bytes(tile);
+                    macs += tile.rows * tile.cols * r.shape.k;
+                    cycles += npu::tile_compute_cycles(r, tile);
+                }
+                const auto weights = replay_weight_reads(r, assigned[core]);
+                const auto label = " (round " + std::to_string(round) + ", core " +
+                                   std::to_string(core) + ")";
+                require(e.tiles == assigned[core].size(), "tiles per core" + label);
+                require(e.weight_bytes == weights, "weight-cache closed form" + label);
+                require(e.read_bytes == activations + weights + params, "read bytes" + label);
+                require(e.write_bytes == writes && e.macs == macs, "writes and MACs" + label);
+                require(e.compute_cycles == cycles, "compute cycles" + label);
+                reads += e.read_bytes;
+            }
+            require(estimate.read_bytes == reads, "estimate totals");
+        }
+    }
+
+    // A wide DRAM bound and the tie rule.
+    npu::ClusterEstimate m, n;
+    m.bound_cycles = n.bound_cycles = 10;
+    m.read_bytes = n.read_bytes = 5;
+    require(npu::auto_partition(m, n) == npu::Partition::N, "ties go to n");
+    m.read_bytes = 4;
+    require(npu::auto_partition(m, n) == npu::Partition::M, "then fewer bytes");
+    m.bound_cycles = 11;
+    require(npu::auto_partition(m, n) == npu::Partition::N, "the bound decides first");
+
+    npu::Config p;
+    p.arch.memory.model = npu::MemoryModel::Axi;
+    p.arch.memory.axi.data_bytes = 32;
+    p.arch.cores = 4;
+    require(npu::peak_memory_bytes_per_cycle(p) == 256, "every core's two channels");
+    p.arch.memory.dram_bytes_per_cycle = 100;
+    require(npu::peak_memory_bytes_per_cycle(p) == 100, "DRAM caps the cluster");
+    npu::validate(p);
+    p.arch.cores = 0;
+    rejects_with([&] { npu::validate(p); }, "cores must be in 1..64");
+    p.arch.cores = 65;
+    rejects_with([&] { npu::validate(p); }, "cores must be in 1..64");
+    p.arch.cores = 2;
+    p.arch.memory.model = npu::MemoryModel::Serial;
+    rejects_with([&] { npu::validate(p); }, "more than one core requires --memory-model axi");
+}
+
 }  // namespace
 
 int main() {
@@ -1078,6 +1228,7 @@ int main() {
         check_limits();
         check_validation();
         check_memory_map();
+        check_cluster_plan();
         std::cout << "core tests: all checks passed\n";
         return 0;
     } catch (const std::exception& error) {

@@ -2,8 +2,11 @@
 
 #include "npu/config.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <string_view>
 #include <vector>
 
 namespace npu {
@@ -89,9 +92,70 @@ std::uint64_t panel_compute_cycles(const Config& config, const Tile& tile, std::
 std::uint64_t peak_macs_per_cycle(const Config& config);
 // Serial model: one DMA server for reads and writes.
 std::uint64_t dma_transfer_cycles(const Config& config, std::uint64_t bytes);
-// Serial: bytes_per_cycle. Axi: both channels, 2 * data_bytes, capped by a
-// nonzero DRAM rate.
+// Serial: bytes_per_cycle. Axi: both channels of every core's port,
+// cores * 2 * data_bytes, capped by a nonzero DRAM rate.
 std::uint64_t peak_memory_bytes_per_cycle(const Config& config);
+
+// Work split of a cluster of P = arch.cores cores. With G >= P the units are
+// whole groups. Otherwise a unit is one row tile of a group's output rows
+// (Partition::M: every core with work reads all of that group's weights) or
+// one column tile of its output columns (Partition::N: every core reads every
+// activation row of its groups), numbered group-major. Core c takes a
+// contiguous run of U / P units, one more for each of the first U % P cores,
+// and runs its tiles in the single-core order: group, row, column.
+enum class ClusterSplit : std::uint8_t { Groups, Rows, Columns };
+template <> struct EnumNames<ClusterSplit> {
+    static constexpr std::array<std::string_view, 3> names{"groups", "rows", "columns"};
+};
+
+struct ClusterPlan {
+    Partition partition = Partition::N;  // M or N
+    ClusterSplit split = ClusterSplit::Groups;
+    std::uint64_t cores = 1, units = 1;
+    std::uint64_t first_unit(std::uint64_t core) const;
+    std::uint64_t unit_count(std::uint64_t core) const;
+    std::uint64_t unit_core(std::uint64_t unit) const;
+};
+
+// The plan of partition M or N.
+ClusterPlan cluster_plan(const Config& config, Partition partition);
+std::uint64_t tile_unit(const Config& config, const ClusterPlan& plan, const Tile& tile);
+// Each core's tiles under `plan`, in make_tiles order.
+std::vector<std::vector<Tile>> make_core_tiles(const Config& config, const ClusterPlan& plan);
+
+// Weight bytes of one column panel of a group over all its reduction panels,
+// split by whether each panel fits the weight cache on its own. With no cache
+// every panel is uncacheable.
+struct ColumnWeights {
+    std::uint64_t cacheable = 0, uncacheable = 0;
+};
+using ColumnWeightBytes =
+    std::function<ColumnWeights(std::uint64_t group, std::uint64_t column_panel)>;
+ColumnWeightBytes dense_column_weights(const Config& config);
+
+// Closed-form prediction of a plan. A core's LRU weight cache sees, per group,
+// the core's column panels as one cycle repeated once per row tile it runs, so
+// after the first pass the cacheable panels all hit when their bytes fit the
+// cache together and all miss otherwise; read bytes are exact for that reason.
+// Compute cycles time palette and sparse panels at the decode bound.
+struct CoreEstimate {
+    std::uint64_t tiles = 0, macs = 0, compute_cycles = 0;
+    std::uint64_t read_bytes = 0, weight_bytes = 0, write_bytes = 0;
+};
+struct ClusterEstimate {
+    std::vector<CoreEstimate> cores;
+    std::uint64_t read_bytes = 0, write_bytes = 0;
+    // Makespan lower bound: the slowest core's compute or port transfer
+    // cycles (an axi channel moves data_bytes per cycle, the serial server
+    // bytes_per_cycle for both directions), or the DRAM time of every byte at
+    // dram_bytes_per_cycle.
+    std::uint64_t bound_cycles = 0;
+};
+ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
+                                 const ColumnWeightBytes& weights);
+// Partition::Auto between the m and n estimates: the smaller bound, then
+// fewer read plus write bytes, then N.
+Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n);
 
 // External memory map, laid out as an offline compiler places the tensors:
 //   0x8000_0000 activations, row-major, row stride G*K bytes;

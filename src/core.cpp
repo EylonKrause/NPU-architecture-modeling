@@ -523,6 +523,10 @@ void validate(const Config& config) {
                 arch.weight_cache_bytes <= max_timing_value,
             "DMA burst and weight cache sizes must be at most 1000000000 bytes");
     validate_memory(config);
+    require(arch.cores >= 1 && arch.cores <= 64, "cores must be in 1..64");
+    // The cores share one DRAM timeline, which only the axi model keeps.
+    require(arch.cores == 1 || arch.memory.model == MemoryModel::Axi,
+            "more than one core requires --memory-model axi");
     require(std::isfinite(arch.frequency_mhz) && arch.frequency_mhz >= 1e-6 &&
                 arch.frequency_mhz <= static_cast<double>(max_timing_value),
             "frequency MHz must be finite and in 0.000001..1000000000 (at least 1 Hz)");
@@ -639,22 +643,45 @@ Problem make_problem(const Config& config) {
     return problem;
 }
 
-std::vector<Tile> make_tiles(const Config& config) {
-    validate(config);
+namespace {
+
+// Group-major, then row, then column: a tile never spans two groups.
+template <class Visit> void for_each_tile(const Config& config, Visit visit) {
     const auto& shape = config.shape;
     const auto& map = config.mapping;
+    std::uint64_t id = 0;
+    for (std::uint64_t group = 0; group < shape.groups; ++group)
+        for (std::uint64_t row = 0; row < shape.m; row += map.tile_m)
+            for (std::uint64_t col = 0; col < shape.n; col += map.tile_n)
+                visit(Tile{id++, row, col, std::min(map.tile_m, shape.m - row),
+                           std::min(map.tile_n, shape.n - col), group});
+}
+
+}  // namespace
+
+std::vector<Tile> make_tiles(const Config& config) {
+    validate(config);
     std::vector<Tile> tiles;
     tiles.reserve(static_cast<std::size_t>(tile_count(config)));
-    // Group-major, then row, then column: a tile never spans two groups.
-    for (std::uint64_t group = 0; group < shape.groups; ++group) {
-        for (std::uint64_t row = 0; row < shape.m; row += map.tile_m) {
-            for (std::uint64_t col = 0; col < shape.n; col += map.tile_n) {
-                tiles.push_back({static_cast<std::uint64_t>(tiles.size()), row, col,
-                                 std::min(map.tile_m, shape.m - row),
-                                 std::min(map.tile_n, shape.n - col), group});
-            }
-        }
-    }
+    for_each_tile(config, [&](const Tile& tile) { tiles.push_back(tile); });
+    return tiles;
+}
+
+std::vector<std::vector<Tile>> make_core_tiles(const Config& config, const ClusterPlan& plan) {
+    validate(config);
+    require(plan.cores == config.arch.cores, "cluster plan is for another core count");
+    // Count first, so the lists together hold one copy of the tiles.
+    std::vector<std::uint64_t> counts(static_cast<std::size_t>(plan.cores));
+    for_each_tile(config, [&](const Tile& tile) {
+        ++counts[static_cast<std::size_t>(plan.unit_core(tile_unit(config, plan, tile)))];
+    });
+    std::vector<std::vector<Tile>> tiles(counts.size());
+    for (std::size_t core = 0; core < counts.size(); ++core)
+        tiles[core].reserve(static_cast<std::size_t>(counts[core]));
+    for_each_tile(config, [&](const Tile& tile) {
+        tiles[static_cast<std::size_t>(plan.unit_core(tile_unit(config, plan, tile)))]
+            .push_back(tile);
+    });
     return tiles;
 }
 
@@ -1053,7 +1080,7 @@ std::uint64_t peak_macs_per_cycle(const Config& config) {
 std::uint64_t peak_memory_bytes_per_cycle(const Config& config) {
     const auto& memory = config.arch.memory;
     if (memory.model == MemoryModel::Serial) return memory.bytes_per_cycle;
-    const auto bus = checked_mul(2, memory.axi.data_bytes);
+    const auto bus = checked_mul(checked_mul(2, memory.axi.data_bytes), config.arch.cores);
     return memory.dram_bytes_per_cycle ? std::min(bus, memory.dram_bytes_per_cycle) : bus;
 }
 
@@ -1171,6 +1198,241 @@ void DramTimeline::release(std::uint64_t time) {
     busy_.erase(busy_.begin(),
                 std::partition_point(busy_.begin(), busy_.end(),
                                      [time](const Interval& busy) { return busy.end <= time; }));
+}
+
+std::uint64_t ClusterPlan::first_unit(std::uint64_t core) const {
+    require(core < cores, "core is outside the cluster");
+    return core * (units / cores) + std::min(core, units % cores);
+}
+
+std::uint64_t ClusterPlan::unit_count(std::uint64_t core) const {
+    require(core < cores, "core is outside the cluster");
+    return units / cores + static_cast<std::uint64_t>(core < units % cores);
+}
+
+std::uint64_t ClusterPlan::unit_core(std::uint64_t unit) const {
+    require(unit < units, "unit is outside the cluster plan");
+    // The first units % cores cores hold one unit more than the rest.
+    const auto base = units / cores;
+    const auto boundary = (units % cores) * (base + 1);
+    return unit < boundary ? unit / (base + 1) : units % cores + (unit - boundary) / base;
+}
+
+ClusterPlan cluster_plan(const Config& config, Partition partition) {
+    require(partition != Partition::Auto, "a cluster plan splits by m or n");
+    require(config.arch.cores >= 1 && config.arch.cores <= 64, "cores must be in 1..64");
+    const auto& shape = config.shape;
+    const auto& map = config.mapping;
+    validate_shape(config);
+    require(map.tile_m >= 1 && map.tile_n >= 1, "tile dimensions must be positive");
+    ClusterPlan plan;
+    plan.partition = partition;
+    plan.cores = config.arch.cores;
+    if (shape.groups >= plan.cores) {
+        plan.split = ClusterSplit::Groups;
+        plan.units = shape.groups;
+    } else if (partition == Partition::M) {
+        plan.split = ClusterSplit::Rows;
+        plan.units = shape.groups * ceil_div(shape.m, map.tile_m);
+    } else {
+        plan.split = ClusterSplit::Columns;
+        plan.units = shape.groups * ceil_div(shape.n, map.tile_n);
+    }
+    return plan;
+}
+
+std::uint64_t tile_unit(const Config& config, const ClusterPlan& plan, const Tile& tile) {
+    const auto& shape = config.shape;
+    const auto& map = config.mapping;
+    validate_tile(tile, shape);
+    switch (plan.split) {
+    case ClusterSplit::Groups:
+        return tile.group;
+    case ClusterSplit::Rows:
+        return tile.group * ceil_div(shape.m, map.tile_m) + tile.row / map.tile_m;
+    case ClusterSplit::Columns:
+        return tile.group * ceil_div(shape.n, map.tile_n) + tile.col / map.tile_n;
+    }
+    throw std::logic_error("unknown cluster split");
+}
+
+ColumnWeightBytes dense_column_weights(const Config& config) {
+    const auto blocks = reduction_blocks(config);
+    const auto depth = panel_size(config);
+    const auto last_depth = panel_k(config, blocks - 1);
+    const auto cache = config.arch.weight_cache_bytes;
+    const auto n = config.shape.n, tile_n = config.mapping.tile_n, bits = config.weights.bits;
+    return [=](std::uint64_t, std::uint64_t column_panel) {
+        const auto cols = std::min(tile_n, n - column_panel * tile_n);
+        ColumnWeights result;
+        const auto add = [&](std::uint64_t k, std::uint64_t count) {
+            const auto bytes = ceil_div(checked_mul(checked_mul(k, cols), bits), 8);
+            auto& total = cache && bytes <= cache ? result.cacheable : result.uncacheable;
+            total = checked_add(total, checked_mul(bytes, count));
+        };
+        add(depth, blocks - 1);
+        add(last_depth, 1);
+        return result;
+    };
+}
+
+ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
+                                 const ColumnWeightBytes& weights) {
+    validate_shape(config);
+    validate_mapping(config);
+    validate_compute_rates(config);
+    const auto& shape = config.shape;
+    const auto& map = config.mapping;
+    const auto row_tiles = ceil_div(shape.m, map.tile_m);
+    const auto col_tiles = ceil_div(shape.n, map.tile_n);
+    const auto record = param_record_bytes(config);
+    const auto cache = config.arch.weight_cache_bytes;
+    const auto rows_of = [&](std::uint64_t row_tile) {
+        return std::min(map.tile_m, shape.m - row_tile * map.tile_m);
+    };
+    const auto cols_of = [&](std::uint64_t col_tile) {
+        return std::min(map.tile_n, shape.n - col_tile * map.tile_n);
+    };
+    // A full or edge row extent with a full or edge column extent: four tile
+    // shapes, each timed once.
+    std::uint64_t shape_cycles[2][2] = {};
+    bool timed[2][2] = {};
+    const auto tile_cycles = [&](std::uint64_t rows, std::uint64_t cols) {
+        const auto r = static_cast<std::size_t>(rows != map.tile_m);
+        const auto c = static_cast<std::size_t>(cols != map.tile_n);
+        if (!timed[r][c]) {
+            shape_cycles[r][c] = compute_cycles(config, rows, cols);
+            timed[r][c] = true;
+        }
+        return shape_cycles[r][c];
+    };
+    const auto row_band_cycles = [&](std::uint64_t rows) {
+        auto cycles = checked_mul(shape.n / map.tile_n, tile_cycles(rows, map.tile_n));
+        if (shape.n % map.tile_n)
+            cycles = checked_add(cycles, tile_cycles(rows, shape.n % map.tile_n));
+        return cycles;
+    };
+    const auto column_band_cycles = [&](std::uint64_t cols) {
+        auto cycles = checked_mul(shape.m / map.tile_m, tile_cycles(map.tile_m, cols));
+        if (shape.m % map.tile_m)
+            cycles = checked_add(cycles, tile_cycles(shape.m % map.tile_m, cols));
+        return cycles;
+    };
+    const auto add_weights = [](ColumnWeights& total, const ColumnWeights& more) {
+        total.cacheable = checked_add(total.cacheable, more.cacheable);
+        total.uncacheable = checked_add(total.uncacheable, more.uncacheable);
+    };
+    const auto group_weights = [&](std::uint64_t group) {
+        ColumnWeights total;
+        for (std::uint64_t col = 0; col < col_tiles; ++col) add_weights(total, weights(group, col));
+        return total;
+    };
+    // Weight bytes read by `passes` sweeps over the same column panels.
+    const auto weight_reads = [cache](const ColumnWeights& columns, std::uint64_t passes) {
+        const auto cacheable = cache && columns.cacheable <= cache ?
+            columns.cacheable : checked_mul(columns.cacheable, passes);
+        return checked_add(checked_mul(columns.uncacheable, passes), cacheable);
+    };
+    const auto group_cycles = [&]() {
+        auto cycles = checked_mul(shape.m / map.tile_m, row_band_cycles(map.tile_m));
+        if (shape.m % map.tile_m)
+            cycles = checked_add(cycles, row_band_cycles(shape.m % map.tile_m));
+        return cycles;
+    };
+
+    ClusterEstimate estimate;
+    estimate.cores.resize(static_cast<std::size_t>(plan.cores));
+    const auto none = std::numeric_limits<std::uint64_t>::max();
+    for (std::uint64_t core = 0; core < plan.cores; ++core) {
+        auto& e = estimate.cores[static_cast<std::size_t>(core)];
+        std::uint64_t activations = 0, params = 0;
+        // A core's units of one group are consecutive.
+        auto group = none;
+        ColumnWeights columns;
+        std::uint64_t passes = 0;
+        const auto close_group = [&]() {
+            if (passes) e.weight_bytes = checked_add(e.weight_bytes, weight_reads(columns, passes));
+            columns = {};
+            passes = 0;
+        };
+        const auto first = plan.first_unit(core);
+        for (auto unit = first; unit < first + plan.unit_count(core); ++unit) {
+            std::uint64_t rows = shape.m, cols = shape.n, tiles = 0, cycles = 0,
+                          record_sets = 0, activation_sets = 0;
+            switch (plan.split) {
+            case ClusterSplit::Groups:
+                tiles = checked_mul(row_tiles, col_tiles);
+                cycles = group_cycles();
+                activation_sets = col_tiles;
+                record_sets = row_tiles;
+                e.weight_bytes = checked_add(e.weight_bytes,
+                                             weight_reads(group_weights(unit), row_tiles));
+                break;
+            case ClusterSplit::Rows:
+                rows = rows_of(unit % row_tiles);
+                tiles = col_tiles;
+                cycles = row_band_cycles(rows);
+                activation_sets = col_tiles;
+                record_sets = 1;
+                if (unit / row_tiles != group) {
+                    close_group();
+                    group = unit / row_tiles;
+                    columns = group_weights(group);
+                }
+                ++passes;
+                break;
+            case ClusterSplit::Columns:
+                cols = cols_of(unit % col_tiles);
+                tiles = row_tiles;
+                cycles = column_band_cycles(cols);
+                activation_sets = 1;
+                record_sets = row_tiles;
+                if (unit / col_tiles != group) {
+                    close_group();
+                    group = unit / col_tiles;
+                    passes = row_tiles;
+                }
+                add_weights(columns, weights(group, unit % col_tiles));
+                break;
+            }
+            // The unit covers rows x cols outputs. Every tile reads its
+            // activation rows over all of K and its parameter records, so a
+            // unit reads its rows once per column tile in it and its column
+            // records once per row tile in it.
+            e.tiles = checked_add(e.tiles, tiles);
+            e.macs = checked_add(e.macs, checked_mul(checked_mul(rows, cols), shape.k));
+            e.compute_cycles = checked_add(e.compute_cycles, cycles);
+            activations = checked_add(activations, checked_mul(activation_sets,
+                                                               checked_mul(rows, shape.k)));
+            params = checked_add(params, checked_mul(checked_mul(record_sets, cols), record));
+            e.write_bytes = checked_add(e.write_bytes, checked_mul(rows, cols));
+        }
+        close_group();
+        e.read_bytes = checked_add(checked_add(activations, e.weight_bytes), params);
+    }
+    const auto& memory = config.arch.memory;
+    const bool axi = memory.model == MemoryModel::Axi;
+    for (const auto& e : estimate.cores) {
+        estimate.read_bytes = checked_add(estimate.read_bytes, e.read_bytes);
+        estimate.write_bytes = checked_add(estimate.write_bytes, e.write_bytes);
+        const auto port = axi ? std::max(ceil_div(e.read_bytes, memory.axi.data_bytes),
+                                         ceil_div(e.write_bytes, memory.axi.data_bytes)) :
+                                ceil_div(checked_add(e.read_bytes, e.write_bytes),
+                                         memory.bytes_per_cycle);
+        estimate.bound_cycles = std::max({estimate.bound_cycles, e.compute_cycles, port});
+    }
+    if (axi && memory.dram_bytes_per_cycle)
+        estimate.bound_cycles = std::max(estimate.bound_cycles,
+            ceil_div(checked_add(estimate.read_bytes, estimate.write_bytes),
+                     memory.dram_bytes_per_cycle));
+    return estimate;
+}
+
+Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n) {
+    if (m.bound_cycles != n.bound_cycles)
+        return m.bound_cycles < n.bound_cycles ? Partition::M : Partition::N;
+    return checked_add(m.read_bytes, m.write_bytes) < checked_add(n.read_bytes, n.write_bytes) ?
+        Partition::M : Partition::N;
 }
 
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile) {
