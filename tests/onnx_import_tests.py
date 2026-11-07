@@ -120,7 +120,7 @@ class OnnxImportTests(unittest.TestCase):
         model = make_model([node("QLinearConv", group=2)], {"x": [1, 2, 2, 2]}, values, {"y": [1, 4, 2, 2]})
         imported, report, _ = self.compare(model, {"x": np.arange(1, 9, dtype=np.int8).reshape(1, 2, 2, 2)})
         self.assertEqual(imported["nodes"][0]["op"], "DepthwiseConv2D")
-        self.assertEqual(report["layers"][0]["npu_invocations"], 2)
+        self.assertEqual(report["layers"][0]["npu_invocations"], 1)
 
     def test_two_conv_layers_preserve_internal_nhwc_and_restore_external_output(self):
         values = constants(np.asarray([1, -1], np.int8).reshape(2, 1, 1, 1))
