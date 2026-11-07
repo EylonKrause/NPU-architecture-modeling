@@ -1,0 +1,137 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="480" viewBox="0 0 820 480" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Read bandwidth vs outstanding AXI reads</title>
+<rect width="820" height="480" fill="#ffffff"/>
+<defs><clipPath id="s3-plot"><rect x="58.44" y="58" width="739.56" height="368"/></clipPath></defs>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Read bandwidth vs outstanding AXI reads</text>
+<text x="14" y="52" font-size="12" fill="#52514e">INT4 GEMV 1x4096x4096 streaming weights; 16 B beats, 16-beat bursts, DRAM unlimited</text>
+<g stroke="#e6e5df" stroke-width="1" fill="none">
+<line x1="58.44" y1="426" x2="796" y2="426"/>
+<line x1="58.44" y1="318.35" x2="796" y2="318.35"/>
+<line x1="58.44" y1="210.71" x2="796" y2="210.71"/>
+<line x1="58.44" y1="103.06" x2="796" y2="103.06"/>
+<line x1="80.79" y1="60" x2="80.79" y2="426"/>
+<line x1="147.84" y1="60" x2="147.84" y2="426"/>
+<line x1="237.24" y1="60" x2="237.24" y2="426"/>
+<line x1="326.64" y1="60" x2="326.64" y2="426"/>
+<line x1="416.04" y1="60" x2="416.04" y2="426"/>
+<line x1="505.45" y1="60" x2="505.45" y2="426"/>
+<line x1="594.85" y1="60" x2="594.85" y2="426"/>
+<line x1="684.25" y1="60" x2="684.25" y2="426"/>
+<line x1="773.65" y1="60" x2="773.65" y2="426"/>
+</g>
+<g stroke="#9c9a93" stroke-width="1" fill="none">
+<line x1="58.44" y1="426" x2="796" y2="426"/>
+<line x1="58.44" y1="60" x2="58.44" y2="426"/>
+<line x1="80.79" y1="426" x2="80.79" y2="431"/>
+<line x1="147.84" y1="426" x2="147.84" y2="431"/>
+<line x1="237.24" y1="426" x2="237.24" y2="431"/>
+<line x1="326.64" y1="426" x2="326.64" y2="431"/>
+<line x1="416.04" y1="426" x2="416.04" y2="431"/>
+<line x1="505.45" y1="426" x2="505.45" y2="431"/>
+<line x1="594.85" y1="426" x2="594.85" y2="431"/>
+<line x1="684.25" y1="426" x2="684.25" y2="431"/>
+<line x1="773.65" y1="426" x2="773.65" y2="431"/>
+<line x1="53.44" y1="426" x2="58.44" y2="426"/>
+<line x1="53.44" y1="318.35" x2="58.44" y2="318.35"/>
+<line x1="53.44" y1="210.71" x2="58.44" y2="210.71"/>
+<line x1="53.44" y1="103.06" x2="58.44" y2="103.06"/>
+</g>
+<g style="font-variant-numeric: tabular-nums">
+<text x="80.79" y="445" font-size="12" fill="#52514e" text-anchor="middle">1</text>
+<text x="147.84" y="445" font-size="12" fill="#52514e" text-anchor="middle">4</text>
+<text x="237.24" y="445" font-size="12" fill="#52514e" text-anchor="middle">8</text>
+<text x="326.64" y="445" font-size="12" fill="#52514e" text-anchor="middle">12</text>
+<text x="416.04" y="445" font-size="12" fill="#52514e" text-anchor="middle">16</text>
+<text x="505.45" y="445" font-size="12" fill="#52514e" text-anchor="middle">20</text>
+<text x="594.85" y="445" font-size="12" fill="#52514e" text-anchor="middle">24</text>
+<text x="684.25" y="445" font-size="12" fill="#52514e" text-anchor="middle">28</text>
+<text x="773.65" y="445" font-size="12" fill="#52514e" text-anchor="middle">32</text>
+<text x="49.44" y="430.2" font-size="12" fill="#52514e" text-anchor="end">0</text>
+<text x="49.44" y="322.55" font-size="12" fill="#52514e" text-anchor="end">5</text>
+<text x="49.44" y="214.91" font-size="12" fill="#52514e" text-anchor="end">10</text>
+<text x="49.44" y="107.26" font-size="12" fill="#52514e" text-anchor="end">15</text>
+</g>
+<text x="427.22" y="468" font-size="13" fill="#0b0b0b" text-anchor="middle">read transactions outstanding (N)</text>
+<text x="21.2" y="243" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 243)">read bandwidth (B/cycle)</text>
+<g clip-path="url(#s3-plot)">
+<path d="M80.79,378.49 L103.14,330.97 L125.49,283.46 L147.84,235.95 L170.19,188.43 L192.54,140.92 L214.89,93.41 L237.24,81.53 L259.59,81.53 L281.94,81.53 L304.29,81.53 L326.64,81.53 L348.99,81.53 L371.34,81.53 L393.69,81.53 L416.04,81.53 L438.4,81.53 L460.75,81.53 L483.1,81.53 L505.45,81.53 L527.8,81.53 L550.15,81.53 L572.5,81.53 L594.85,81.53 L617.2,81.53 L639.55,81.53 L661.9,81.53 L684.25,81.53 L706.6,81.53 L728.95,81.53 L751.3,81.53 L773.65,81.53" fill="none" stroke="#2a78d6" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<circle cx="80.79" cy="378.93" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="103.14" cy="332.88" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="125.49" cy="285.82" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="147.84" cy="243.69" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="170.19" cy="200.5" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="192.54" cy="157.11" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="214.89" cy="116.39" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="237.24" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="259.59" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="281.94" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="304.29" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="326.64" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="348.99" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="371.34" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="393.69" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="416.04" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="438.4" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="460.75" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="483.1" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="505.45" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="527.8" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="550.15" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="572.5" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="594.85" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="617.2" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="639.55" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="661.9" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="684.25" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="706.6" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="728.95" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="751.3" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="773.65" cy="106.53" r="4.5" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M80.79,412.75 L103.14,399.5 L125.49,386.25 L147.84,373 L170.19,359.76 L192.54,346.51 L214.89,333.26 L237.24,320.01 L259.59,306.76 L281.94,293.51 L304.29,280.26 L326.64,267.01 L348.99,253.76 L371.34,240.52 L393.69,227.27 L416.04,214.02 L438.4,200.77 L460.75,187.52 L483.1,174.27 L505.45,161.02 L527.8,147.77 L550.15,134.52 L572.5,121.28 L594.85,108.03 L617.2,94.78 L639.55,81.53 L661.9,81.53 L684.25,81.53 L706.6,81.53 L728.95,81.53 L751.3,81.53 L773.65,81.53" fill="none" stroke="#eb6834" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
+<rect x="76.74" y="408.84" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="99.09" y="396.04" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="121.44" y="382.7" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="143.79" y="371.32" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="166.14" y="359.39" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="188.49" y="346.37" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="210.84" y="334.1" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="233.19" y="325.17" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="255.54" y="307.51" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="277.89" y="303.58" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="300.24" y="290.63" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="322.59" y="276.06" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="344.94" y="271.28" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="367.29" y="254.86" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="389.64" y="249.64" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="411.99" y="244.09" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="434.35" y="226.45" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="456.7" y="220.75" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="479.05" y="214.71" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="501.4" y="208.29" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="523.75" y="192.29" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="546.1" y="186.41" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="568.45" y="180.22" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="590.8" y="173.7" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="613.15" y="166.82" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="635.5" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="657.85" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="680.2" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="702.55" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="724.9" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="747.25" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="769.6" y="159.54" width="8.1" height="8.1" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<line x1="58.44" y1="81.53" x2="796" y2="81.53" stroke="#6f6e69" stroke-width="1.25" stroke-dasharray="5 4"/>
+</g>
+<text x="790" y="75.53" font-size="11" fill="#6f6e69" text-anchor="end">bus 16 B/cycle</text>
+<g transform="translate(514.84,332)">
+<rect width="271.16" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<line x1="8" y1="14.5" x2="28" y2="14.5" stroke="#2a78d6" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
+<text x="34" y="18.7" font-size="12" fill="#0b0b0b">min(bus, N x burst / (L + beats)), L = 100</text>
+<circle cx="18" cy="33.5" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="37.7" font-size="12" fill="#0b0b0b">npu-sim, read latency L = 100</text>
+<line x1="8" y1="52.5" x2="28" y2="52.5" stroke="#eb6834" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
+<text x="34" y="56.7" font-size="12" fill="#0b0b0b">min(bus, N x burst / (L + beats)), L = 400</text>
+<rect x="14.4" y="67.9" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<text x="34" y="75.7" font-size="12" fill="#0b0b0b">npu-sim, read latency L = 400</text>
+</g>
+</svg>

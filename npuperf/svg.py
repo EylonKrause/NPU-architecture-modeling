@@ -309,12 +309,14 @@ class Figure:
 
     def annotate(self, x: float, y: float, text: str, dx: float = 6, dy: float = -6,
                  anchor: str = "start", color: str = INK_SECONDARY, size: float | None = None,
-                 rotate: float | str = 0, weight: str = "normal") -> "Figure":
+                 rotate: float | str = 0, weight: str = "normal",
+                 inside: bool = False) -> "Figure":
         """Text at data point (x, y), offset by (dx, dy) pixels. ``rotate="along"`` with
-        ``along=(x2, y2)`` is handled by ``annotate_along``."""
+        ``along=(x2, y2)`` is handled by ``annotate_along``. ``inside`` mirrors a start- or
+        end-anchored text to the other side of x when it would cross the plot's side."""
         self.notes.append({"x": float(x), "y": float(y), "text": text, "dx": dx, "dy": dy,
                            "anchor": anchor, "color": color, "size": size or self.font_size - 1,
-                           "rotate": rotate, "weight": weight})
+                           "rotate": rotate, "weight": weight, "inside": inside})
         return self
 
     def annotate_along(self, p0: tuple[float, float], p1: tuple[float, float], text: str,
@@ -589,7 +591,16 @@ class Figure:
                                       note["anchor"], rotate=angle if abs(angle) > 0.01 else 0))
                 continue
             x, y = self.px(note["x"]) + note["dx"], self.py(note["y"]) + note["dy"]
-            out.append(self._text(x, y, note["text"], note["size"], note["color"], note["anchor"],
+            anchor = note["anchor"]
+            if note.get("inside"):
+                width = text_width(note["text"], note["size"])
+                x0, _, x1, _ = self.plot
+                mirrored = self.px(note["x"]) - note["dx"]
+                if anchor == "start" and x + width > x1 - 2:
+                    x, anchor = mirrored, "end"
+                elif anchor == "end" and x - width < x0 + 2:
+                    x, anchor = mirrored, "start"
+            out.append(self._text(x, y, note["text"], note["size"], note["color"], anchor,
                                   note["weight"], rotate=float(note["rotate"] or 0)))
         return out
 

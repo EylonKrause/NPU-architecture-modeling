@@ -55,7 +55,11 @@ def _decade_ceil(value: float) -> float:
 def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofline",
            subtitle: str | None = None, effective_bw: float | None = None,
            label_points: Sequence[str] | bool = True, width: int = 760,
-           height: int = 480) -> svg.Figure:
+           height: int = 480, group_order: Sequence[str] = GROUP_ORDER,
+           hollow: bool = False) -> svg.Figure:
+    """``group_order`` fixes the colour of each group (others follow, sorted); ``hollow``
+    draws every group's markers as outlines, so coinciding points of different groups
+    stay visible."""
     peak, bw = float(design.peak_macs_per_cycle), design.bandwidth
     ridge = peak / bw
     xs = [p.intensity for p in points] + [ridge]
@@ -69,9 +73,11 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
     roof = [(x_lo, bw * x_lo), (ridge, peak), (x_hi, peak)]
     fig.line([x for x, _ in roof], [y for _, y in roof], color=svg.INK, width=2)
     fig.vline(ridge, color=svg.INK_MUTED, dash="2 3", width=1)
-    fig.annotate(ridge, y_lo, f"ridge {_fmt(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED)
-    fig.annotate(x_hi, peak, f"peak {_fmt(peak)} MAC/cycle", dx=-6, dy=-7, anchor="end",
-                 color=svg.INK)
+    fig.annotate(ridge, y_lo, f"ridge {_fmt(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED,
+                 inside=True)
+    # Left of the ridge and above the peak lies above the roof, where no point can be.
+    fig.annotate(ridge, peak, f"peak {_fmt(peak)} MAC/cycle", dx=-8, dy=-9, anchor="end",
+                 color=svg.INK, inside=True)
     fig.annotate_along((x_lo, bw * x_lo), (ridge, peak), f"{_fmt(bw)} B/cycle",
                        at=0.3, offset=-8, color=svg.INK)
     if effective_bw and effective_bw < bw * 0.98:
@@ -84,7 +90,7 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
                            offset=15, color=svg.INK_MUTED)
     # Model points take categorical colours by op class; simulated points are hollow ink
     # rings drawn last, so a simulated point on top of its model point leaves both visible.
-    groups = [g for g in GROUP_ORDER if any(p.group == g for p in points) and g != "simulated"]
+    groups = [g for g in group_order if any(p.group == g for p in points) and g != "simulated"]
     groups += sorted({p.group for p in points} - set(groups) - {"simulated"})
     if any(p.group == "simulated" for p in points):
         groups.append("simulated")
@@ -99,7 +105,8 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
                     label=(group + " (npu-sim)" if simulated else group) or None,
                     color=svg.INK if simulated else svg.PALETTE[index % len(svg.PALETTE)],
                     marker="circle" if simulated else svg.MARKERS[index % len(svg.MARKERS)],
-                    point_labels=labels, hollow=simulated, size=5 if simulated else 4.5)
+                    point_labels=labels, hollow=simulated or hollow,
+                    size=5 if simulated else 4.5)
         index += 0 if simulated else 1
     return fig
 

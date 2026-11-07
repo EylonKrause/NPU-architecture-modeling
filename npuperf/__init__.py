@@ -6,6 +6,7 @@ Standard library only. Every tool runs from a checkout with ``python -m npuperf.
     sim            run npu-sim from flags or a dict, drive its --live-stdio protocol
     analytic       closed-form traffic, busy-cycle and bound model of the simulator
     roofline       roofline points and plots
+    designs        the configs/ design points, their headline figures and sizing rules
     workloads      canonical network layer tables lowered to (grouped) GEMMs
     svg            dependency-free SVG plotting
     quant          integer requantisation oracle (native, TOSA single and double rounding)

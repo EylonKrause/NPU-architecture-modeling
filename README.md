@@ -55,6 +55,12 @@ build/npu-sim --m 16 --n 16 --k 32 --timing event
 
 The executable writes one JSON object to stdout and diagnostics to stderr. Generated fixtures are deterministic. Real tensors use the documented `NPU1` text format; channel parameters use `NPUQ1`. See [examples](examples/README.md) and [quantization](docs/QUANTIZATION.md).
 
+Four hypothetical [design points](docs/design-points.md), sized from public Ethos-U and Apple Neural Engine figures, load with `--config`: `edge-256` (256 MAC/cycle), `mobile-2k` (2048), `client-16c` (16 cores) and `workstation-32c` (32 cores).
+
+```sh
+build/npu-sim --config configs/client-16c.json --m 128 --n 2048 --k 2048
+```
+
 Run a tiled INT4 workload with analytical array timing, reduction panels, burst overhead and a bounded weight cache:
 
 ```sh

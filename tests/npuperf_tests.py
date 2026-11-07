@@ -70,6 +70,19 @@ class SvgTests(unittest.TestCase):
             self.assertRegex(value, r"^-?\d+(\.\d{1,2})?$")
         self.assertNotRegex(text, r'="-?[0-9.]+[eE][+-]?[0-9]')
 
+    def test_inside_annotation_mirrors_at_the_plot_side(self):
+        def anchors(**options) -> list[str | None]:
+            fig = svg.Figure(x_range=(0, 1), y_range=(0, 1), legend="none")
+            fig.annotate(0.97, 0.5, "a label wider than the room left", dx=5, **options)
+            fig.annotate(0.03, 0.2, "another label wider than the room", dx=-5, anchor="end",
+                         **options)
+            root = ET.fromstring(fig.to_svg())
+            texts = [t for t in root.iter("{http://www.w3.org/2000/svg}text")
+                     if "label wider" in (t.text or "")]
+            return [t.get("text-anchor") for t in texts]
+        self.assertEqual(anchors(), [None, "end"])
+        self.assertEqual(anchors(inside=True), ["end", None])
+
     def test_log_axis_has_decade_ticks_and_minor_ticks(self):
         axis = svg.Axis("log")
         axis.fit([0.15, 70])
@@ -481,6 +494,15 @@ class AnalyticSimulatorTests(unittest.TestCase):
             design = analytic.Design.from_result(result)
             self.assertEqual(result["scratchpad_bytes"],
                              analytic.scratchpad_bytes(design, panel_buffers=1), flags)
+        if not supports("--panel-buffers"):
+            return
+        # Two panel buffers: the parameters are held once per slot, and a tile with one
+        # panel reserves one buffer.
+        for flags in itertools.islice(dense_configs(), 3, 648, 7):
+            result = run({**flags, "panel_buffers": 2})
+            design = analytic.Design.from_result(result)
+            self.assertEqual(result["scratchpad_bytes"], analytic.scratchpad_bytes(design),
+                             flags)
 
     def test_roofline_invariant(self):
         for flags in itertools.islice(dense_configs(), 0, 648, 5):
@@ -644,8 +666,13 @@ class AnalyticUnitTests(unittest.TestCase):
         self.assertEqual(model.dma_bursts, 4 * analytic.ceil_div(416, 16) + 4 * 4)
         palette = json.loads(json.dumps(self.NESTED))
         palette["weights"]["encoding"] = "palette"
-        with self.assertRaisesRegex(ValueError, "dense weights only"):
-            analytic.analyze(analytic.Design.from_result({"config": palette}))
+        # 32 x 8 values, 4-bit indices: 4-byte header, 16-entry LUT, 128 index bytes.
+        self.assertEqual(analytic.analyze(analytic.Design.from_result({"config": palette}))
+                         .weight_bytes, 4 * (4 + 16 + 128))
+        sparse = json.loads(json.dumps(self.NESTED))
+        sparse["weights"]["encoding"] = "sparse"
+        with self.assertRaisesRegex(ValueError, "dense and palette weights"):
+            analytic.analyze(analytic.Design.from_result({"config": sparse}))
         array = json.loads(json.dumps(self.NESTED))
         array["arch"]["compute"].update(array_rows=4, array_cols=4)
         self.assertEqual(analytic.Design.from_result({"config": array}).dataflow, "os-per-wave")
@@ -679,11 +706,13 @@ class AnalyticUnitTests(unittest.TestCase):
         self.assertEqual(analytic.Design.from_flags({"input": "x.npu", "tile_m": 4}).tile_m, 4)
 
     def test_rejected_designs(self):
-        for design in (analytic.Design(weight_encoding="palette"),
-                       analytic.Design(weight_cache_bytes=64),
-                       analytic.Design(cores=2)):
+        for design in (analytic.Design(weight_encoding="sparse"),
+                       analytic.Design(cores=2),
+                       analytic.Design(memory_model="tlm")):
             with self.subTest(design=design), self.assertRaises(ValueError):
                 analytic.analyze(design)
+            with self.subTest(design=design), self.assertRaises(ValueError):
+                analytic.schedule(design)
 
 
 # ------------------------------------------------------------------------------- workloads
