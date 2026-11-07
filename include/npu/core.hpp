@@ -87,7 +87,74 @@ std::uint64_t panel_k(const Config& config, std::uint64_t block);
 std::uint64_t panel_read_bytes(const Config& config, const Tile& tile, std::uint64_t block);
 std::uint64_t panel_compute_cycles(const Config& config, const Tile& tile, std::uint64_t block);
 std::uint64_t peak_macs_per_cycle(const Config& config);
+// Serial model: one DMA server for reads and writes.
 std::uint64_t dma_transfer_cycles(const Config& config, std::uint64_t bytes);
+// Serial: bytes_per_cycle. Axi: both channels, 2 * data_bytes, capped by a
+// nonzero DRAM rate.
+std::uint64_t peak_memory_bytes_per_cycle(const Config& config);
+
+// External memory map, laid out as an offline compiler places the tensors:
+//   0x8000_0000 activations, row-major, row stride G*K bytes;
+//   0x9000_0000 weights, each (group, column panel, reduction panel) packed
+//               contiguously in the order the loader first reads it;
+//   0xA000_0000 bias and parameters, one record per output channel: INT32
+//               bias, then each per-channel vector present (weight zero
+//               point, multiplier, shift) as INT32;
+//   0xB000_0000 INT8 outputs, row-major, row stride G*N bytes.
+// A panel load is the tile's M_t activation runs of K_p bytes, its weight
+// panel unless the weight cache holds it, and on the first panel the tile's
+// N_t parameter records; a tile store is M_t runs of N_t bytes. Addresses are
+// 64-bit and hold no data; they place burst splits. A --timing-only tensor
+// larger than its 256 MiB window runs past it, and since every base is 4 KiB
+// aligned its bursts split as they would in a disjoint window.
+constexpr std::uint64_t activation_base = 0x80000000;
+constexpr std::uint64_t weight_base = 0x90000000;
+constexpr std::uint64_t param_base = 0xA0000000;
+constexpr std::uint64_t output_base = 0xB0000000;
+
+struct AddressRun {
+    std::uint64_t base = 0, length = 0;
+};
+
+// Offset of a dense weight panel from weight_base.
+std::uint64_t dense_weight_offset(const Config& config, const Tile& tile, std::uint64_t block);
+// Bytes of one output channel's parameter record.
+std::uint64_t param_record_bytes(const Config& config);
+// Replaces `runs` with the runs of a panel load. weight_bytes 0 omits the
+// weight panel (a weight-cache hit).
+void panel_read_runs(const Config& config, const Tile& tile, std::uint64_t block,
+                     std::uint64_t weight_offset, std::uint64_t weight_bytes,
+                     std::vector<AddressRun>& runs);
+void tile_store_runs(const Config& config, const Tile& tile, std::vector<AddressRun>& runs);
+
+// One AXI INCR burst. Beats count the data_bytes-aligned slots it touches, so
+// a misaligned first or last beat is a partial beat.
+struct Burst {
+    std::uint64_t address = 0, bytes = 0, beats = 0;
+};
+constexpr std::uint64_t axi_boundary_bytes = 4096;
+// The burst starting at `address` of a run ending at `end`: as long as the
+// run allows, ending at the next 4 KiB boundary or after max_burst_beats
+// beats, whichever comes first.
+Burst next_burst(const AxiConfig& axi, std::uint64_t address, std::uint64_t end);
+
+// Reserved DRAM intervals in byte-time units; the axi model maps cycle c to
+// byte c * dram_bytes_per_cycle, so fractional cycles stay exact integers.
+class DramTimeline {
+public:
+    // Reserves `bytes` in the earliest gap starting at or after `earliest`
+    // and returns where the reservation begins.
+    std::uint64_t reserve(std::uint64_t earliest, std::uint64_t bytes);
+    // Forgets intervals ending at or before `time`.
+    void release(std::uint64_t time);
+    std::size_t intervals() const { return busy_.size(); }
+
+private:
+    struct Interval {
+        std::uint64_t begin, end;
+    };
+    std::vector<Interval> busy_;  // Sorted and disjoint.
+};
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile);
 std::uint64_t tile_write_bytes(const Tile& tile);
 std::uint64_t tile_compute_cycles(const Config& config, const Tile& tile);

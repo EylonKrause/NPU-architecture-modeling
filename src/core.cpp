@@ -993,6 +993,115 @@ std::uint64_t peak_macs_per_cycle(const Config& config) {
                                 compute.macs_per_cycle;
 }
 
+std::uint64_t peak_memory_bytes_per_cycle(const Config& config) {
+    const auto& memory = config.arch.memory;
+    if (memory.model == MemoryModel::Serial) return memory.bytes_per_cycle;
+    const auto bus = checked_mul(2, memory.axi.data_bytes);
+    return memory.dram_bytes_per_cycle ? std::min(bus, memory.dram_bytes_per_cycle) : bus;
+}
+
+std::uint64_t dense_weight_offset(const Config& config, const Tile& tile, std::uint64_t block) {
+    validate_shape(config);
+    validate_tile(tile, config.shape);
+    validate_mapping(config);
+    const auto& shape = config.shape;
+    const auto tile_n = config.mapping.tile_n;
+    require(tile.col % tile_n == 0, "weight panels must align with output column panels");
+    // Only a group's last column panel is narrower than tile_n and only its
+    // last reduction panel is shallower than the panel depth, so every panel
+    // before this one in load order has a size known in closed form.
+    const auto blocks = reduction_blocks(config);
+    const auto depth = panel_size(config);
+    const auto last_depth = panel_k(config, blocks - 1);
+    const auto panel = [&](std::uint64_t k, std::uint64_t cols) {
+        return ceil_div(checked_mul(checked_mul(k, cols), config.weights.bits), 8);
+    };
+    const auto column = [&](std::uint64_t cols) {
+        return checked_add(checked_mul(blocks - 1, panel(depth, cols)), panel(last_depth, cols));
+    };
+    const auto edge = shape.n % tile_n;
+    const auto group_bytes = checked_add(checked_mul(shape.n / tile_n, column(tile_n)),
+                                         edge ? column(edge) : 0);
+    require(block < blocks, "reduction block is outside K");
+    return checked_add(checked_add(checked_mul(tile.group, group_bytes),
+                                   checked_mul(tile.col / tile_n, column(tile_n))),
+                       checked_mul(block, panel(depth, tile.cols)));
+}
+
+std::uint64_t param_record_bytes(const Config& config) {
+    return checked_add(4, channel_metadata_bytes(config, 1));
+}
+
+void panel_read_runs(const Config& config, const Tile& tile, std::uint64_t block,
+                     std::uint64_t weight_offset, std::uint64_t weight_bytes,
+                     std::vector<AddressRun>& runs) {
+    validate_shape(config);
+    validate_tile(tile, config.shape);
+    validate_mapping(config);
+    const auto& shape = config.shape;
+    const auto depth = panel_k(config, block);
+    const auto stride = checked_mul(shape.groups, shape.k);
+    const auto column = checked_add(checked_mul(tile.group, shape.k),
+                                    checked_mul(block, panel_size(config)));
+    runs.clear();
+    runs.reserve(static_cast<std::size_t>(tile.rows + 2));
+    for (std::uint64_t row = tile.row; row < tile.row + tile.rows; ++row)
+        runs.push_back({checked_add(activation_base,
+                                    checked_add(checked_mul(row, stride), column)), depth});
+    if (weight_bytes) runs.push_back({checked_add(weight_base, weight_offset), weight_bytes});
+    if (block == 0) {
+        const auto record = param_record_bytes(config);
+        const auto channel = checked_add(checked_mul(tile.group, shape.n), tile.col);
+        runs.push_back({checked_add(param_base, checked_mul(channel, record)),
+                        checked_mul(tile.cols, record)});
+    }
+}
+
+void tile_store_runs(const Config& config, const Tile& tile, std::vector<AddressRun>& runs) {
+    validate_shape(config);
+    validate_tile(tile, config.shape);
+    const auto& shape = config.shape;
+    const auto stride = checked_mul(shape.groups, shape.n);
+    const auto column = checked_add(checked_mul(tile.group, shape.n), tile.col);
+    runs.clear();
+    runs.reserve(static_cast<std::size_t>(tile.rows));
+    for (std::uint64_t row = tile.row; row < tile.row + tile.rows; ++row)
+        runs.push_back({checked_add(output_base,
+                                    checked_add(checked_mul(row, stride), column)), tile.cols});
+}
+
+Burst next_burst(const AxiConfig& axi, std::uint64_t address, std::uint64_t end) {
+    require(address < end, "a burst starts inside its run");
+    require(axi.data_bytes >= 1 && axi_boundary_bytes % axi.data_bytes == 0 &&
+                axi.max_burst_beats >= 1,
+            "AXI beats must divide 4 KiB and bursts hold at least one beat");
+    const auto first_beat = address / axi.data_bytes;
+    const auto boundary = checked_mul(address / axi_boundary_bytes + 1, axi_boundary_bytes);
+    const auto beat_limit = checked_mul(checked_add(first_beat, axi.max_burst_beats),
+                                        axi.data_bytes);
+    const auto stop = std::min({end, boundary, beat_limit});
+    return {address, stop - address, ceil_div(stop, axi.data_bytes) - first_beat};
+}
+
+std::uint64_t DramTimeline::reserve(std::uint64_t earliest, std::uint64_t bytes) {
+    if (!bytes) return earliest;
+    auto begin = earliest;
+    auto next = busy_.begin();
+    while (next != busy_.end() && next->end <= begin) ++next;
+    // Walk the intervals that overlap [begin, begin + bytes) and move past
+    // each; the first one starting at or after the end leaves a fitting gap.
+    for (; next != busy_.end() && next->begin < checked_add(begin, bytes); ++next)
+        begin = std::max(begin, next->end);
+    busy_.insert(next, {begin, checked_add(begin, bytes)});
+    return begin;
+}
+
+void DramTimeline::release(std::uint64_t time) {
+    auto first_live = busy_.begin();
+    while (first_live != busy_.end() && first_live->end <= time) ++first_live;
+    busy_.erase(busy_.begin(), first_live);
+}
+
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile) {
     validate_shape(config);
     validate_tile(tile, config.shape);

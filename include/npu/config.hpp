@@ -90,11 +90,27 @@ struct ComputeConfig {
     std::uint64_t weight_decode_values_per_cycle = 16;
 };
 
+// AXI4 port of the axi memory model: independent read (AR/R) and write
+// (AW/W/B) channels moving one data_bytes beat per cycle each.
+struct AxiConfig {
+    std::uint64_t data_bytes = 16;
+    // Longest INCR burst; bursts also stop at 4 KiB boundaries.
+    std::uint64_t max_burst_beats = 16;
+    std::uint64_t read_outstanding = 4, write_outstanding = 4;
+    // AR issue to the first R beat; last W beat to the B response.
+    std::uint64_t read_latency = 12, write_latency = 12;
+};
+
 struct MemoryConfig {
+    // Serial model: one DMA server for reads and writes.
     std::uint64_t bytes_per_cycle = 16;
     std::uint64_t latency = 12;
     // Zero issues each transfer as one burst.
     std::uint64_t burst_bytes = 0;
+    MemoryModel model = MemoryModel::Serial;
+    // Axi model: DRAM data rate shared by both channels; zero is unlimited.
+    std::uint64_t dram_bytes_per_cycle = 0;
+    AxiConfig axi;
 };
 
 struct ArchConfig {

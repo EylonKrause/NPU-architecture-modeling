@@ -874,6 +874,124 @@ void check_validation() {
     npu::validate(slow); // The minimal mapping costs eight serial cycles.
 }
 
+// AXI bursts, the DRAM timeline and the address map, from first principles.
+void check_memory_map() {
+    npu::AxiConfig axi;
+    axi.data_bytes = 16;
+    axi.max_burst_beats = 16;
+    const auto burst = [&](std::uint64_t address, std::uint64_t end, std::uint64_t bytes,
+                           std::uint64_t beats, const char* what) {
+        const auto b = npu::next_burst(axi, address, end);
+        require(b.address == address && b.bytes == bytes && b.beats == beats, what);
+    };
+    burst(0x1000, 0x1000 + 1000, 256, 16, "aligned burst of max_burst_beats");
+    burst(0x1008, 0x2000, 248, 16, "misaligned start: a partial first beat");
+    burst(0x0FF0, 0x2000, 16, 1, "a 4 KiB boundary ends the burst");
+    burst(0x100, 0x114, 20, 2, "a partial last beat");
+    burst(0x105, 0x107, 2, 1, "two bytes inside one beat");
+    axi.max_burst_beats = 256;
+    burst(0, 0x10000, 4096, 256, "256 beats of 16 bytes fill a 4 KiB page");
+    axi.data_bytes = 64;
+    burst(0x20, 0x5000, 0xFE0, 64, "the page ends before 256 beats of 64 bytes");
+    rejects_with([&] { npu::next_burst(axi, 5, 5); }, "a burst starts inside its run");
+    std::uint64_t state = 12345;
+    const auto next = [&state](std::uint64_t bound) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (state >> 33) % bound;
+    };
+    for (int i = 0; i < 2000; ++i) {
+        axi.data_bytes = UINT64_C(8) << next(4);
+        axi.max_burst_beats = 1 + next(256);
+        const auto start = next(20000), length = 1 + next(20000), end = start + length;
+        std::uint64_t address = start, beats = 0;
+        while (address < end) {
+            const auto b = npu::next_burst(axi, address, end);
+            require(b.bytes >= 1 && b.beats >= 1 && b.beats <= axi.max_burst_beats,
+                    "burst size within the limits");
+            require(address / 4096 == (address + b.bytes - 1) / 4096,
+                    "no burst crosses a 4 KiB boundary");
+            require(b.beats == npu::ceil_div(address + b.bytes, axi.data_bytes) -
+                                   address / axi.data_bytes,
+                    "beats count the slots touched");
+            beats += b.beats;
+            address += b.bytes;
+        }
+        require(address == end, "bursts tile the run");
+        require(beats == npu::ceil_div(end, axi.data_bytes) - start / axi.data_bytes,
+                "bursts after the first start beat aligned");
+    }
+
+    npu::DramTimeline dram;
+    require(dram.reserve(100, 50) == 100, "empty timeline");
+    require(dram.reserve(0, 100) == 0, "a gap of exactly the size fits");
+    require(dram.reserve(0, 10) == 150, "full up to 150");
+    require(dram.reserve(400, 10) == 400, "a later reservation leaves a hole");
+    require(dram.reserve(120, 240) == 160, "the hole [160, 400) holds 240 bytes");
+    require(dram.reserve(155, 1) == 410, "no hole remains before 410");
+    require(dram.reserve(50, 0) == 50, "an empty reservation takes nothing");
+    require(dram.intervals() == 6, "six intervals reserved");
+    dram.release(150);
+    require(dram.intervals() == 4, "release drops intervals ending by then");
+    require(dram.reserve(0, 5) == 0, "released time is free again");
+
+    npu::Config c;
+    c.shape = {5, 7, 10, 3, 1};
+    c.mapping.tile_m = 2;
+    c.mapping.tile_n = 3;
+    c.mapping.tile_k = 4;
+    c.weights.bits = 4;
+    std::uint64_t cursor = 0;
+    for (std::uint64_t group = 0; group < 3; ++group)
+        for (std::uint64_t col = 0; col < 7; col += 3)
+            for (std::uint64_t block = 0; block < 3; ++block) {
+                const auto cols = std::min<std::uint64_t>(3, 7 - col);
+                require(npu::dense_weight_offset(c, {0, 0, col, 2, cols, group}, block) == cursor,
+                        "dense panels pack back to back in load order");
+                cursor += npu::ceil_div(npu::panel_k(c, block) * cols * 4, 8);
+            }
+    std::vector<npu::AddressRun> runs;
+    for (const auto& tile : npu::make_tiles(c)) {
+        for (std::uint64_t block = 0; block < 3; ++block) {
+            const auto weights = npu::ceil_div(npu::panel_k(c, block) * tile.cols * 4, 8);
+            npu::panel_read_runs(c, tile, block, 77, weights, runs);
+            std::uint64_t total = 0;
+            for (const auto& run : runs) total += run.length;
+            require(total == npu::panel_read_bytes(c, tile, block), "runs carry the panel bytes");
+            require(runs.size() == tile.rows + 1 + (block == 0), "activation rows, weights, bias");
+            require(runs[0].base == npu::activation_base + tile.row * 30 + tile.group * 10 +
+                                        block * 4 && runs[0].length == npu::panel_k(c, block),
+                    "activation rows are G*K apart");
+            require(runs[tile.rows].base == npu::weight_base + 77, "weight panel at its offset");
+            if (block == 0)
+                require(runs.back().base == npu::param_base + (tile.group * 7 + tile.col) * 4 &&
+                            runs.back().length == 4 * tile.cols,
+                        "one bias record per channel");
+            npu::panel_read_runs(c, tile, block, 77, 0, runs);
+            require(runs.size() == tile.rows + (block == 0), "a cached panel skips the weights");
+        }
+        npu::tile_store_runs(c, tile, runs);
+        require(runs.size() == tile.rows && runs[0].length == tile.cols &&
+                    runs[0].base == npu::output_base + tile.row * 21 + tile.group * 7 + tile.col &&
+                    runs.back().base == runs[0].base + (tile.rows - 1) * 21,
+                "output rows are G*N apart");
+    }
+    require(npu::param_record_bytes(c) == 4, "bias only");
+    c.quant.multipliers.assign(21, 1);
+    c.quant.shifts.assign(21, 7);
+    require(npu::param_record_bytes(c) == 12, "bias, multiplier and shift");
+
+    npu::Config m;
+    require(npu::peak_memory_bytes_per_cycle(m) == 16, "serial peak is bytes_per_cycle");
+    m.arch.memory.model = npu::MemoryModel::Axi;
+    m.arch.memory.axi.data_bytes = 32;
+    require(npu::peak_memory_bytes_per_cycle(m) == 64, "two AXI channels");
+    m.arch.memory.dram_bytes_per_cycle = 40;
+    require(npu::peak_memory_bytes_per_cycle(m) == 40, "DRAM caps the port");
+    m.arch.memory.dram_bytes_per_cycle = 100;
+    require(npu::peak_memory_bytes_per_cycle(m) == 64, "a faster DRAM does not");
+    npu::validate(m);
+}
+
 }  // namespace
 
 int main() {
@@ -894,6 +1012,7 @@ int main() {
         check_decoder_overlap();
         check_limits();
         check_validation();
+        check_memory_map();
         std::cout << "core tests: all checks passed\n";
         return 0;
     } catch (const std::exception& error) {
