@@ -299,6 +299,14 @@ void check_loader(const std::string& example_path) {
          "expects a signed 32-bit integer, got true"},
         {"{\"name\":5}", "name expects a string, got 5"},
         {"{\"sim\":{\"trace_path\":false}}", "sim.trace_path expects a string, got false"},
+        // A dotted key would alias the nested path and assign it twice.
+        {"{\"arch\":{\"sram_bytes\":1048576},\"arch.sram_bytes\":2097152}",
+         "test:1:50: config key \"arch.sram_bytes\" contains '.'; nest one object per path "
+         "segment"},
+        {"{\"shape\":{\"m\":4},\"shape.m\":8}", "config key \"shape.m\" contains '.'"},
+        {"{\"arch\":{\"memory.axi\":{\"data_bytes\":8}}}", "config key \"memory.axi\" contains"},
+        {"{\"shape.m\":4}", "test:1:12: config key \"shape.m\" contains '.'"},
+        {"{\".\":1}", "config key \".\" contains '.'"},
     };
     for (const auto& [text, expected] : invalid) {
         npu::ConfigBuilder fresh;

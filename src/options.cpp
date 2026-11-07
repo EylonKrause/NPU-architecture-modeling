@@ -427,8 +427,17 @@ void ConfigBuilder::set_switch(const ConfigOption& option) {
 void ConfigBuilder::load_object(const JsonValue& object, const std::string& prefix,
                                 std::string_view origin) {
     for (std::size_t i = 0; i < object.keys.size(); ++i) {
-        const auto path = prefix.empty() ? object.keys[i] : prefix + '.' + object.keys[i];
         const auto& value = object.items[i];
+        // Paths come from nesting only. A dotted key would alias a nested one,
+        // and one file could then assign an option twice past the parser's
+        // duplicate-member check.
+        if (object.keys[i].find('.') != std::string::npos) {
+            std::ostringstream key;
+            write_json_string(key, object.keys[i]);
+            json_error(origin, value, "config key " + key.str() +
+                                          " contains '.'; nest one object per path segment");
+        }
+        const auto path = prefix.empty() ? object.keys[i] : prefix + '.' + object.keys[i];
         if (const auto* option = find_option_by_path(path)) {
             assign_json(*option, config, value, origin);
             mark(*option, OptionSource::File);
