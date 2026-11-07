@@ -310,12 +310,17 @@ def dma_bursts(design: Design, nbytes: int) -> int:
 
 
 def scratchpad_bytes(design: Design, panel_buffers: int | None = None) -> int:
-    """SRAM reserved per core: slots x (panel buffers x first-panel bytes + 5 B per output)
-    plus the weight cache. 5 B per output = INT32 partial sum + INT8 result."""
+    """SRAM reserved per core: slots x (parameters + panel buffers x panel bytes + 5 B per
+    output) plus the weight cache. A slot holds the tile's bias and channel vectors once, for
+    its lifetime, and no more panel buffers than the tile has panels. 5 B per output = INT32
+    partial sum + INT8 result."""
     buffers = design.panel_buffers if panel_buffers is None else panel_buffers
+    buffers = min(buffers, design.reduction_blocks)
     rows, cols = min(design.tile_m, design.m), min(design.tile_n, design.n)
-    panel = load_bytes(design, rows, cols, design.panel_depth, True)
-    return design.buffer_slots * (buffers * panel + 5 * rows * cols) + design.weight_cache_bytes
+    panel = load_bytes(design, rows, cols, design.panel_depth, False)
+    params = load_bytes(design, rows, cols, design.panel_depth, True) - panel
+    return (design.buffer_slots * (params + buffers * panel + 5 * rows * cols)
+            + design.weight_cache_bytes)
 
 
 @dataclass(frozen=True)

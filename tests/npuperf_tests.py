@@ -481,6 +481,15 @@ class AnalyticSimulatorTests(unittest.TestCase):
             design = analytic.Design.from_result(result)
             self.assertEqual(result["scratchpad_bytes"],
                              analytic.scratchpad_bytes(design, panel_buffers=1), flags)
+        if not supports("--panel-buffers"):
+            return
+        # Two panel buffers: the parameters are held once per slot, and a tile with one
+        # panel reserves one buffer.
+        for flags in itertools.islice(dense_configs(), 3, 648, 7):
+            result = run({**flags, "panel_buffers": 2})
+            design = analytic.Design.from_result(result)
+            self.assertEqual(result["scratchpad_bytes"], analytic.scratchpad_bytes(design),
+                             flags)
 
     def test_roofline_invariant(self):
         for flags in itertools.islice(dense_configs(), 0, 648, 5):
