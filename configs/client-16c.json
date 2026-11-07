@@ -1,0 +1,19 @@
+{
+  "name": "client-16c",
+  "description": "Hypothetical 16-core client-SoC NPU in the class of the 16-core Neural Engine Apple states for M4 (38 trillion operations per second, precision not stated; 120GB/s memory bandwidth). 16 cores of 32x32 output-stationary arrays: 16384 MAC/cycle, 39.3216 TOP/s at 1.2 GHz and 2 ops/MAC, 3.5% above 38. The 1.2 GHz clock makes 120 GB/s exactly 100 B/cycle; that rate is the whole SoC's, shared with the CPU and GPU. Per core: SRAM 133.5 KiB, the 267 KB per 2048 MACs of the Ethos-U85 top configuration scaled to 1024 MACs; one 256-bit AXI port, the narrowest width at which the read channels of the 32 cores of workstation-32c (the same core) reach its DRAM rate; Vela 5.2.0 Ethos-U85 DRAM latencies (500 read, 250 write cycles) and outstanding limits (64 reads, 32 writes); bursts up to 8 beats, the shortest power of two with which 64 outstanding reads cover 500 cycles. Tiles 64x64x128 by the mobile-2k rule (panels at least 128 B deep); the 29696 B left over is the weight cache. Partition auto. Pipeline 4 cycles per panel, the simulator default.",
+  "arch": {
+    "compute": {"array_rows": 32, "array_cols": 32, "dataflow": "os", "pipeline_cycles": 4},
+    "memory": {
+      "model": "axi",
+      "dram_bytes_per_cycle": 100,
+      "axi": {"data_bytes": 32, "max_burst_beats": 8, "read_outstanding": 64,
+              "write_outstanding": 32, "read_latency": 500, "write_latency": 250}
+    },
+    "sram_bytes": 136704,
+    "weight_cache_bytes": 29696,
+    "frequency_mhz": 1200,
+    "cores": 16
+  },
+  "mapping": {"tile_m": 64, "tile_n": 64, "tile_k": 128, "buffer_slots": 2, "panel_buffers": 2,
+              "partition": "auto"}
+}
