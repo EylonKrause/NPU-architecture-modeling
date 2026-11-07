@@ -112,6 +112,8 @@ if(BUILD_TESTING)
   npu_add_python_test(tools.autotune
     SCRIPT tests/autotune_tests.py BINARY npu-sim)
 
+  npu_add_python_test(ci.systemc-cache
+    SCRIPT tests/ci_cache_tests.py TIMEOUT 30)
   if("undefined" IN_LIST NPU_SANITIZERS)
     add_executable(npu-ubsan-vptr-probe tests/ubsan_vptr_probe.cpp)
     npu_project_target(npu-ubsan-vptr-probe)

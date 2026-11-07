@@ -1,8 +1,8 @@
 name: SystemC prefix
 description: >-
   Restore the pinned SystemC install prefix for this runner image and compiler from the cache,
-  or build it with cmake/BuildSystemC.cmake. Run after the compiler environment is set up
-  (CC/CXX, or the MSVC developer environment).
+  or build it with cmake/BuildSystemC.cmake and cache it. Run after the compiler environment
+  is set up (CC/CXX, or the MSVC developer environment).
 inputs:
   toolchain:
     description: Name of the compiler configuration, part of the cache key (e.g. linux-x64-gcc).
@@ -22,8 +22,10 @@ runs:
         echo "prefix=${root}/.deps/systemc" >> "$GITHUB_OUTPUT"
         # The image version changes whenever the preinstalled compilers do.
         echo "image=${ImageOS:-unknown}-${ImageVersion:-unknown}" >> "$GITHUB_OUTPUT"
+    # Restore and save are separate steps: actions/cache saves in a post step that runs only
+    # when the whole job succeeds, so a leg with failing tests would rebuild SystemC every run.
     - id: cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: .deps/systemc
         # cmake/*SystemC*.cmake: the pin, the build script and the MSVC patch.
@@ -34,3 +36,8 @@ runs:
         cmake -DNPU_SYSTEMC_PREFIX="${{ steps.paths.outputs.prefix }}"
         -DNPU_SYSTEMC_WORK="${RUNNER_TEMP}/systemc-build"
         -P cmake/BuildSystemC.cmake
+    - if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: .deps/systemc
+        key: ${{ steps.cache.outputs.cache-primary-key }}
