@@ -1,0 +1,164 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {"major": 3, "minor": 25, "patch": 0},
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {"CMAKE_EXPORT_COMPILE_COMMANDS": "ON"}
+    },
+    {
+      "name": "not-windows",
+      "hidden": true,
+      "condition": {"type": "notEquals", "lhs": "${hostSystemName}", "rhs": "Windows"}
+    },
+    {
+      "name": "release",
+      "displayName": "Release",
+      "inherits": "base",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Release"}
+    },
+    {
+      "name": "debug",
+      "displayName": "Debug",
+      "inherits": "base",
+      "cacheVariables": {"CMAKE_BUILD_TYPE": "Debug"}
+    },
+    {
+      "name": "asan-ubsan",
+      "displayName": "Debug, ASan + UBSan (project and SystemC)",
+      "inherits": ["debug", "not-windows"],
+      "cacheVariables": {
+        "NPU_SANITIZERS": "address;undefined",
+        "NPU_TEST_TIMEOUT_SCALE": "3"
+      }
+    },
+    {
+      "name": "coverage",
+      "displayName": "Debug, gcov line coverage of project code",
+      "inherits": ["debug", "not-windows"],
+      "cacheVariables": {"NPU_COVERAGE": "ON"}
+    },
+    {
+      "name": "ci",
+      "hidden": true,
+      "inherits": "release",
+      "cacheVariables": {"NPU_WARNINGS_AS_ERRORS": "ON"}
+    },
+    {
+      "name": "ci-gcc",
+      "displayName": "CI: GCC, Release, warnings as errors",
+      "inherits": ["ci", "not-windows"],
+      "cacheVariables": {"CMAKE_C_COMPILER": "gcc", "CMAKE_CXX_COMPILER": "g++"}
+    },
+    {
+      "name": "ci-clang",
+      "displayName": "CI: Clang, Release, warnings as errors",
+      "inherits": ["ci", "not-windows"],
+      "cacheVariables": {"CMAKE_C_COMPILER": "clang", "CMAKE_CXX_COMPILER": "clang++"}
+    },
+    {
+      "name": "ci-msvc",
+      "displayName": "CI: MSVC (run from a developer prompt), Release, warnings as errors",
+      "inherits": "ci",
+      "condition": {"type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows"},
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl",
+        "NPU_TEST_TIMEOUT_SCALE": "3"
+      }
+    }
+  ],
+  "buildPresets": [
+    {"name": "release", "configurePreset": "release"},
+    {"name": "debug", "configurePreset": "debug"},
+    {"name": "asan-ubsan", "configurePreset": "asan-ubsan"},
+    {"name": "coverage", "configurePreset": "coverage"},
+    {"name": "ci-gcc", "configurePreset": "ci-gcc"},
+    {"name": "ci-clang", "configurePreset": "ci-clang"},
+    {"name": "ci-msvc", "configurePreset": "ci-msvc"}
+  ],
+  "testPresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "output": {"outputOnFailure": true},
+      "execution": {"jobs": 4, "noTestsAction": "error"}
+    },
+    {"name": "release", "inherits": "base", "configurePreset": "release"},
+    {"name": "debug", "inherits": "base", "configurePreset": "debug"},
+    {
+      "name": "asan-ubsan",
+      "inherits": "base",
+      "configurePreset": "asan-ubsan",
+      "environment": {
+        "ASAN_OPTIONS": "abort_on_error=1:detect_leaks=1:strict_string_checks=1",
+        "UBSAN_OPTIONS": "abort_on_error=1:halt_on_error=1:print_stacktrace=1"
+      }
+    },
+    {"name": "coverage", "inherits": "base", "configurePreset": "coverage"},
+    {"name": "ci-gcc", "inherits": "base", "configurePreset": "ci-gcc"},
+    {"name": "ci-clang", "inherits": "base", "configurePreset": "ci-clang"},
+    {"name": "ci-msvc", "inherits": "base", "configurePreset": "ci-msvc"}
+  ],
+  "workflowPresets": [
+    {
+      "name": "release",
+      "steps": [
+        {"type": "configure", "name": "release"},
+        {"type": "build", "name": "release"},
+        {"type": "test", "name": "release"}
+      ]
+    },
+    {
+      "name": "debug",
+      "steps": [
+        {"type": "configure", "name": "debug"},
+        {"type": "build", "name": "debug"},
+        {"type": "test", "name": "debug"}
+      ]
+    },
+    {
+      "name": "asan-ubsan",
+      "steps": [
+        {"type": "configure", "name": "asan-ubsan"},
+        {"type": "build", "name": "asan-ubsan"},
+        {"type": "test", "name": "asan-ubsan"}
+      ]
+    },
+    {
+      "name": "coverage",
+      "steps": [
+        {"type": "configure", "name": "coverage"},
+        {"type": "build", "name": "coverage"},
+        {"type": "test", "name": "coverage"}
+      ]
+    },
+    {
+      "name": "ci-gcc",
+      "steps": [
+        {"type": "configure", "name": "ci-gcc"},
+        {"type": "build", "name": "ci-gcc"},
+        {"type": "test", "name": "ci-gcc"}
+      ]
+    },
+    {
+      "name": "ci-clang",
+      "steps": [
+        {"type": "configure", "name": "ci-clang"},
+        {"type": "build", "name": "ci-clang"},
+        {"type": "test", "name": "ci-clang"}
+      ]
+    },
+    {
+      "name": "ci-msvc",
+      "steps": [
+        {"type": "configure", "name": "ci-msvc"},
+        {"type": "build", "name": "ci-msvc"},
+        {"type": "test", "name": "ci-msvc"}
+      ]
+    }
+  ]
+}
