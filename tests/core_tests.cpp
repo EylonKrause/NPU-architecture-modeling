@@ -5,7 +5,10 @@
 #include <cstdint>
 #include <functional>
 #include <iostream>
+#include <iterator>
 #include <limits>
+#include <map>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <tuple>
@@ -1234,6 +1237,472 @@ void check_cluster_plan() {
     rejects_with([&] { npu::validate(p); }, "more than one core requires --memory-model axi");
 }
 
+// --------------------------------------------------- convolution and depthwise --
+
+// A deterministic draw in [low, high].
+struct Draw {
+    std::uint64_t state;
+    std::uint64_t operator()(std::uint64_t low, std::uint64_t high) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return low + (state >> 33) % (high - low + 1);
+    }
+};
+
+// A small random convolution whose geometry is valid: G groups of C_g input
+// channels, N outputs per group, tile_k a whole number of kernel rows.
+npu::Config random_conv(Draw& draw, bool depthwise) {
+    while (true) {
+        npu::Config c;
+        auto& v = c.shape.conv;
+        v.input_h = draw(1, 7);
+        v.input_w = draw(1, 7);
+        v.kernel_h = draw(1, 3);
+        v.kernel_w = draw(1, 3);
+        v.stride_h = draw(1, 3);
+        v.stride_w = draw(1, 3);
+        v.dilation_h = draw(1, 2);
+        v.dilation_w = draw(1, 2);
+        v.pad_top = draw(0, 2);
+        v.pad_left = draw(0, 2);
+        v.pad_bottom = draw(0, 2);
+        v.pad_right = draw(0, 2);
+        const auto group_channels = draw(1, 3);
+        c.shape.groups = depthwise ? draw(2, 6) : draw(1, 3);
+        v.input_c = c.shape.groups * group_channels;
+        c.shape.n = depthwise ? 1 : draw(1, 3);
+        const auto reach_h = v.dilation_h * (v.kernel_h - 1) + 1;
+        const auto reach_w = v.dilation_w * (v.kernel_w - 1) + 1;
+        if (reach_h > v.input_h + v.pad_top + v.pad_bottom ||
+            reach_w > v.input_w + v.pad_left + v.pad_right)
+            continue;
+        const auto out_h = (v.input_h + v.pad_top + v.pad_bottom - reach_h) / v.stride_h + 1;
+        const auto out_w = (v.input_w + v.pad_left + v.pad_right - reach_w) / v.stride_w + 1;
+        c.shape.m = out_h * out_w;
+        c.shape.k = v.kernel_h * v.kernel_w * group_channels;
+        c.shape.seed = draw(1, 1000);
+        c.mapping.tile_m = draw(1, c.shape.m);
+        c.mapping.tile_n = draw(1, 4);
+        c.mapping.tile_k = draw(0, v.kernel_h) * v.kernel_w * group_channels;
+        c.quant.input_zero = static_cast<std::int32_t>(draw(0, 20)) - 10;
+        c.arch.sram_bytes = 1ULL << 24;
+        if (depthwise) c.arch.compute.depthwise_macs_per_cycle = draw(1, 40);
+        return c;
+    }
+}
+
+// Every input pixel the output pixels [first, first + count) read over kernel
+// rows [ky_first, ky_first + ky_count), by enumeration of every tap.
+std::map<std::uint64_t, std::set<std::uint64_t>> needed_pixels(
+    const npu::Config& c, std::uint64_t first, std::uint64_t count, std::uint64_t ky_first,
+    std::uint64_t ky_count) {
+    const auto& v = c.shape.conv;
+    const auto out_w = npu::conv_geometry(c.shape).output_w;
+    std::map<std::uint64_t, std::set<std::uint64_t>> pixels;
+    for (auto m = first; m < first + count; ++m)
+        for (auto ky = ky_first; ky < ky_first + ky_count; ++ky)
+            for (std::uint64_t kx = 0; kx < v.kernel_w; ++kx) {
+                const auto y =
+                    static_cast<std::int64_t>(m / out_w * v.stride_h + ky * v.dilation_h) -
+                    static_cast<std::int64_t>(v.pad_top);
+                const auto x =
+                    static_cast<std::int64_t>(m % out_w * v.stride_w + kx * v.dilation_w) -
+                    static_cast<std::int64_t>(v.pad_left);
+                if (y >= 0 && x >= 0 && y < static_cast<std::int64_t>(v.input_h) &&
+                    x < static_cast<std::int64_t>(v.input_w))
+                    pixels[static_cast<std::uint64_t>(y)].insert(static_cast<std::uint64_t>(x));
+            }
+    return pixels;
+}
+
+// Direct convolution over the NHWC input, without the im2col operand.
+std::vector<std::int32_t> direct_conv(const npu::Config& c, const npu::Problem& p) {
+    const auto& v = c.shape.conv;
+    const auto g = npu::conv_geometry(c.shape);
+    const auto channels = c.shape.groups * c.shape.n;
+    std::vector<std::int32_t> result;
+    for (std::uint64_t oy = 0; oy < g.output_h; ++oy)
+        for (std::uint64_t ox = 0; ox < g.output_w; ++ox)
+            for (std::uint64_t channel = 0; channel < channels; ++channel) {
+                const auto group = channel / c.shape.n, out = channel % c.shape.n;
+                std::int64_t sum = p.bias[channel];
+                for (std::uint64_t ky = 0; ky < v.kernel_h; ++ky)
+                    for (std::uint64_t kx = 0; kx < v.kernel_w; ++kx) {
+                        const auto y = static_cast<std::int64_t>(oy * v.stride_h +
+                                                                 ky * v.dilation_h) -
+                                       static_cast<std::int64_t>(v.pad_top);
+                        const auto x = static_cast<std::int64_t>(ox * v.stride_w +
+                                                                 kx * v.dilation_w) -
+                                       static_cast<std::int64_t>(v.pad_left);
+                        // Padding holds the input zero point and adds nothing.
+                        if (y < 0 || x < 0 || y >= static_cast<std::int64_t>(v.input_h) ||
+                            x >= static_cast<std::int64_t>(v.input_w))
+                            continue;
+                        for (std::uint64_t ci = 0; ci < g.group_channels; ++ci) {
+                            const auto in = p.input[(static_cast<std::uint64_t>(y) * v.input_w +
+                                                     static_cast<std::uint64_t>(x)) * v.input_c +
+                                                    group * g.group_channels + ci];
+                            const auto kk = (ky * v.kernel_w + kx) * g.group_channels + ci;
+                            const auto w = p.weights[(group * c.shape.k + kk) * c.shape.n + out];
+                            sum += static_cast<std::int64_t>(in - c.quant.input_zero) *
+                                   (w - c.quant.weight_zero);
+                        }
+                    }
+                result.push_back(static_cast<std::int32_t>(sum));
+            }
+    return result;
+}
+
+void check_convolution_geometry() {
+    // MobileNetV2 block_1_depthwise with TF SAME padding (0, 1, 0, 1).
+    npu::Config dw;
+    dw.shape.m = 3136; dw.shape.n = 1; dw.shape.k = 9; dw.shape.groups = 96;
+    dw.shape.conv = {112, 112, 96, 3, 3, 2, 2, 1, 1, 0, 0, 1, 1};
+    const auto same = npu::conv_geometry(dw.shape);
+    require(same.output_h == 56 && same.output_w == 56 && same.group_channels == 1 &&
+                same.kernel_row_k == 3,
+            "TF SAME stride 2 on 112 gives 56");
+    dw.shape.conv = {112, 112, 96, 3, 3, 2, 2, 1, 1, 1, 1, 1, 1};
+    require(npu::conv_geometry(dw.shape).output_w == 56, "pad 1 stride 2 on 112 gives 56");
+    // ResNet-50 layer1 3x3: 56 x 56 x 64, pad 1.
+    npu::Config res;
+    res.shape.m = 3136; res.shape.n = 64; res.shape.k = 576;
+    res.shape.conv = {56, 56, 64, 3, 3, 1, 1, 1, 1, 1, 1, 1, 1};
+    const auto res_geometry = npu::conv_geometry(res.shape);
+    require(res_geometry.kernel_row_k == 192 && res_geometry.output_h == 56, "res2 geometry");
+    res.mapping.tile_k = 384;
+    require(npu::reduction_blocks(res) == 2 && npu::conv_kernel_rows(res, 1).first == 2 &&
+                npu::conv_kernel_rows(res, 1).count == 1,
+            "a panel of two kernel rows, then the last row");
+    res.mapping.tile_k = 0;
+    require(npu::conv_kernel_rows(res, 0).count == 3, "tile_k 0 takes every kernel row");
+    require(!npu::implicit_conv(npu::Config{}.shape) &&
+                npu::conv_geometry(npu::Config{}.shape).output_h == 0,
+            "the default is a plain GEMM");
+
+    const auto conv_error = [&res](const std::function<void(npu::Config&)>& mutation,
+                                   const std::string& expected) {
+        auto c = res;
+        mutation(c);
+        rejects_with([&] { npu::validate(c); }, expected);
+    };
+    conv_error([](auto& c) { c.shape.m = 3135; },
+               "M must equal output height x width = 56 x 56 = 3136, got 3135");
+    conv_error([](auto& c) { c.shape.k = 575; },
+               "K must equal kernel_h x kernel_w x input_c / groups = 576, got 575");
+    conv_error([](auto& c) { c.shape.groups = 3; c.shape.k = 192; },
+               "input channels 64 must be a multiple of groups 3");
+    conv_error([](auto& c) { c.shape.conv.input_w = 0; },
+               "input height, width and channels must all be in 1..1048576");
+    conv_error([](auto& c) { c.shape.conv.stride_h = 0; },
+               "kernel, stride and dilation must be in 1..1048576");
+    conv_error([](auto& c) { c.shape.conv.dilation_w = 40; }, "kernel width extent 81 exceeds "
+                                                               "the padded input 58");
+    conv_error([](auto& c) { c.mapping.tile_k = 256; },
+               "--tile-k must be 0 or a multiple of kernel_w x input_c / groups = 192 (whole "
+               "kernel rows), got 256");
+    npu::Config loose;
+    loose.shape.conv.kernel_h = 3;
+    rejects_with([&] { npu::validate(loose); }, "need the input extents --conv-input-h");
+    // The NHWC input counts against the host storage of a bit-exact run: a
+    // 256 MiB input with a stride-16 1x1 kernel exceeds it, timing alone does not.
+    npu::Config big;
+    big.shape.conv = {16384, 16384, 1, 1, 1, 16, 16, 1, 1, 0, 0, 0, 0};
+    big.shape.m = 1024 * 1024; big.shape.n = 1; big.shape.k = 1;
+    rejects_with([&] { npu::validate(big); },
+                 "estimated simulator working storage exceeds 256 MiB");
+    big.sim.timing_only = true;
+    npu::validate(big);
+}
+
+void check_convolution_footprint() {
+    Draw draw{77};
+    std::vector<npu::InputSpan> spans;
+    std::vector<npu::AddressRun> runs;
+    for (int round = 0; round < 300; ++round) {
+        const bool depthwise = round % 3 == 0;
+        auto c = random_conv(draw, depthwise);
+        npu::validate(c);
+        require(npu::channel_wise(c) == depthwise, "a depthwise draw runs channel-wise");
+        const auto& v = c.shape.conv;
+        const auto g = npu::conv_geometry(c.shape);
+        const auto label = " (round " + std::to_string(round) + ")";
+        std::uint64_t largest = 0;
+        for (const auto& tile : npu::make_tiles(c)) {
+            const auto first_group = depthwise ? tile.col : tile.group;
+            const auto groups = depthwise ? tile.cols : 1;
+            const auto channels = groups * g.group_channels;
+            for (std::uint64_t block = 0; block < npu::reduction_blocks(c); ++block) {
+                const auto rows = npu::conv_kernel_rows(c, block);
+                const auto pixels = needed_pixels(c, tile.row, tile.rows, rows.first, rows.count);
+                npu::conv_input_spans(c, tile.row, tile.rows, block, spans);
+                require(spans.size() == pixels.size(), "one span per needed input row" + label);
+                std::uint64_t width = 0;
+                std::vector<npu::AddressRun> expected;
+                for (std::size_t i = 0; i < spans.size(); ++i) {
+                    const auto entry = std::next(pixels.begin(), static_cast<std::ptrdiff_t>(i));
+                    require(spans[i].row == entry->first &&
+                                spans[i].first == *entry->second.begin() &&
+                                spans[i].last == *entry->second.rbegin(),
+                            "a span is the hull of its row's needed columns" + label);
+                    width += spans[i].last - spans[i].first + 1;
+                    const auto row_base =
+                        npu::activation_base + spans[i].row * v.input_w * v.input_c;
+                    if (channels == v.input_c) {
+                        expected.push_back({row_base + spans[i].first * v.input_c,
+                                            (spans[i].last - spans[i].first + 1) * v.input_c});
+                    } else {
+                        for (auto x = spans[i].first; x <= spans[i].last; ++x)
+                            expected.push_back({row_base + x * v.input_c +
+                                                    first_group * g.group_channels,
+                                                channels});
+                    }
+                }
+                require(npu::activation_panel_bytes(c, tile, block) == width * channels,
+                        "panel activation bytes are the footprint" + label);
+                const auto widest = std::min(c.mapping.tile_n, npu::grid_columns(c));
+                largest = std::max(largest, width * (depthwise ? widest : 1) * g.group_channels);
+                npu::panel_read_runs(c, tile, block, 0, 0, runs);
+                if (block == 0) runs.pop_back();  // the bias records
+                require(runs.size() == expected.size(), "activation run count" + label);
+                for (std::size_t i = 0; i < runs.size(); ++i)
+                    require(runs[i].base == expected[i].base &&
+                                runs[i].length == expected[i].length,
+                            "activation run " + std::to_string(i) + label);
+                npu::panel_read_runs(c, tile, block, 0, 0, runs, false);
+                require(runs.size() == (block == 0 ? 1U : 0U), "a cached panel reads no input");
+            }
+        }
+        // A panel buffer holds the largest footprint of any tile and the
+        // deepest weight panel.
+        const auto rows = std::min(c.mapping.tile_m, c.shape.m);
+        const auto cols = std::min(c.mapping.tile_n, npu::grid_columns(c));
+        const auto depth = std::min(c.shape.k, c.mapping.tile_k ? c.mapping.tile_k : c.shape.k);
+        const auto buffers = std::min<std::uint64_t>(2, npu::reduction_blocks(c));
+        require(npu::scratchpad_bytes(c) ==
+                    2 * (4 * cols + buffers * (largest + depth * cols) + 5 * rows * cols),
+                "the slots hold the largest input footprint" + label);
+        // The operand is the im2col view of the generated input; the
+        // reference and the tiled datapaths agree with a direct convolution.
+        const auto p = npu::make_problem(c);
+        require(p.input.size() == v.input_h * v.input_w * v.input_c &&
+                    p.activations == npu::im2col(c, p.input),
+                "the operand is built from the NHWC input" + label);
+        const auto expected = npu::reference(p, c.quant);
+        require(expected.accumulators == direct_conv(c, p),
+                "the im2col GEMM equals a direct convolution" + label);
+        npu::Output tiled;
+        for (const auto& tile : npu::make_tiles(c)) {
+            if (depthwise) npu::compute_channel_tile(p, c.quant, tile, tiled);
+            else npu::compute_tile(p, c.quant, tile, tiled);
+        }
+        require(tiled.accumulators == expected.accumulators &&
+                    tiled.quantized == expected.quantized,
+                "tiles reproduce the reference" + label);
+    }
+}
+
+void check_depthwise_datapath() {
+    npu::Config c;
+    c.shape.m = 7; c.shape.n = 1; c.shape.k = 9; c.shape.groups = 10; c.shape.seed = 5;
+    c.mapping.tile_m = 3;
+    c.mapping.tile_n = 4;
+    c.arch.compute.pipeline_cycles = 2;
+    require(!npu::channel_wise(c) && npu::grid_groups(c) == 10 && npu::grid_columns(c) == 1,
+            "rate 0 keeps grouped GEMMs");
+    c.arch.compute.depthwise_macs_per_cycle = 8;
+    require(npu::channel_wise(c) && npu::grid_groups(c) == 1 && npu::grid_columns(c) == 10 &&
+                npu::peak_macs_per_cycle(c) == 8,
+            "the depthwise datapath takes the problem");
+    const auto tiles = npu::make_tiles(c);
+    require(tiles.size() == 9 && npu::tile_count(c) == 9, "three row tiles of three channel tiles");
+    for (std::size_t i = 0; i < tiles.size(); ++i) {
+        const auto& t = tiles[i];
+        require(t.group == 0 && t.row == i / 3 * 3 && t.col == i % 3 * 4 &&
+                    t.rows == std::min<std::uint64_t>(3, 7 - t.row) &&
+                    t.cols == std::min<std::uint64_t>(4, 10 - t.col),
+                "row tile outer, channel tile inner");
+    }
+    std::vector<npu::AddressRun> runs;
+    for (const auto tile_k : {UINT64_C(0), UINT64_C(4)}) {
+        c.mapping.tile_k = tile_k;
+        std::uint64_t cursor = 0;
+        for (std::uint64_t col = 0; col < 10; col += 4)
+            for (std::uint64_t block = 0; block < npu::reduction_blocks(c); ++block) {
+                const auto cols = std::min<std::uint64_t>(4, 10 - col);
+                require(npu::dense_weight_offset(c, {0, 0, col, 3, cols, 0}, block) == cursor,
+                        "channel-tile weight panels pack in load order");
+                cursor += npu::panel_k(c, block) * cols;
+            }
+        for (const auto& t : tiles) {
+            for (std::uint64_t block = 0; block < npu::reduction_blocks(c); ++block) {
+                const auto depth = npu::panel_k(c, block);
+                require(npu::panel_compute_cycles(c, t, block) ==
+                            npu::ceil_div(t.rows * t.cols * depth, 8) + 2,
+                        "ceil(M_t * C_t * K_p / rate) + pipeline");
+                require(npu::activation_panel_bytes(c, t, block) == t.rows * t.cols * depth,
+                        "M_t x C_t x K_p activation bytes");
+                npu::panel_read_runs(c, t, block, 5, t.cols * depth, runs);
+                const auto per_row = tile_k ? t.cols : 1;
+                require(runs.size() == t.rows * per_row + 1 + (block == 0), "panel run count");
+                for (std::uint64_t r = 0; r < t.rows; ++r)
+                    for (std::uint64_t j = 0; j < per_row; ++j) {
+                        const auto& run = runs[r * per_row + j];
+                        const auto base = npu::activation_base + (t.row + r) * 90 +
+                                          (t.col + j) * 9 + block * 4;
+                        require(run.base == base && run.length == (tile_k ? depth : t.cols * 9),
+                                "one run per row over all of K, else one per channel");
+                    }
+                require(runs[t.rows * per_row].base == npu::weight_base + 5 &&
+                            runs[t.rows * per_row].length == t.cols * depth,
+                        "the weight panel holds C_t x K_p");
+                if (block == 0)
+                    require(runs.back().base == npu::param_base + t.col * 4 &&
+                                runs.back().length == t.cols * 4,
+                            "one bias record per channel");
+            }
+            npu::tile_store_runs(c, t, runs);
+            require(runs.size() == t.rows &&
+                        runs[0].base == npu::output_base + t.row * 10 + t.col &&
+                        runs[0].length == t.cols,
+                    "a store writes M_t rows of C_t channels");
+        }
+        // Two slots of C_t-wide panels: bias, the panel buffers (one per
+        // reduction panel, at most two), sums and outputs.
+        const std::uint64_t depth = tile_k ? 4 : 9, buffers = tile_k ? 2 : 1;
+        require(npu::scratchpad_bytes(c) ==
+                    2 * (4 * 4 + buffers * (3 * 4 * depth + 4 * depth) + 5 * 3 * 4),
+                "scratchpad of channel tiles");
+    }
+    c.mapping.tile_k = 0;
+    const auto p = npu::make_problem(c);
+    const auto expected = npu::reference(p, c.quant);
+    npu::Output output;
+    for (auto t = tiles.rbegin(); t != tiles.rend(); ++t)
+        npu::compute_channel_tile(p, c.quant, *t, output);
+    require(output.accumulators == expected.accumulators && output.quantized == expected.quantized,
+            "channel tiles reproduce the reference");
+    rejects_with([&] { npu::compute_channel_tile(p, c.quant, {0, 0, 8, 1, 3, 0}, output); },
+                 "tile is outside the output matrix");
+    // The activation cache keys channel tiles apart; GEMM column tiles of one
+    // row tile share a key.
+    require(npu::activation_cache_key(c, tiles[0], 0) != npu::activation_cache_key(c, tiles[1], 0),
+            "channel tiles never share activation panels");
+    npu::Config gemm;
+    gemm.shape.m = 6; gemm.shape.n = 9; gemm.shape.k = 8; gemm.shape.groups = 2;
+    gemm.mapping.tile_m = 3; gemm.mapping.tile_n = 4; gemm.mapping.tile_k = 4;
+    const auto key = [&gemm](std::uint64_t row, std::uint64_t col, std::uint64_t group,
+                             std::uint64_t block) {
+        return npu::activation_cache_key(gemm, {0, row, col, 3, 1, group}, block);
+    };
+    require(key(0, 0, 0, 0) == key(0, 4, 0, 0) && key(0, 0, 0, 0) != key(3, 0, 0, 0) &&
+                key(0, 0, 0, 0) != key(0, 0, 1, 0) && key(0, 0, 0, 0) != key(0, 0, 0, 1),
+            "a GEMM key is (group, row tile, block)");
+    gemm.arch.activation_cache_bytes = 100;
+    require(npu::scratchpad_bytes(gemm) ==
+                [&gemm] { auto none = gemm; none.arch.activation_cache_bytes = 0;
+                          return npu::scratchpad_bytes(none); }() + 100,
+            "the activation cache counts in SRAM");
+    gemm.arch.activation_cache_bytes = 1000000001;
+    rejects_with([&] { npu::validate(gemm); }, "activation cache size must be at most");
+
+    auto encoded = c;
+    encoded.weights.encoding = npu::WeightEncoding::Palette;
+    rejects_with([&] { npu::validate(encoded); }, "the depthwise datapath reads dense weights");
+    encoded.shape.n = 2;
+    npu::validate(encoded);
+    require(!npu::channel_wise(encoded), "N > 1 stays a grouped GEMM");
+    c.arch.compute.depthwise_macs_per_cycle = 1000000001;
+    rejects_with([&] { npu::validate(c); }, "depthwise MACs per cycle must be at most");
+}
+
+// Replays one core's activation-cache lookups in load order: an LRU over
+// activation_cache_key lines of activation_panel_bytes, returning the bytes
+// read and counting the hits.
+std::uint64_t replay_activation_reads(const npu::Config& c, const std::vector<npu::Tile>& tiles,
+                                      std::uint64_t& hits) {
+    struct Line { std::uint64_t key, bytes; };
+    std::vector<Line> lru;  // Most recent first.
+    std::uint64_t cached = 0, reads = 0;
+    const auto cache = c.arch.activation_cache_bytes;
+    for (const auto& tile : tiles) {
+        for (std::uint64_t block = 0; block < npu::reduction_blocks(c); ++block) {
+            const auto bytes = npu::activation_panel_bytes(c, tile, block);
+            const auto key = npu::activation_cache_key(c, tile, block);
+            const auto hit = std::find_if(lru.begin(), lru.end(),
+                                          [key](const Line& line) { return line.key == key; });
+            if (cache && hit != lru.end()) {
+                const auto line = *hit;
+                lru.erase(hit);
+                lru.insert(lru.begin(), line);
+                ++hits;
+                continue;
+            }
+            reads += bytes;
+            if (!cache || bytes > cache) continue;
+            while (cached + bytes > cache) {
+                cached -= lru.back().bytes;
+                lru.pop_back();
+            }
+            lru.insert(lru.begin(), {key, bytes});
+            cached += bytes;
+        }
+    }
+    return reads;
+}
+
+void check_activation_estimate() {
+    // The closed-form activation reads against a replay of every core's
+    // activation cache, for GEMMs, convolutions and the depthwise datapath.
+    Draw draw{4242};
+    std::uint64_t total_hits = 0;
+    for (int round = 0; round < 400; ++round) {
+        npu::Config r;
+        const auto kind = round % 4;  // GEMM, convolution, depthwise GEMM, depthwise conv
+        if (kind == 1 || kind == 3) {
+            r = random_conv(draw, kind == 3);
+        } else {
+            r.shape = {draw(1, 30), kind == 2 ? 1 : draw(1, 30), draw(1, 30), draw(2, 6), 1};
+            if (kind == 0) r.shape.groups = draw(1, 4);
+            r.mapping.tile_m = draw(1, 9);
+            r.mapping.tile_n = draw(1, 9);
+            r.mapping.tile_k = draw(0, 1) ? 0 : draw(1, r.shape.k);
+            if (kind == 2) r.arch.compute.depthwise_macs_per_cycle = draw(1, 32);
+        }
+        r.arch.memory.model = npu::MemoryModel::Axi;
+        r.arch.cores = draw(1, 5);
+        r.arch.activation_cache_bytes = draw(0, 3) ? draw(1, 400) : std::uint64_t{0};
+        r.arch.weight_cache_bytes = draw(0, 1) ? std::uint64_t{0} : draw(1, 300);
+        r.arch.sram_bytes = 1ULL << 26;
+        npu::validate(r);
+        const auto costs = npu::dense_column_costs(r);
+        const auto tiles = npu::make_tiles(r);
+        for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
+            const auto plan = npu::cluster_plan(r, partition);
+            const auto estimate = npu::estimate_cluster(r, plan, costs);
+            const auto assigned = npu::make_core_tiles(r, plan);
+            for (std::uint64_t core = 0; core < plan.cores; ++core) {
+                const auto& e = estimate.cores[core];
+                std::uint64_t params = 0, cycles = 0, macs = 0;
+                for (const auto& tile : assigned[core]) {
+                    params += tile.cols * npu::param_record_bytes(r);
+                    cycles += npu::tile_compute_cycles(r, tile);
+                    macs += tile.rows * tile.cols * r.shape.k;
+                }
+                const auto activations = replay_activation_reads(r, assigned[core], total_hits);
+                const auto weights = replay_weight_reads(r, assigned[core], {});
+                const auto label = " (round " + std::to_string(round) + ", core " +
+                                   std::to_string(core) + ")";
+                require(e.weight_bytes == weights, "weight bytes" + label);
+                require(e.read_bytes == activations + weights + params,
+                        "activation-cache closed form" + label);
+                require(e.compute_cycles == cycles && e.macs == macs, "compute" + label);
+                require(e.tiles == assigned[core].size(), "tiles" + label);
+            }
+        }
+    }
+    require(total_hits > 0, "the rounds exercise activation-cache hits");
+}
+
 }  // namespace
 
 int main() {
@@ -1256,6 +1725,10 @@ int main() {
         check_validation();
         check_memory_map();
         check_cluster_plan();
+        check_convolution_geometry();
+        check_convolution_footprint();
+        check_depthwise_datapath();
+        check_activation_estimate();
         std::cout << "core tests: all checks passed\n";
         return 0;
     } catch (const std::exception& error) {
