@@ -11,9 +11,11 @@ panels of tile_k (0 = all of k). Per panel the core loads
 computes it, and after the last panel stores a * b output bytes.
 
 Compute cycles per panel (c = panel depth, P = MACs per cycle, A_r x A_c array):
-    vector  ceil(a * b * c / P) + pipeline
-    os      ceil(a/A_r) * ceil(b/A_c) * c + (A_r + A_c - 2) + pipeline
-    ws      ceil(c/A_r) * ceil(b/A_c) * a + A_r + (A_r + A_c - 2) + pipeline
+    vector       ceil(a * b * c / P) + pipeline
+    os           ceil(a/A_r) * ceil(b/A_c) * c + (A_r + A_c - 2) + pipeline
+    ws           ceil(c/A_r) * ceil(b/A_c) * a + A_r + (A_r + A_c - 2) + pipeline
+    os-per-wave  ceil(a/A_r) * ceil(b/A_c) * (c + A_r + A_c - 2) + pipeline
+                 (npu-sim builds without --dataflow expose fill/drain on every wave)
 
 Serial memory model: one DMA server, one request at a time, each request costs
 ``latency + ceil(bytes / bytes_per_cycle)`` per burst of at most dma_burst_bytes.
@@ -30,12 +32,13 @@ transactions and the shared DRAM rate (see ``axi_bounds``).
 from __future__ import annotations
 
 import dataclasses
+import difflib
 import math
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
-from .sim import config_value
+from .sim import CONFIG_PATHS, FLAT_KEYS, config_value
 
 KIB4 = 4096
 
@@ -82,48 +85,70 @@ class Design:
     sram_bytes: int = 262144
     frequency_mhz: float = 200.0
 
-    # Alternative spellings accepted from flag dicts and nested result configs.
-    ALIASES = {
-        "axi_data_bytes": ("data_bytes",),
-        "axi_max_burst_beats": ("max_burst_beats",),
-        "axi_read_outstanding": ("read_outstanding", "axi_outstanding_reads"),
-        "axi_write_outstanding": ("write_outstanding", "axi_outstanding_writes"),
-        "axi_read_latency": ("read_latency",),
-        "axi_write_latency": ("write_latency",),
-        "memory_bytes_per_cycle": ("bytes_per_cycle",),
-        "memory_latency": ("latency",),
-    }
+    @classmethod
+    def field_name(cls, key: str) -> str | None:
+        """Field for a flag ("--tile-m", "tile_m") or an option-table path ("mapping.tile_m")."""
+        name = str(key).lstrip("-").replace("-", "_")
+        name = FLAT_KEYS.get(name, name)
+        return name if name in _FIELDS else None
 
     @classmethod
-    def from_flags(cls, flags: Mapping[str, Any] | None = None, **overrides: Any) -> "Design":
-        """Design from npu-sim flags ({"tile_m": 8} or {"--tile-m": 8}); unknown keys ignored."""
+    def normalise(cls, flags: Mapping[str, Any]) -> dict[str, Any]:
+        """``flags`` keyed by field name; any key that names no field is a ValueError."""
         values: dict[str, Any] = {}
-        fields = {field.name: field for field in dataclasses.fields(cls)}
-        aliases = {alias: name for name, names in cls.ALIASES.items() for alias in names}
-        for key, value in {**(flags or {}), **overrides}.items():
-            name = str(key).lstrip("-").replace("-", "_")
-            name = aliases.get(name, name)
-            if name in fields and value is not None:
-                values[name] = _coerce(fields[name], value)
+        for key, value in flags.items():
+            name = cls.field_name(key)
+            if name is None:
+                close = difflib.get_close_matches(str(key).lstrip("-").replace("-", "_"),
+                                                  _FIELDS, n=1)
+                hint = f"; did you mean {close[0]!r}?" if close else ""
+                raise ValueError(f"unknown design parameter {key!r}{hint}")
+            values[name] = value
+        return values
+
+    @classmethod
+    def from_flags(cls, flags: Mapping[str, Any] | None = None, strict: bool = False,
+                   **overrides: Any) -> "Design":
+        """Design from npu-sim flags ({"tile_m": 8} or {"--tile-m": 8}). Keys that name no
+        field are skipped (simulator-only flags such as --input), or rejected when
+        ``strict``."""
+        given = {**(flags or {}), **overrides}
+        if strict:
+            given = cls.normalise(given)
+        values: dict[str, Any] = {}
+        for key, value in given.items():
+            name = cls.field_name(key)
+            if name is not None and value is not None:
+                values[name] = _coerce(_FIELDS[name], value)
         return cls(**values)
 
     @classmethod
     def from_result(cls, result: Mapping[str, Any]) -> "Design":
-        """Design echoed in an npu-sim result. Keys an older simulator does not report take
-        the behaviour that simulator had (one panel buffer, serial memory, one core)."""
+        """Design echoed in an npu-sim result, flat or option-table config.
+
+        Keys an older simulator does not report take the behaviour that simulator had (one
+        panel buffer per slot, one group, serial memory, one core; arrays without a
+        dataflow key are os-per-wave). Every other key the model reads must be present."""
         config = result["config"]
         legacy = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
-                  "dataflow": "os", "partition": "auto", "dram_bytes_per_cycle": 0}
+                  "partition": "auto", "dram_bytes_per_cycle": 0}
+        optional = {"dataflow", "per_channel_vectors"} | {name for name in _FIELDS
+                                                          if name.startswith("axi_")}
         values: dict[str, Any] = {}
-        for field in dataclasses.fields(cls):
-            for key in (field.name,) + cls.ALIASES.get(field.name, ()):
-                value = config_value(config, key, None)
-                if value is not None:
-                    values[field.name] = _coerce(field, value)
-                    break
-            else:
-                if field.name in legacy:
-                    values[field.name] = legacy[field.name]
+        missing = []
+        for name, field in _FIELDS.items():
+            value = config_value(config, name, None)
+            if value is not None:
+                values[name] = _coerce(field, value)
+            elif name in legacy:
+                values[name] = legacy[name]
+            elif name not in optional:
+                missing.append(CONFIG_PATHS.get(name, name))
+        if missing:
+            raise ValueError("result config lacks " + ", ".join(missing))
+        if "dataflow" not in values:
+            array = values["array_rows"] > 0 and values["array_cols"] > 0
+            values["dataflow"] = "os-per-wave" if array else "os"
         quant = config.get("quant", {}) if isinstance(config.get("quant"), Mapping) else {}
         values["per_channel_vectors"] = sum(bool(quant.get(key)) for key in
                                             ("weight_zero_points", "multipliers", "shifts"))
@@ -168,6 +193,9 @@ class Design:
     def ridge(self) -> float:
         """Arithmetic intensity (MAC per DRAM byte) where the compute and memory roofs meet."""
         return self.peak_macs_per_cycle / self.bandwidth
+
+
+_FIELDS = {field.name: field for field in dataclasses.fields(Design)}
 
 
 def _coerce(field: dataclasses.Field, value: Any) -> Any:
@@ -254,8 +282,10 @@ def panel_compute_cycles(design: Design, rows: int, cols: int, depth: int) -> in
             work = ceil_div(rows, ar) * ceil_div(cols, ac) * depth + fill_drain
         elif design.dataflow == "ws":
             work = ceil_div(depth, ar) * ceil_div(cols, ac) * rows + ar + fill_drain
+        elif design.dataflow == "os-per-wave":
+            work = ceil_div(rows, ar) * ceil_div(cols, ac) * (depth + fill_drain)
         else:
-            raise ValueError("dataflow must be os or ws")
+            raise ValueError("dataflow must be os, ws or os-per-wave")
     return work + design.pipeline_cycles
 
 
@@ -407,7 +437,8 @@ def analyze(design: Design) -> Analysis:
     estimate = max(lower, first_load + last_compute + last_store
                    + max(compute - last_compute, dma - first_load - last_store))
     one_tile = design.groups == 1 and rows0 == design.m and cols0 == design.n
-    no_overlap = (design.buffer_slots == 1 or one_tile) and         (design.reduction_blocks == 1 or design.panel_buffers == 1)
+    no_overlap = ((design.buffer_slots == 1 or one_tile)
+                  and (design.reduction_blocks == 1 or design.panel_buffers == 1))
     return Analysis(**common, memory_cycles=dma, memory_data_cycles=data,
                     lower_bound_cycles=lower, estimate_cycles=estimate, dma_bursts=bursts,
                     dma_busy_cycles=dma, serial_cycles=serial,

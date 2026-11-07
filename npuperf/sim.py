@@ -105,23 +105,68 @@ def from_flags(tokens: Sequence[Any]) -> dict[str, Any]:
     return result
 
 
+# Flat result-config keys (npu-sim flag names) and the option-table paths (SPEC 1.1) that
+# hold them in a nested config. Several leaves are renamed (weight_bits -> weights.bits), so
+# a leaf-name search alone would miss them.
+CONFIG_PATHS = {
+    "m": "shape.m", "n": "shape.n", "k": "shape.k", "groups": "shape.groups",
+    "seed": "shape.seed",
+    "macs_per_cycle": "arch.compute.macs_per_cycle",
+    "array_rows": "arch.compute.array_rows", "array_cols": "arch.compute.array_cols",
+    "dataflow": "arch.compute.dataflow", "pipeline_cycles": "arch.compute.pipeline_cycles",
+    "weight_decode_values_per_cycle": "arch.compute.weight_decode_values_per_cycle",
+    "memory_model": "arch.memory.model",
+    "memory_bytes_per_cycle": "arch.memory.bytes_per_cycle",
+    "memory_latency": "arch.memory.latency", "dma_burst_bytes": "arch.memory.burst_bytes",
+    "dram_bytes_per_cycle": "arch.memory.dram_bytes_per_cycle",
+    "axi_data_bytes": "arch.memory.axi.data_bytes",
+    "axi_max_burst_beats": "arch.memory.axi.max_burst_beats",
+    "axi_read_outstanding": "arch.memory.axi.read_outstanding",
+    "axi_write_outstanding": "arch.memory.axi.write_outstanding",
+    "axi_read_latency": "arch.memory.axi.read_latency",
+    "axi_write_latency": "arch.memory.axi.write_latency",
+    "sram_bytes": "arch.sram_bytes", "weight_cache_bytes": "arch.weight_cache_bytes",
+    "frequency_mhz": "arch.frequency_mhz", "cores": "arch.cores",
+    "tile_m": "mapping.tile_m", "tile_n": "mapping.tile_n", "tile_k": "mapping.tile_k",
+    "buffer_slots": "mapping.buffer_slots", "panel_buffers": "mapping.panel_buffers",
+    "partition": "mapping.partition",
+    "weight_bits": "weights.bits", "weight_encoding": "weights.encoding",
+    "palette_bits": "weights.palette_bits", "sparse_block": "weights.sparse_block",
+    "timing": "sim.timing", "timing_only": "sim.timing_only",
+}
+FLAT_KEYS = {path: key for key, path in CONFIG_PATHS.items()}
+
+
+def _at_path(config: Mapping[str, Any], path: str) -> Any:
+    node: Any = config
+    for part in path.split("."):
+        if not isinstance(node, Mapping) or part not in node:
+            return _MISSING
+        node = node[part]
+    return node
+
+
 def config_value(config: Mapping[str, Any], key: str, default: Any = _MISSING) -> Any:
-    """Look up ``key`` in a result's config: a flat key, a dotted path, or a unique nested leaf."""
-    if key in config:
-        return config[key]
-    if "." in key:
-        node: Any = config
-        for part in key.split("."):
-            if not isinstance(node, Mapping) or part not in node:
-                break
-            node = node[part]
-        else:
-            return node
+    """Look up ``key`` in a result's config, flat (older npu-sim) or nested (option table).
+
+    ``key`` is a flat key ("weight_bits"), an option-table path ("weights.bits") or a leaf
+    name. Known keys resolve through CONFIG_PATHS in both directions; anything else falls
+    back to a unique nested leaf of that name. Missing keys raise KeyError unless a
+    ``default`` is given."""
+    flat = FLAT_KEYS.get(key, key)
+    path = CONFIG_PATHS.get(flat, key)
+    for candidate in (path, flat):
+        if candidate in config:
+            return config[candidate]
+        value = _at_path(config, candidate) if "." in candidate else _MISSING
+        if value is not _MISSING:
+            return value
+    name = flat.rsplit(".", 1)[-1]
     found = []
 
     def visit(node: Mapping[str, Any]) -> None:
-        for name, value in node.items():
-            if name == key.rsplit(".", 1)[-1] and not isinstance(value, Mapping):
+        for child, value in node.items():
+            if child == name and not isinstance(value, Mapping):
                 found.append(value)
             elif isinstance(value, Mapping):
                 visit(value)

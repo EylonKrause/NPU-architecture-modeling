@@ -187,6 +187,26 @@ class FlagTests(unittest.TestCase):
         with self.assertRaises(KeyError):
             sim.config_value(nested, "missing")
 
+    def test_config_lookup_renamed_option_table_leaves(self):
+        # SPEC 1.1 renames leaves (weight_bits -> weights.bits); flat names still resolve.
+        nested = {"weights": {"bits": 4, "encoding": "palette", "palette_bits": 2},
+                  "arch": {"memory": {"bytes_per_cycle": 16, "latency": 12, "burst_bytes": 32},
+                           "frequency_mhz": 400}}
+        flat = {"weight_bits": 4, "weight_encoding": "palette", "dma_burst_bytes": 32,
+                "memory_latency": 12, "frequency_mhz": 400}
+        for config in (nested, flat):
+            with self.subTest(config=config):
+                self.assertEqual(sim.config_value(config, "weight_bits"), 4)
+                self.assertEqual(sim.config_value(config, "weights.bits"), 4)
+                self.assertEqual(sim.config_value(config, "weight_encoding"), "palette")
+                self.assertEqual(sim.config_value(config, "dma_burst_bytes"), 32)
+                self.assertEqual(sim.config_value(config, "arch.memory.burst_bytes"), 32)
+                self.assertEqual(sim.config_value(config, "memory_latency"), 12)
+                self.assertEqual(sim.config_value(config, "frequency_mhz"), 400)
+                self.assertIsNone(sim.config_value(config, "cores", None))
+        self.assertEqual(sim.config_value(nested, "memory_bytes_per_cycle"), 16)
+        self.assertEqual(sim.config_value(nested, "palette_bits"), 2)
+
     def test_result_validation(self):
         good = {"schema_version": 1, "numerical_match": True, "cycles": 10, "macs": 1,
                 "read_bytes": 1, "write_bytes": 1, "compute_busy_cycles": 2,
@@ -397,6 +417,29 @@ class AnalyticSimulatorTests(unittest.TestCase):
             count += 1
         self.assertEqual(count, 648)
 
+    def test_closed_form_matches_array_simulator(self):
+        """The same on arrays, with the build's default dataflow (os-per-wave on builds
+        without --dataflow)."""
+        for (rows, cols), flags in itertools.product(((4, 4), (8, 4), (3, 5)),
+                                                     itertools.islice(dense_configs(), 0, 648, 9)):
+            flags = {key: value for key, value in flags.items() if key != "macs_per_cycle"}
+            result = run({**flags, "array_rows": rows, "array_cols": cols, "buffer_slots": 2})
+            design = analytic.Design.from_result(result)
+            if not supports("--dataflow"):
+                self.assertEqual(design.dataflow, "os-per-wave")
+            model = analytic.analyze(design)
+            got = (result["read_bytes"], result["write_bytes"], result["compute_busy_cycles"],
+                   result["dma_busy_cycles"], result["dma_requests"])
+            want = (model.read_bytes, model.write_bytes, model.compute_busy_cycles,
+                    model.dma_busy_cycles, model.dma_requests)
+            self.assertEqual(got, want, (rows, cols, flags))
+            self.assertLessEqual(model.lower_bound_cycles, result.cycles, flags)
+            self.assertLessEqual(result.cycles, model.serial_cycles, flags)
+            single = run({**flags, "array_rows": rows, "array_cols": cols, "buffer_slots": 1,
+                          **self.one_panel_buffer()})
+            self.assertEqual(analytic.analyze(analytic.Design.from_result(single)).exact_cycles,
+                             single.cycles, (rows, cols, flags))
+
     def test_schedules_without_overlap_are_exact_and_estimates_are_close(self):
         ratios = []
         for flags in dense_configs():
@@ -540,6 +583,73 @@ class AnalyticUnitTests(unittest.TestCase):
         self.assertEqual(design.bandwidth, 8.0)
         with self.assertRaises(ValueError):
             analytic.axi_bounds(analytic.Design(memory_model="axi"))
+
+    # Config echoed by an option-table npu-sim (SPEC 1.1 paths) and by an older flat build.
+    NESTED = {"name": "", "description": "",
+              "shape": {"m": 16, "n": 16, "k": 32, "groups": 1, "seed": 1},
+              "arch": {"compute": {"macs_per_cycle": 64, "array_rows": 0, "array_cols": 0,
+                                   "pipeline_cycles": 4, "weight_decode_values_per_cycle": 16},
+                       "memory": {"bytes_per_cycle": 16, "latency": 12, "burst_bytes": 16},
+                       "sram_bytes": 262144, "weight_cache_bytes": 0, "frequency_mhz": 200},
+              "mapping": {"tile_m": 8, "tile_n": 8, "tile_k": 0, "buffer_slots": 2},
+              "weights": {"bits": 4, "encoding": "dense", "palette_bits": 4, "sparse_block": 8},
+              "quant": {"weight_zero_points": [], "multipliers": [], "shifts": []},
+              "sim": {"timing": "event", "timing_only": False, "trace_path": ""}}
+    FLAT = {"m": 16, "n": 16, "k": 32, "tile_m": 8, "tile_n": 8, "tile_k": 0,
+            "weight_bits": 4, "weight_encoding": "dense", "palette_bits": 4, "sparse_block": 8,
+            "weight_decode_values_per_cycle": 16, "array_rows": 0, "array_cols": 0,
+            "macs_per_cycle": 64, "memory_bytes_per_cycle": 16, "memory_latency": 12,
+            "dma_burst_bytes": 16, "weight_cache_bytes": 0, "pipeline_cycles": 4,
+            "buffer_slots": 2, "sram_bytes": 262144, "seed": 1, "frequency_mhz": 200,
+            "timing": "event", "quant": {"weight_zero_points": []}}
+
+    def test_design_from_nested_and_flat_result_configs(self):
+        nested = analytic.Design.from_result({"config": self.NESTED})
+        flat = analytic.Design.from_result({"config": self.FLAT})
+        self.assertEqual(nested, flat)
+        self.assertEqual((nested.weight_bits, nested.weight_encoding, nested.dma_burst_bytes),
+                         (4, "dense", 16))
+        self.assertEqual((nested.panel_buffers, nested.dataflow, nested.memory_model),
+                         (1, "os", "serial"))
+        model = analytic.analyze(nested)
+        # 2 x 2 tiles of 8 x 8, one panel each: A 8*32 + W 32*8*4/8 + bias 4*8 bytes.
+        self.assertEqual(model.read_bytes, 4 * (8 * 32 + 128 + 32))
+        self.assertEqual(model.dma_bursts, 4 * analytic.ceil_div(416, 16) + 4 * 4)
+        palette = json.loads(json.dumps(self.NESTED))
+        palette["weights"]["encoding"] = "palette"
+        with self.assertRaisesRegex(ValueError, "dense weights only"):
+            analytic.analyze(analytic.Design.from_result({"config": palette}))
+        array = json.loads(json.dumps(self.NESTED))
+        array["arch"]["compute"].update(array_rows=4, array_cols=4)
+        self.assertEqual(analytic.Design.from_result({"config": array}).dataflow, "os-per-wave")
+        array["arch"]["compute"]["dataflow"] = "ws"
+        self.assertEqual(analytic.Design.from_result({"config": array}).dataflow, "ws")
+
+    def test_design_from_result_requires_the_keys_it_models(self):
+        for path in ("weights.bits", "weights.encoding", "arch.memory.burst_bytes",
+                     "mapping.tile_k", "arch.compute.pipeline_cycles"):
+            config = json.loads(json.dumps(self.NESTED))
+            group, *middle, leaf = path.split(".")
+            node = config[group]
+            for part in middle:
+                node = node[part]
+            del node[leaf]
+            with self.subTest(path=path), self.assertRaisesRegex(ValueError, path):
+                analytic.Design.from_result({"config": config})
+
+    def test_os_per_wave_formula(self):
+        design = analytic.Design(array_rows=4, array_cols=8, pipeline_cycles=3,
+                                 dataflow="os-per-wave")
+        # ceil(10/4)*ceil(12/8) waves x (K + A_r + A_c - 2) + pipeline
+        self.assertEqual(analytic.panel_compute_cycles(design, 10, 12, 20), 3 * 2 * 30 + 3)
+
+    def test_from_flags_strict_rejects_unknown_keys(self):
+        design = analytic.Design.from_flags({"--tile-m": 4, "mapping.tile_n": 2,
+                                             "macs_per_cycle": 32}, strict=True)
+        self.assertEqual((design.tile_m, design.tile_n, design.macs_per_cycle), (4, 2, 32))
+        with self.assertRaisesRegex(ValueError, "did you mean 'macs_per_cycle'"):
+            analytic.Design.from_flags({"macs_per_cyle": 256}, strict=True)
+        self.assertEqual(analytic.Design.from_flags({"input": "x.npu", "tile_m": 4}).tile_m, 4)
 
     def test_rejected_designs(self):
         for design in (analytic.Design(weight_encoding="palette"),
