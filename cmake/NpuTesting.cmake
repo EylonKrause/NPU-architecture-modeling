@@ -7,9 +7,17 @@
 # a suite can stretch its own internal waits by the same factor.
 #
 # Every test sees the tool paths as NPU_SIM, NPU_TLM_DEMO, NPU_TRANSFORMER_DEMO and
-# NPU_MOBILE_DEMO, and the source root on PYTHONPATH.
+# NPU_MOBILE_DEMO, and the source root on PYTHONPATH. On Windows, cmake/windows-test-site is
+# also on PYTHONPATH; its sitecustomize.py stops a crashing or unloadable child process from
+# opening a modal dialog that would stall the test.
 
 find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
+
+set(_npu_test_pythonpath "PYTHONPATH=path_list_prepend:${PROJECT_SOURCE_DIR}")
+if(WIN32)
+  list(APPEND _npu_test_pythonpath
+    "PYTHONPATH=path_list_prepend:${PROJECT_SOURCE_DIR}/cmake/windows-test-site")
+endif()
 
 function(_npu_register_test name timeout)
   if(NOT name MATCHES "^[a-z][a-z0-9]*(\\.[a-z0-9]+(-[a-z0-9]+)*)+$")
@@ -31,7 +39,7 @@ function(_npu_register_test name timeout)
     LABELS "${labels}"
     TIMEOUT ${timeout}
     ENVIRONMENT "${environment}"
-    ENVIRONMENT_MODIFICATION "PYTHONPATH=path_list_prepend:${PROJECT_SOURCE_DIR}")
+    ENVIRONMENT_MODIFICATION "${_npu_test_pythonpath}")
 endfunction()
 
 # npu_add_unit_test(<name> TARGET <executable> SOURCES <file>... [TIMEOUT <s>] [LABELS <l>...])
