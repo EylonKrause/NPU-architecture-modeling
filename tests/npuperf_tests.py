@@ -653,8 +653,13 @@ class AnalyticUnitTests(unittest.TestCase):
         self.assertEqual(model.dma_bursts, 4 * analytic.ceil_div(416, 16) + 4 * 4)
         palette = json.loads(json.dumps(self.NESTED))
         palette["weights"]["encoding"] = "palette"
-        with self.assertRaisesRegex(ValueError, "dense weights only"):
-            analytic.analyze(analytic.Design.from_result({"config": palette}))
+        # 32 x 8 values, 4-bit indices: 4-byte header, 16-entry LUT, 128 index bytes.
+        self.assertEqual(analytic.analyze(analytic.Design.from_result({"config": palette}))
+                         .weight_bytes, 4 * (4 + 16 + 128))
+        sparse = json.loads(json.dumps(self.NESTED))
+        sparse["weights"]["encoding"] = "sparse"
+        with self.assertRaisesRegex(ValueError, "dense and palette weights"):
+            analytic.analyze(analytic.Design.from_result({"config": sparse}))
         array = json.loads(json.dumps(self.NESTED))
         array["arch"]["compute"].update(array_rows=4, array_cols=4)
         self.assertEqual(analytic.Design.from_result({"config": array}).dataflow, "os-per-wave")
@@ -688,11 +693,13 @@ class AnalyticUnitTests(unittest.TestCase):
         self.assertEqual(analytic.Design.from_flags({"input": "x.npu", "tile_m": 4}).tile_m, 4)
 
     def test_rejected_designs(self):
-        for design in (analytic.Design(weight_encoding="palette"),
-                       analytic.Design(weight_cache_bytes=64),
-                       analytic.Design(cores=2)):
+        for design in (analytic.Design(weight_encoding="sparse"),
+                       analytic.Design(cores=2),
+                       analytic.Design(memory_model="tlm")):
             with self.subTest(design=design), self.assertRaises(ValueError):
                 analytic.analyze(design)
+            with self.subTest(design=design), self.assertRaises(ValueError):
+                analytic.schedule(design)
 
 
 # ------------------------------------------------------------------------------- workloads

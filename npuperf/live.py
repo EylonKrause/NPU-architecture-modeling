@@ -147,10 +147,14 @@ def machine_summary(profile: str, telemetry: dict) -> dict:
                "tile_m": design.tile_m, "tile_n": design.tile_n, "tile_k": design.tile_k,
                "frequency_mhz": design.frequency_mhz,
                "analysis": None}
+    # Compressed panels' sizes depend on the weight values; the page shows the analytic bound
+    # of dense designs only.
+    if design.weight_encoding != "dense":
+        return summary
     try:
         result = analytic.analyze(design)
     except (ValueError, TypeError, ArithmeticError):
-        return summary  # palette or sparse weights, weight cache: no analytic bound
+        return summary
     summary["analysis"] = {
         "bound": result.bound, "resource_bound_cycles": result.resource_bound_cycles,
         "lower_bound_cycles": result.lower_bound_cycles,
@@ -171,9 +175,13 @@ def workload_summary(config: object) -> dict:
 
 
 def profile_bound(name: str) -> str | None:
-    """Analytic bound class of a dense profile (compute, bandwidth or latency)."""
+    """Analytic bound class of a dense profile (compute, bandwidth or latency); None for
+    compressed weights, whose panel sizes depend on the values."""
+    design = profile_design(name)
+    if design.weight_encoding != "dense":
+        return None
     try:
-        return analytic.analyze(profile_design(name)).bound
+        return analytic.analyze(design).bound
     except ValueError:
         return None
 
