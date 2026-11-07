@@ -191,7 +191,8 @@ def expected_metrics(c: dict) -> dict[str, int]:
     reads = sum(size for work in panels for size, _, _ in work)
     writes = sum(size for size, _ in stores)
     compute = sum(cycles for work in panels for _, _, cycles in work)
-    dma = sum(cycles for work in panels for _, cycles, _ in work) + sum(cycles for _, cycles in stores)
+    dma = sum(cycles for work in panels for _, cycles, _ in work) + \
+        sum(cycles for _, cycles in stores)
     max_rows, max_cols = min(c["m"], c["tile_m"]), min(c["n"], c["tile_n"])
     deepest = max(panel_depths(c))
     # A slot keeps bias, its panel buffers, INT32 partial sums and INT8 outputs.
@@ -395,7 +396,8 @@ class SimulatorIntegration(unittest.TestCase):
                     # Panel b reuses the buffer of panel b - buffers.
                     self.assertLessEqual(stages["compute", tile_id, block - buffers][1], load[0],
                                          "panel buffer overwritten before compute released it")
-            self.assertLessEqual(stages["compute", tile_id, last][1], stages["store", tile_id, last][0])
+            self.assertLessEqual(stages["compute", tile_id, last][1],
+                                 stages["store", tile_id, last][0])
         for resource in ({"load", "store"}, {"compute"}):
             intervals = sorted((start, end) for (stage, _, _), (start, end, _) in stages.items()
                                if stage in resource)
@@ -544,7 +546,8 @@ class SimulatorIntegration(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="npu-oracle-") as directory:
             for index, overrides in enumerate(cases):
                 with self.subTest(config=overrides):
-                    self.assert_schedule({**DEFAULTS, **overrides}, Path(directory) / f"case{index}.csv")
+                    self.assert_schedule({**DEFAULTS, **overrides},
+                                         Path(directory) / f"case{index}.csv")
 
     def test_double_buffered_panels_match_the_independent_schedule(self):
         cases = [
@@ -567,7 +570,8 @@ class SimulatorIntegration(unittest.TestCase):
             for index, overrides in enumerate(cases):
                 with self.subTest(config=overrides):
                     self.check_case(overrides)
-                    self.assert_schedule({**DEFAULTS, **overrides}, Path(directory) / f"p{index}.csv")
+                    self.assert_schedule({**DEFAULTS, **overrides},
+                                         Path(directory) / f"p{index}.csv")
 
     def test_single_panel_buffer_and_slot_is_serial(self):
         c = {"m": 5, "n": 7, "k": 11, "tile_m": 2, "tile_n": 3, "tile_k": 4,
@@ -655,7 +659,8 @@ class SimulatorIntegration(unittest.TestCase):
             for index, overrides in enumerate(cases):
                 with self.subTest(config=overrides):
                     self.check_case(overrides)
-                    self.assert_schedule({**DEFAULTS, **overrides}, Path(directory) / f"d{index}.csv")
+                    self.assert_schedule({**DEFAULTS, **overrides},
+                                         Path(directory) / f"d{index}.csv")
 
     def test_dataflow_cycles_of_one_panel(self):
         # One tile and one panel, so compute_busy_cycles is that panel's time.
