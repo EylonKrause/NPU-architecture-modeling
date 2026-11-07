@@ -6,16 +6,23 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import os
 from pathlib import Path
 import subprocess
 import tempfile
 import unittest
 
 BINARY: Path
+# SystemC prints its banner on stderr before sc_main; keep stderr to our own lines.
+ENV = {**os.environ, 'SYSTEMC_DISABLE_COPYRIGHT_MESSAGE': '1'}
+
+
+def invoke(*arguments: str) -> subprocess.CompletedProcess:
+    return subprocess.run([str(BINARY), *arguments], capture_output=True, text=True, timeout=30, env=ENV)
 
 
 def run(*arguments: str) -> dict:
-    result = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True, timeout=30)
+    result = invoke(*arguments)
     if result.returncode:
         raise AssertionError(f"mobile simulation failed: {result.stdout}\n{result.stderr}")
     return json.loads(result.stdout)
@@ -77,6 +84,44 @@ class MobilePlatformTests(unittest.TestCase):
             self.assertAlmostEqual(read['end_ns'], job['compute_begin_ns'])
             self.assertAlmostEqual(write['requested_ns'], job['compute_end_ns'])
             self.assertAlmostEqual(write['end_ns'], job['finish_ns'])
+
+    def check_round_robin(self, report: dict, cores: int) -> int:
+        """Replay the arbiter: a grant at time T goes to the first core at or after
+        the round-robin pointer among requests issued strictly before T. With
+        none pending the bus was idle and the grant is the request just issued.
+        Returns the number of contended grants checked."""
+        transactions = sorted(report['bus_transactions'], key=lambda tx: tx['begin_ns'])
+        pointer, contended, previous_end = 0, 0, 0.0
+        for index, grant in enumerate(transactions):
+            self.assertGreaterEqual(grant['begin_ns'], previous_end)
+            previous_end = grant['end_ns']
+            waiting = {tx['core'] for tx in transactions[index:]
+                       if tx['requested_ns'] < grant['begin_ns']}
+            if waiting:
+                expected = min(waiting, key=lambda core: (core - pointer) % cores)
+                self.assertEqual(grant['core'], expected, f'grant {index} at {grant["begin_ns"]} ns')
+                contended += len(waiting) > 1
+            else:
+                self.assertEqual(grant['requested_ns'], grant['begin_ns'])
+            pointer = (grant['core'] + 1) % cores
+        return contended
+
+    def test_round_robin_bus_arbitration_by_core_id(self):
+        # All four cores leave power gating in the same delta and request DRAM
+        # at the same timestamp: grants follow core id from the reset pointer.
+        same = run('--cores', '4', '--jobs', '4', '--priorities', '0')
+        reads = [tx for tx in same['bus_transactions'] if not tx['write']]
+        self.assertEqual({tx['requested_ns'] for tx in reads}, {12})
+        self.assertEqual([tx['core'] for tx in reads], [0, 1, 2, 3])
+        self.check_round_robin(same, 4)
+        for flags, cores in ((('--cores', '8', '--jobs', '32', '--models', '4',
+                               '--bus-bytes-per-ns', '1', '--bus-latency-ns', '50'), 8),
+                             (('--cores', '3', '--jobs', '24', '--models', '5', '--arrival-ns', '200',
+                               '--batch-size', '2', '--bus-bytes-per-ns', '2', '--priorities', '0,2,1'), 3)):
+            with self.subTest(flags=flags):
+                report = run(*flags)
+                self.assertEqual(report, run(*flags))
+                self.assertGreater(self.check_round_robin(report, cores), 10)
 
     def test_concurrent_systemc_workers_reduce_compute_bound_makespan(self):
         flags = ('--jobs', '8', '--m', '8', '--n', '8', '--k', '64',
@@ -191,6 +236,13 @@ class MobilePlatformTests(unittest.TestCase):
                 self.assertIn(name, trace)
             self.assertGreater(trace.count('#'), 25)
 
+    def test_help_anywhere_prints_usage(self):
+        for arguments in (('--help',), ('--cores', '2', '--help'), ('--cores', '0', '--help')):
+            with self.subTest(arguments=arguments):
+                completed = invoke(*arguments)
+                self.assertEqual(completed.returncode, 0)
+                self.assertTrue(completed.stdout.startswith('Usage: npu-mobile-demo'))
+
     def test_validation_bounds_and_invalid_inputs(self):
         for arguments in (
             ('--cores', '0'), ('--cores', '9'), ('--jobs', '129'), ('--models', '0'),
@@ -201,12 +253,14 @@ class MobilePlatformTests(unittest.TestCase):
             ('--opps', '100:800,200:700'),
             ('--opps', '100:700:3'), ('--priorities', '256'), ('--priorities', '1,,2'),
             ('--governor', 'magic'), ('--mac-pj', 'nan'), ('--dram-byte-pj', '-1'),
-            ('--leakage-mw', 'inf'), ('--wakeup-ns', '1000001'), ('--jobs',), ('--unknown', '3'),
+            ('--leakage-mw', 'inf'), ('--mac-pj', 'abc'), ('--mac-pj', '1e999'),
+            ('--wakeup-ns', '1000001'), ('--jobs',), ('--cores', 'two'), ('--unknown', '3'),
         ):
             with self.subTest(arguments=arguments):
-                completed = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True, timeout=20)
-                self.assertNotEqual(completed.returncode, 0)
-                self.assertIn('npu-mobile-demo:', completed.stderr)
+                completed = invoke(*arguments)
+                self.assertEqual(completed.returncode, 2)
+                self.assertTrue(completed.stderr.startswith('npu-mobile-demo: '), completed.stderr)
+                self.assertIn(arguments[0], completed.stderr)
 
 
 if __name__ == '__main__':
