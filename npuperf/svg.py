@@ -560,7 +560,7 @@ class Figure:
                 continue
             px, py = self.px(x), self.py(y)
             width = text_width(label, size)
-            options = [(8, size * 0.35, "start"), (-8, size * 0.35, "end"), (0, -9, "middle"),
+            options = [(10, size * 0.35, "start"), (-10, size * 0.35, "end"), (0, -10, "middle"),
                        (0, size + 6, "middle"), (7, -7, "start"), (-7, -7, "end"),
                        (7, size + 3, "start"), (-7, size + 3, "end")]
             for dx, dy, anchor in options:
