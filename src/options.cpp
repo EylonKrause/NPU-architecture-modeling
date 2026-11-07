@@ -163,20 +163,24 @@ const std::vector<ConfigOption> option_table = {
 
 std::string quoted(std::string_view text) { return "'" + std::string(text) + "'"; }
 
-bool json_number_grammar(std::string_view text) {
+// The decimal forms strtod reads, as the flag always took them: a sign,
+// digits with an optional point on either side, an optional exponent. Hex,
+// inf, nan, whitespace and trailing text are rejected. Config files keep the
+// JSON number grammar of their parser.
+bool decimal_grammar(std::string_view text) {
     std::size_t i = 0;
     const auto digits = [&]() {
         const auto start = i;
         while (i < text.size() && text[i] >= '0' && text[i] <= '9') ++i;
-        return i > start;
+        return i - start;
     };
-    if (i < text.size() && text[i] == '-') ++i;
-    if (i < text.size() && text[i] == '0') ++i;
-    else if (!digits()) return false;
+    if (i < text.size() && (text[i] == '+' || text[i] == '-')) ++i;
+    auto mantissa = digits();
     if (i < text.size() && text[i] == '.') {
         ++i;
-        if (!digits()) return false;
+        mantissa += digits();
     }
+    if (!mantissa) return false;
     if (i < text.size() && (text[i] == 'e' || text[i] == 'E')) {
         ++i;
         if (i < text.size() && (text[i] == '+' || text[i] == '-')) ++i;
@@ -560,7 +564,7 @@ std::uint32_t parse_uint32(std::string_view text, std::string_view what) {
 }
 
 double parse_decimal(std::string_view text, std::string_view what) {
-    if (!json_number_grammar(text))
+    if (!decimal_grammar(text))
         throw std::invalid_argument(std::string(what) + ": expected a decimal number, got " +
                                     quoted(text));
     const std::string copy(text);

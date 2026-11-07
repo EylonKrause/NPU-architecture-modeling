@@ -85,7 +85,8 @@ void write_config_help(std::ostream& stream);
 std::uint64_t parse_uint64(std::string_view text, std::string_view what);
 std::int32_t parse_int32(std::string_view text, std::string_view what);
 std::uint32_t parse_uint32(std::string_view text, std::string_view what);
-// JSON number grammar only: no hex, inf, nan or surrounding whitespace.
+// The decimal forms strtod reads: optional sign, digits with an optional point
+// on either side, optional exponent. No hex, inf, nan or surrounding whitespace.
 double parse_decimal(std::string_view text, std::string_view what);
 
 }  // namespace npu

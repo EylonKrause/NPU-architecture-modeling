@@ -365,6 +365,18 @@ void check_command_line_values() {
         {{"--frequency-mhz", "0x10"}, "--frequency-mhz: expected a decimal number"},
         {{"--frequency-mhz", "200MHz"}, "--frequency-mhz: expected a decimal number"},
         {{"--frequency-mhz", "1e999"}, "--frequency-mhz: number out of range: '1e999'"},
+        {{"--frequency-mhz", "infinity"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "0x1p3"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "200 "}, "--frequency-mhz: expected a decimal number, got '200 '"},
+        {{"--frequency-mhz", ""}, "--frequency-mhz: expected a decimal number, got ''"},
+        {{"--frequency-mhz", "."}, "--frequency-mhz: expected a decimal number, got '.'"},
+        {{"--frequency-mhz", "+"}, "--frequency-mhz: expected a decimal number, got '+'"},
+        {{"--frequency-mhz", "+-5"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "e5"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", ".e5"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "5e"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "5e+"}, "--frequency-mhz: expected a decimal number"},
+        {{"--frequency-mhz", "1.2.3"}, "--frequency-mhz: expected a decimal number"},
         {{"--rounding", "floor"}, "--rounding: expected away|even, got 'floor'"},
         {{"--weight-encoding", "zip"}, "--weight-encoding: expected dense|palette|sparse"},
         {{"--timing", "rtl"}, "--timing: expected event|cycle, got 'rtl'"},
@@ -381,6 +393,16 @@ void check_command_line_values() {
     require(builder.config.arch.frequency_mhz == -3.0, "decimal values parse");
     builder.set(option("--frequency-mhz"), "2E2");
     require(builder.config.arch.frequency_mhz == 200.0, "exponent form");
+    // The strtod forms the flag took before the option table: a leading '+',
+    // a point with digits on one side only, leading zeros.
+    const std::pair<const char*, double> decimals[] = {
+        {".5", 0.5}, {"5.", 5.0}, {"+5", 5.0}, {"+.5", 0.5}, {"007", 7.0},
+        {"5.e1", 50.0}, {"-.5E+1", -5.0}, {"1e-3", 0.001}};
+    for (const auto& [text, value] : decimals) {
+        builder.set(option("--frequency-mhz"), text);
+        require(builder.config.arch.frequency_mhz == value,
+                "decimal form " + std::string(text));
+    }
     builder.set(option("--input-zero"), "-129");
     require(builder.config.quant.input_zero == -129, "range checks belong to validate()");
     rejects([&] { npu::validate(builder.config); }, "input zero point must be signed INT8");

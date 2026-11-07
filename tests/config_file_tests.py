@@ -200,10 +200,22 @@ class ConfigFile(unittest.TestCase):
             "requantization shift must be in 2..62 for tosa-single rescale")
 
     def test_frequency_errors_name_the_flag(self):
-        for value in ("abc", "1e999", " 200", "0x10", "", "200MHz"):
+        for value in ("abc", "1e999", " 200", "200 ", "0x10", "", "200MHz", "inf", "nan",
+                      ".", "+", "5e", "1.2.3"):
             with self.subTest(value=value):
                 self.assert_rejected(run("--frequency-mhz", value), "--frequency-mhz: ")
-        self.assertEqual(self.describe("--frequency-mhz", "1.5e3")["arch"]["frequency_mhz"], 1500)
+        # The strtod forms the flag took before the option table still parse.
+        for value, mhz in (("1.5e3", 1500), (".5", 0.5), ("5.", 5), ("+5", 5), ("007", 7),
+                           ("+.25E+3", 250)):
+            with self.subTest(value=value):
+                self.assertEqual(self.describe("--frequency-mhz", value)["arch"]["frequency_mhz"],
+                                 mhz)
+        # Config files keep the JSON number grammar.
+        for text in ('{"arch": {"frequency_mhz": .5}}', '{"arch": {"frequency_mhz": +5}}'):
+            with self.subTest(text=text):
+                path = self.write("frequency.json", text)
+                proc = run("--config", path)
+                self.assert_rejected(proc, f"{path}:1:")
 
     def test_live_stdio_rejects_batch_outputs(self):
         trace = Path(self.directory.name) / "trace.csv"
