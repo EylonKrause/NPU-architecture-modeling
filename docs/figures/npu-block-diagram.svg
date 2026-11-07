@@ -1,0 +1,182 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="846" viewBox="0 0 1200 846" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif">
+<title>NPU cluster block diagram</title>
+<defs>
+  <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#3a3a3a"/>
+  </marker>
+  <marker id="arrc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+    <path d="M0,0 L10,5 L0,10 z" fill="#7a7a7a"/>
+  </marker>
+</defs>
+<rect width="1200" height="846" fill="#ffffff"/>
+
+<text x="24" y="32" font-size="16" font-weight="600" fill="#1a1a1a">NPU cluster block diagram</text>
+<text x="24" y="52" font-size="12" fill="#555555">Symbols as in the design-parameter table: N_c cores, S slots, P_b panel buffers, D AXI beat bytes, R DRAM bytes per cycle</text>
+
+<!-- Host CPU cluster (context) -->
+<rect x="24" y="72" width="320" height="104" rx="4" fill="#f6f6f4" stroke="#8c8c8c" stroke-width="1.2" stroke-dasharray="5 4"/>
+<text x="40" y="96" font-size="14" font-weight="600" fill="#1a1a1a">Host CPU cluster</text>
+<g font-size="12" fill="#3a3a3a" text-anchor="middle">
+  <rect x="40" y="112" width="64" height="44" rx="3" fill="#ffffff" stroke="#8c8c8c"/><text x="72" y="139">CPU</text>
+  <rect x="114" y="112" width="64" height="44" rx="3" fill="#ffffff" stroke="#8c8c8c"/><text x="146" y="139">CPU</text>
+  <rect x="188" y="112" width="64" height="44" rx="3" fill="#ffffff" stroke="#8c8c8c"/><text x="220" y="139">CPU</text>
+  <rect x="262" y="112" width="64" height="44" rx="3" fill="#ffffff" stroke="#8c8c8c"/><text x="294" y="139">CPU</text>
+</g>
+
+<!-- DRAM -->
+<rect x="856" y="72" width="320" height="104" rx="4" fill="#ebe7f2" stroke="#5f5480" stroke-width="1.2"/>
+<text x="872" y="96" font-size="14" font-weight="600" fill="#1a1a1a">DRAM</text>
+<text x="872" y="116" font-size="12" fill="#3a3a3a">Activations, weights, parameters, outputs</text>
+<text x="872" y="132" font-size="12" fill="#3a3a3a">(address map in section 5.1)</text>
+<text x="872" y="156" font-size="12" fill="#3a3a3a">R = arch.memory.dram_bytes_per_cycle,</text>
+<text x="872" y="170" font-size="12" fill="#3a3a3a">shared by reads and writes of every core</text>
+
+<!-- System interconnect -->
+<rect x="24" y="214" width="1152" height="52" rx="4" fill="#ececea" stroke="#5a5a5a" stroke-width="1.2"/>
+<text x="40" y="237" font-size="14" font-weight="600" fill="#1a1a1a">System interconnect and DRAM arbiter</text>
+<text x="40" y="256" font-size="12" fill="#3a3a3a">One DRAM reservation timeline in byte units; bursts issued in the same cycle are granted in core order, read before write</text>
+
+<!-- host <-> interconnect -->
+<line x1="184" y1="176" x2="184" y2="212" stroke="#7a7a7a" stroke-width="1.4" stroke-dasharray="5 3" marker-end="url(#arrc)" marker-start="url(#arrc)"/>
+<text x="194" y="199" font-size="12" fill="#555555">jobs</text>
+<!-- dram <-> interconnect -->
+<line x1="1016" y1="178" x2="1016" y2="212" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
+<text x="1028" y="199" font-size="12" fill="#3a3a3a">R B/cycle</text>
+
+<!-- NPU cluster -->
+<rect x="24" y="306" width="1152" height="490" rx="5" fill="#fbfbfa" stroke="#5a5a5a" stroke-width="1.3"/>
+<text x="40" y="330" font-size="14" font-weight="600" fill="#1a1a1a">NPU cluster: N_c = arch.cores (1 to 64)</text>
+
+<!-- Core 0 -->
+<rect x="40" y="342" width="826" height="438" rx="4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.3"/>
+<text x="56" y="366" font-size="14" font-weight="600" fill="#1a1a1a">Core 0</text>
+
+<!-- DMA / AXI master -->
+<rect x="56" y="380" width="478" height="94" rx="3" fill="#f3ecdd" stroke="#8a6d3b" stroke-width="1.2"/>
+<text x="70" y="400" font-size="13" font-weight="600" fill="#1a1a1a">DMA and AXI master</text>
+<text x="226" y="400" font-size="12" fill="#3a3a3a">one MemRequest per panel load or tile store</text>
+<rect x="70" y="410" width="222" height="52" rx="3" fill="#ffffff" stroke="#8a6d3b"/>
+<text x="82" y="431" font-size="13" fill="#1a1a1a">Read channel AR, R</text>
+<text x="82" y="450" font-size="12" fill="#3a3a3a">N_r bursts in flight</text>
+<rect x="300" y="410" width="222" height="52" rx="3" fill="#ffffff" stroke="#8a6d3b"/>
+<text x="312" y="431" font-size="13" fill="#1a1a1a">Write channel AW, W, B</text>
+<text x="312" y="450" font-size="12" fill="#3a3a3a">N_w bursts in flight</text>
+
+<!-- Control -->
+<rect x="558" y="380" width="292" height="94" rx="3" fill="#f3ecdd" stroke="#8a6d3b" stroke-width="1.2"/>
+<text x="572" y="400" font-size="13" font-weight="600" fill="#1a1a1a">Tile sequencer</text>
+<text x="572" y="421" font-size="12" fill="#3a3a3a">load, compute and store processes</text>
+<text x="572" y="439" font-size="12" fill="#3a3a3a">slot and panel-buffer tokens</text>
+<text x="572" y="457" font-size="12" fill="#3a3a3a">output tiles of this core's partition</text>
+
+<!-- AXI port to interconnect -->
+<line x1="296" y1="378" x2="296" y2="268" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
+<text x="306" y="288" font-size="12" fill="#3a3a3a">AXI4 port: R and W data, 8D bits each (64 to 512)</text>
+
+<!-- SRAM -->
+<rect x="56" y="506" width="794" height="118" rx="3" fill="#e5eee2" stroke="#4f6f52" stroke-width="1.2"/>
+<text x="70" y="526" font-size="13" font-weight="600" fill="#1a1a1a">SRAM: arch.sram_bytes</text>
+<!-- slot stack -->
+<rect x="84" y="536" width="440" height="68" rx="3" fill="#ffffff" stroke="#4f6f52" opacity="0.55"/>
+<rect x="78" y="542" width="440" height="68" rx="3" fill="#ffffff" stroke="#4f6f52" opacity="0.8"/>
+<rect x="72" y="548" width="440" height="68" rx="3" fill="#ffffff" stroke="#4f6f52"/>
+<text x="84" y="565" font-size="12" font-weight="600" fill="#1a1a1a">Tile slot, S copies; P_b panel buffers per slot</text>
+<g font-size="12" fill="#1a1a1a" text-anchor="middle">
+  <rect x="84" y="574" width="104" height="32" rx="2" fill="#f2f7f0" stroke="#4f6f52"/><text x="136" y="594">weight panel</text>
+  <rect x="194" y="574" width="104" height="32" rx="2" fill="#f2f7f0" stroke="#4f6f52"/><text x="246" y="594">activation panel</text>
+  <rect x="306" y="574" width="54" height="32" rx="2" fill="#f2f7f0" stroke="#4f6f52"/><text x="333" y="594">params</text>
+  <rect x="366" y="574" width="74" height="32" rx="2" fill="#f2f7f0" stroke="#4f6f52"/><text x="403" y="594">INT32 acc</text>
+  <rect x="446" y="574" width="58" height="32" rx="2" fill="#f2f7f0" stroke="#4f6f52"/><text x="475" y="594">INT8 out</text>
+</g>
+<!-- caches -->
+<rect x="530" y="540" width="150" height="72" rx="3" fill="#ffffff" stroke="#4f6f52"/>
+<text x="542" y="560" font-size="13" fill="#1a1a1a">Weight cache</text>
+<text x="542" y="579" font-size="12" fill="#3a3a3a">LRU weight panels</text>
+<text x="542" y="598" font-size="12" fill="#3a3a3a">weight_cache_bytes</text>
+<rect x="690" y="540" width="150" height="72" rx="3" fill="#ffffff" stroke="#4f6f52"/>
+<text x="702" y="560" font-size="13" fill="#1a1a1a">Activation cache</text>
+<text x="702" y="579" font-size="12" fill="#3a3a3a">LRU activation panels</text>
+<text x="702" y="598" font-size="12" fill="#3a3a3a">activation_cache_bytes</text>
+
+<!-- DMA <-> SRAM -->
+<line x1="136" y1="464" x2="136" y2="546" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="144" y="492" font-size="12" fill="#3a3a3a">panel loads</text>
+<line x1="475" y1="546" x2="475" y2="464" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="368" y="492" font-size="12" fill="#3a3a3a">tile stores, INT8</text>
+<!-- control to DMA and datapath (control) -->
+<line x1="556" y1="427" x2="537" y2="427" stroke="#7a7a7a" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arrc)"/>
+<polyline points="850,452 858,452 858,686 853,686" fill="none" stroke="#7a7a7a" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arrc)"/>
+
+<!-- Datapath row -->
+<rect x="56" y="664" width="152" height="102" rx="3" fill="#dde7f3" stroke="#3d5a80" stroke-width="1.2"/>
+<text x="70" y="686" font-size="13" font-weight="600" fill="#1a1a1a">Weight decoder</text>
+<text x="70" y="706" font-size="12" fill="#3a3a3a">palette, sparse bitmap</text>
+<text x="70" y="724" font-size="12" fill="#3a3a3a">V values per cycle</text>
+<text x="70" y="742" font-size="12" fill="#3a3a3a">dense panels bypass</text>
+
+<rect x="234" y="664" width="346" height="102" rx="3" fill="#dde7f3" stroke="#3d5a80" stroke-width="1.2"/>
+<text x="248" y="686" font-size="13" font-weight="600" fill="#1a1a1a">MAC array</text>
+<text x="248" y="706" font-size="12" fill="#3a3a3a">A_r x A_c systolic, OS or WS dataflow</text>
+<text x="248" y="724" font-size="12" fill="#3a3a3a">or vector datapath, P MAC per cycle</text>
+<text x="248" y="742" font-size="12" fill="#3a3a3a">depthwise path, P_dw MAC per cycle</text>
+<text x="248" y="760" font-size="12" fill="#3a3a3a">INT8 x INT8 or INT4, INT32 accumulate</text>
+
+<rect x="620" y="664" width="230" height="102" rx="3" fill="#dde7f3" stroke="#3d5a80" stroke-width="1.2"/>
+<text x="634" y="686" font-size="13" font-weight="600" fill="#1a1a1a">Requantization</text>
+<text x="634" y="706" font-size="12" fill="#3a3a3a">INT32 to INT8</text>
+<text x="634" y="724" font-size="12" fill="#3a3a3a">scale, zero point, ReLU</text>
+<text x="634" y="742" font-size="12" fill="#3a3a3a">saturate to [-128, 127]</text>
+
+<!-- SRAM -> decoder -->
+<line x1="136" y1="608" x2="136" y2="662" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="144" y="648" font-size="12" fill="#3a3a3a">weight panels</text>
+<!-- decoder -> MAC -->
+<line x1="210" y1="707" x2="232" y2="707" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<!-- SRAM -> MAC -->
+<line x1="256" y1="608" x2="256" y2="662" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="264" y="648" font-size="12" fill="#3a3a3a">INT8 activations</text>
+<!-- MAC -> requant -->
+<line x1="582" y1="707" x2="618" y2="707" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="584" y="700" font-size="12" fill="#3a3a3a">INT32</text>
+<!-- requant -> SRAM out -->
+<polyline points="720,662 720,642 475,642 475,610" fill="none" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/>
+<text x="600" y="636" font-size="12" fill="#3a3a3a">INT8 outputs</text>
+
+<!-- Other cores -->
+<rect x="890" y="342" width="124" height="150" rx="4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.3"/>
+<text x="904" y="366" font-size="14" font-weight="600" fill="#1a1a1a">Core 1</text>
+<text x="1048" y="420" font-size="18" fill="#3a3a3a" text-anchor="middle">...</text>
+<rect x="1082" y="342" width="80" height="150" rx="4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.3"/>
+<text x="1094" y="366" font-size="14" font-weight="600" fill="#1a1a1a">Core</text>
+<text x="1094" y="384" font-size="14" font-weight="600" fill="#1a1a1a">N_c-1</text>
+<g font-size="12" fill="#1a1a1a" text-anchor="middle">
+  <rect x="904" y="398" width="96" height="22" rx="2" fill="#f3ecdd" stroke="#8a6d3b"/><text x="952" y="414">DMA</text>
+  <rect x="904" y="426" width="96" height="22" rx="2" fill="#e5eee2" stroke="#4f6f52"/><text x="952" y="442">SRAM</text>
+  <rect x="904" y="454" width="96" height="22" rx="2" fill="#dde7f3" stroke="#3d5a80"/><text x="952" y="470">MAC</text>
+</g>
+<g font-size="12" fill="#1a1a1a" text-anchor="middle">
+  <rect x="1094" y="398" width="56" height="22" rx="2" fill="#f3ecdd" stroke="#8a6d3b"/><text x="1122" y="414">DMA</text>
+  <rect x="1094" y="426" width="56" height="22" rx="2" fill="#e5eee2" stroke="#4f6f52"/><text x="1122" y="442">SRAM</text>
+  <rect x="1094" y="454" width="56" height="22" rx="2" fill="#dde7f3" stroke="#3d5a80"/><text x="1122" y="470">MAC</text>
+</g>
+<line x1="952" y1="340" x2="952" y2="268" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
+<line x1="1122" y1="340" x2="1122" y2="268" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
+<g font-size="12" fill="#3a3a3a">
+  <text x="890" y="524">Each core holds its own slots,</text>
+  <text x="890" y="542">panel buffers, caches, datapath</text>
+  <text x="890" y="560">and AXI port, and runs a</text>
+  <text x="890" y="578">contiguous band of output tiles.</text>
+</g>
+
+<!-- Legend -->
+<g font-size="12" fill="#3a3a3a">
+  <rect x="24" y="814" width="16" height="12" fill="#dde7f3" stroke="#3d5a80"/><text x="46" y="824">compute</text>
+  <rect x="124" y="814" width="16" height="12" fill="#e5eee2" stroke="#4f6f52"/><text x="146" y="824">storage</text>
+  <rect x="222" y="814" width="16" height="12" fill="#f3ecdd" stroke="#8a6d3b"/><text x="244" y="824">control and DMA</text>
+  <rect x="364" y="814" width="16" height="12" fill="#ececea" stroke="#5a5a5a"/><text x="386" y="824">interconnect</text>
+  <rect x="478" y="814" width="16" height="12" fill="#ebe7f2" stroke="#5f5480"/><text x="500" y="824">external memory</text>
+  <rect x="622" y="814" width="16" height="12" fill="#f6f6f4" stroke="#8c8c8c" stroke-dasharray="3 2"/><text x="644" y="824">context</text>
+  <line x1="724" y1="820" x2="756" y2="820" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)"/><text x="764" y="824">data</text>
+  <line x1="812" y1="820" x2="844" y2="820" stroke="#7a7a7a" stroke-width="1.3" stroke-dasharray="5 3" marker-end="url(#arrc)"/><text x="852" y="824">control</text>
+</g>
+</svg>
