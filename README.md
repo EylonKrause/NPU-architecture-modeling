@@ -41,7 +41,7 @@ cmake --build build -j2
 python3 scripts/live_dashboard.py --binary build/npu-sim
 ```
 
-Open **http://127.0.0.1:8765** and press **Start continuous inference**. The dashboard shows actual kernel progress, MAC/DMA activity, tile completion, input/output previews and validation. Pause freezes simulated time; Step advances the paused model. Each completed inference is checked before continuous mode launches the next deterministic input in a fresh simulator process. Nothing is animated as a substitute for computation. See [live controls and local API](docs/LIVE.md).
+Open **http://127.0.0.1:8765**, choose a profile and press **Run**. The dashboard shows the roofline, MAC and DMA utilisation per advance, a sampled load/compute/store timeline, tile states, the analytic lower bound against measured cycles, and validation. Pause freezes simulated time; Step advances the paused model by 1 to 10,000 cycles. Each completed inference is checked before the next deterministic input runs in a fresh simulator process. See [live controls and local API](docs/LIVE.md).
 
 The dashboard uses only Python's standard library and binds to loopback. It is a running virtual NPU model, with no requirement for physical NPU hardware. Its host pacing makes the simulation inspectable; it is not a hardware throughput measurement.
 
@@ -102,7 +102,7 @@ build/npu-mobile-demo --cores 2 --jobs 6 --governor deadline --deadline-ns 2000
 python3 scripts/graph_optimize.py examples/mobile_fusion.json --verify --binary build/npu-sim
 ```
 
-* [Compressed weights](docs/WEIGHT-COMPRESSION.md): lossless 1/2/4/8-bit palette indices or zero-point-aware sparse blocks, actual decoding, metadata traffic, decode cycles and executed/skipped MACs. The live dashboard includes a **Palettized weights** profile.
+* [Compressed weights](docs/WEIGHT-COMPRESSION.md): lossless 1/2/4/8-bit palette indices or zero-point-aware sparse blocks, with decoding, metadata traffic, decode cycles and executed/skipped MACs. The live dashboard includes a **2-bit palette weights** profile.
 * [Stateful transformer](docs/TRANSFORMER.md): causal grouped-query attention, stable softmax, RoPE, RMSNorm, residuals and SwiGLU, with FP16/BF16 storage plus FP32 accumulation and a persistent bounded KV cache. Independent Python checks cover complete outputs and low-precision conversion.
 * [Mobile multicore platform](docs/MOBILE-PLATFORM.md): concurrent SystemC engine threads, shared bus contention, priorities/deadlines, private SRAM/cache, synthetic OPPs, voltage/frequency switching and idle gating. Energy requires explicit coefficients.
 * [Graph compilation](scripts/graph_optimize.py): safe single-consumer Dense/Conv → ReLU fusion removes avoidable host operations while preserving observed intermediate results. `--verify` runs original and compiled graphs and compares every output.
