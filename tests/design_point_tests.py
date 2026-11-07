@@ -253,7 +253,11 @@ class DesignPoints(unittest.TestCase):
             for workload in workloads.names():
                 for layer, gemm in workloads.iter_calls(workloads.load(workload)):
                     with self.subTest(name=name, workload=workload, layer=layer["name"]):
-                        result = result_of(name, *sim.to_flags(gemm.flags()), "--timing-only")
+                        # The config's tiles size the im2col operand; a convolution on
+                        # its input footprint runs with the mapper's tiles
+                        # (tests/mapper_tests.py).
+                        result = result_of(name, *sim.to_flags(gemm.flags(conv=False)),
+                                           "--timing-only")
                         self.assertEqual(result["numerics"], "skipped")
                         self.assertLessEqual(result["scratchpad_bytes"], sram)
                         self.assertEqual(result["macs"], gemm.macs)
