@@ -123,15 +123,18 @@ struct Config {
     U64 sram_bytes = 1024U * 1024U;
     Precision precision = Precision::fp16;
     std::string precision_name = "fp16", vcd, progress;
-    bool dump = false, lifecycle = false;
+    bool dump = false, lifecycle = false, inject_fault = false;
+    unsigned fault_row = 0;
     unsigned head_dim() const { return dim / heads; }
     unsigned kv_dim() const { return head_dim() * kv_heads; }
     unsigned storage_bytes() const { return precision == Precision::fp32 ? 4U : 2U; }
     // DRAM holds K and V rows for every layer and position.
-    U64 kv_capacity_bytes() const { return U64{2} * layers * context * kv_dim() * storage_bytes(); }
-    // Largest request the driver submits: the prompt is one batch; the
-    // lifecycle replay resubmits the whole sequence as one batch.
-    unsigned batch_rows() const { return lifecycle ? prefill + decode : prefill; }
+    U64 kv_dram_capacity_bytes() const {
+        return U64{2} * layers * context * kv_dim() * storage_bytes();
+    }
+    // Largest request the driver submits: the prompt is one batch, and the
+    // lifecycle replay resubmits the workload's own partition.
+    unsigned batch_rows() const { return prefill; }
     U64 layer_weight_count() const {
         return U64{2} * dim * dim + U64{2} * dim * kv_dim() + U64{3} * dim * ff_dim;
     }
@@ -153,15 +156,26 @@ struct Config {
     U64 score_buffer_bytes() const { return U64{4} * 2 * heads * context; }
     // One layer's past K and V rows, streamed in from DRAM for attention.
     U64 kv_buffer_bytes() const { return U64{2} * context * kv_dim() * storage_bytes(); }
-    U64 required_sram() const {
+    U64 fixed_sram_bytes() const {
         return activation_buffer_bytes() + score_buffer_bytes() + kv_buffer_bytes();
     }
+    // Q and O are dim x dim, K and V dim x kv_dim, gate and up dim x ff, down
+    // ff x dim; a column of down holds ff values, a column of the others dim.
+    U64 largest_matrix_bytes() const { return U64{dim} * std::max(dim, ff_dim) * storage_bytes(); }
+    U64 weight_column_bytes() const { return U64{std::max(dim, ff_dim)} * storage_bytes(); }
+    // Weights stream in column panels through a buffer that takes the SRAM
+    // the other buffers leave, up to the largest matrix.
+    U64 weight_buffer_bytes() const {
+        const auto fixed = fixed_sram_bytes();
+        return fixed >= sram_bytes ? 0 : std::min(largest_matrix_bytes(), sram_bytes - fixed);
+    }
+    U64 required_sram() const { return fixed_sram_bytes() + weight_buffer_bytes(); }
 };
 
 struct Counters {
     U64 tensor_macs = 0, vector_ops = 0, tensor_cycles = 0, vector_cycles = 0;
     U64 dma_cycles = 0, dma_read_bytes = 0, dma_write_bytes = 0, dma_transactions = 0;
-    U64 weight_read_bytes = 0, kv_read_bytes = 0, kv_write_bytes = 0;
+    U64 weight_read_bytes = 0, kv_dram_read_bytes = 0, kv_dram_write_bytes = 0;
     U64 tokens = 0, executed_tokens = 0, requests = 0;
 };
 
@@ -178,14 +192,25 @@ Vector fixture_input(const Config& c, unsigned position) {
     return out;
 }
 
+// Fixture weights are integers in -15..15 over 8 * 2^e, where 4^e <= rows < 4^(e+1)
+// and e >= 3: 64 up to 255 rows, then twice as small per factor of four in the
+// reduction depth, so dot products over 2048 or 8192 rows keep fp16 activations
+// finite. Power-of-two divisors keep every weight exact in fp16 and bf16.
+float weight_divisor(unsigned rows) {
+    unsigned exponent = 3;
+    while ((U64{4} << (2U * exponent)) <= rows) ++exponent;
+    return 8.0F * static_cast<float>(1U << exponent);
+}
+
 Vector weight(const Config& c, unsigned rows, unsigned columns, unsigned matrix) {
     Vector out(static_cast<std::size_t>(rows) * columns);
+    const float divisor = weight_divisor(rows);
     for (unsigned row = 0; row < rows; ++row)
         for (unsigned col = 0; col < columns; ++col) {
             const auto integer = static_cast<int>((U64{row} * 17U + U64{col} * 13U +
                                                    c.seed % 101U + U64{matrix} * 7U) % 31U) - 15;
             out[static_cast<std::size_t>(row) * columns + col] =
-                store(static_cast<float>(integer) / 64.0F, c.precision);
+                store(static_cast<float>(integer) / divisor, c.precision);
         }
     return out;
 }
@@ -232,19 +257,22 @@ private:
     const Config& c;
     std::vector<Layer> layers_;
 
-    void dma_weights(const Vector& weights, const Stage& stage, Counters* stats) const {
-        const auto bytes = static_cast<U64>(weights.size()) * c.storage_bytes();
-        stage(Kind::dma, bytes, false);
-        if (stats) stats->weight_read_bytes += bytes;
-    }
-
-    // Row-major weights: the output accumulators of one input row advance
-    // together over the reduction, each in the order 0..rows-1.
+    // DRAM holds each matrix packed by column panel, as many columns as the
+    // weight buffer holds; each panel's DMA precedes its tensor stage. Row-major
+    // weights: the output accumulators of one input row advance together over
+    // the reduction, each in the order 0..rows-1, whatever the panel split.
     Sequence dense(const Sequence& inputs, const Vector& weights, unsigned columns, const Stage& stage,
                    Counters* stats) const {
         const auto depth = inputs.front().size();
-        dma_weights(weights, stage, stats);
-        stage(Kind::tensor, static_cast<U64>(inputs.size()) * depth * columns, false);
+        const auto column_bytes = static_cast<U64>(depth) * c.storage_bytes();
+        const auto panel = std::min<U64>(columns, c.weight_buffer_bytes() / column_bytes);
+        require(panel > 0, "the weight buffer cannot hold one weight column");
+        for (U64 first = 0; first < columns; first += panel) {
+            const auto width = std::min<U64>(panel, columns - first);
+            stage(Kind::dma, width * column_bytes, false);
+            if (stats) stats->weight_read_bytes += width * column_bytes;
+            stage(Kind::tensor, static_cast<U64>(inputs.size()) * depth * width, false);
+        }
         Sequence out;
         out.reserve(inputs.size());
         Vector sums(columns);
@@ -328,8 +356,8 @@ private:
             stage(Kind::dma, past * row_bytes, false);
         }
         if (stats) {
-            stats->kv_write_bytes += 2 * rows * row_bytes;
-            stats->kv_read_bytes += 2 * past * row_bytes;
+            stats->kv_dram_write_bytes += 2 * rows * row_bytes;
+            stats->kv_dram_read_bytes += 2 * past * row_bytes;
         }
         for (auto& row : keys) cache.keys.push_back(std::move(row));
         for (auto& row : values) cache.values.push_back(std::move(row));
@@ -596,34 +624,52 @@ private:
         require(e.stats.dma_read_bytes > before.dma_read_bytes && e.stats.vector_ops > before.vector_ops &&
                 now() > work_start, "failed request lost its work accounting");
         rejected_work_cycles = now() - work_start;
-        Request replay;
-        for (unsigned pos = 0; pos < c.prefill + c.decode; ++pos)
-            replay.inputs.push_back(fixture_input(c, pos));
-        submit(replay);
-        require(replay.okay && replay.outputs == outputs && cache_equals(saved),
-                "single-batch replay differs from the prefill/decode run");
+        // The workload's own partition, rerun on the reset cache, must
+        // reproduce the outputs and every layer's cache.
+        const auto replayed = requests(nullptr);
+        require(replayed == outputs && cache_equals(saved),
+                "replay after reset differs from the first run");
         lifecycle_verified = true;
+    }
+
+    // The prompt as one request, then one request per decode token; appends
+    // each request's latency to `latencies` when given.
+    Sequence requests(std::vector<U64>* latencies) {
+        Request prefill;
+        for (unsigned pos = 0; pos < c.prefill; ++pos)
+            prefill.inputs.push_back(fixture_input(c, pos));
+        auto begin = now();
+        submit(prefill);
+        if (!prefill.okay) throw std::runtime_error("prefill failed: " + prefill.error);
+        if (latencies) latencies->push_back(now() - begin);
+        Sequence result = std::move(prefill.outputs);
+        for (unsigned pos = c.prefill; pos < c.prefill + c.decode; ++pos) {
+            begin = now();
+            Request decode; decode.inputs.push_back(fixture_input(c, pos)); submit(decode);
+            if (!decode.okay) throw std::runtime_error("decode failed: " + decode.error);
+            result.push_back(decode.outputs.front());
+            if (latencies) latencies->push_back(now() - begin);
+        }
+        return result;
     }
 
     void run() {
         try {
-            Request prefill;
-            for (unsigned pos = 0; pos < c.prefill; ++pos) prefill.inputs.push_back(fixture_input(c, pos));
-            submit(prefill);
-            if (!prefill.okay) throw std::runtime_error("prefill failed: " + prefill.error);
-            outputs = prefill.outputs; prefill_cycles = now();
-            for (unsigned pos = c.prefill; pos < c.prefill + c.decode; ++pos) {
-                const auto begin = now();
-                Request decode; decode.inputs.push_back(fixture_input(c, pos)); submit(decode);
-                if (!decode.okay) throw std::runtime_error("decode failed: " + decode.error);
-                outputs.push_back(decode.outputs.front());
-                decode_token_cycles.push_back(now() - begin);
-            }
+            std::vector<U64> latencies;
+            outputs = requests(&latencies);
+            prefill_cycles = latencies.front();
+            decode_token_cycles.assign(latencies.begin() + 1, latencies.end());
             workload_cycles = now(); decode_cycles = workload_cycles - prefill_cycles;
             workload = e.stats;
+            if (c.lifecycle) lifecycle();
+            if (c.inject_fault) {
+                auto& value = outputs[c.fault_row].front();
+                value = std::nextafter(value, std::numeric_limits<float>::infinity());
+            }
 
             // Untimed one-row-at-a-time replay: catches batching and
             // prefill/decode partition bugs; the Python oracle checks values.
+            // A mismatch is reported, and sc_main exits 2 after the report.
             const Model& reference = e.model();
             std::vector<KvCache> cache(c.layers);
             const Stage untimed = [](Kind, U64, bool) {};
@@ -632,8 +678,6 @@ private:
                 expected.push_back(
                     reference.forward({fixture_input(c, pos)}, cache, untimed, nullptr).front());
             partition_match = expected == outputs;
-            require(partition_match, "batched and one-row execution disagree");
-            if (c.lifecycle) lifecycle();
             completed = true;
         } catch (const std::exception& error) { failure = error.what(); }
         wait(SC_ZERO_TIME);
@@ -713,7 +757,10 @@ constexpr const char* usage =
     " [--tensor-macs-per-cycle 1..4096] [--vector-ops-per-cycle 1..4096]\n"
     " [--dma-bytes-per-cycle 1..4096] [--dma-startup 0..1000] [--sram-bytes 1..67108864]\n"
     " [--vcd BASENAME] [--progress-jsonl PATH] [--round-f32-bits WORDS|-]\n"
+    " [--inject-output-fault ROW]\n"
     "The prompt runs as one batch; each decode token is its own request.\n"
+    "--inject-output-fault moves output row ROW's first value up one binary32 step\n"
+    "to exercise the batched/one-row check; the run then exits 2.\n"
     "--round-f32-bits rounds comma-separated binary32 words to --precision and exits;\n"
     "'-' reads the list from stdin.\n";
 }  // namespace
@@ -733,7 +780,7 @@ int sc_main(int argc, char* argv[]) {
                 "--dim", "--heads", "--kv-heads", "--ff-dim", "--layers", "--context", "--prefill",
                 "--decode", "--seed", "--tensor-macs-per-cycle", "--vector-ops-per-cycle",
                 "--dma-bytes-per-cycle", "--dma-startup", "--sram-bytes", "--vcd", "--progress-jsonl",
-                "--round-f32-bits", "--precision"};
+                "--round-f32-bits", "--precision", "--inject-output-fault"};
             if (std::find(std::begin(valued), std::end(valued), flag) == std::end(valued))
                 throw std::invalid_argument("unknown argument: " + flag);
             if (i + 1 == argc) throw std::invalid_argument(flag + ": missing value");
@@ -752,6 +799,10 @@ int sc_main(int argc, char* argv[]) {
             else if (flag == "--dma-bytes-per-cycle") c.dma_rate = bounded(flag, value, 1, 4096);
             else if (flag == "--dma-startup") c.dma_startup = bounded(flag, value, 0, 1000);
             else if (flag == "--sram-bytes") c.sram_bytes = bounded(flag, value, 1, 67108864);
+            else if (flag == "--inject-output-fault") {
+                c.fault_row = bounded(flag, value, 0, max_tokens);
+                c.inject_fault = true;
+            }
             else if (flag == "--vcd") { require(!value.empty(), "--vcd: empty basename"); c.vcd = value; }
             else if (flag == "--progress-jsonl") {
                 require(!value.empty(), "--progress-jsonl: empty path");
@@ -777,6 +828,8 @@ int sc_main(int argc, char* argv[]) {
                 "--dim must be a multiple of --heads with an even head width for RoPE");
         require(c.heads % c.kv_heads == 0, "--kv-heads must divide --heads");
         require(c.prefill + c.decode <= c.context, "--prefill plus --decode exceeds --context");
+        require(!c.inject_fault || c.fault_row < c.prefill + c.decode,
+                "--inject-output-fault: must name an output row below --prefill plus --decode");
         // Host cost: every weight is held as binary32, and the arithmetic runs
         // twice (timed batches, then the one-row replay), three times with
         // --verify-lifecycle.
@@ -784,8 +837,9 @@ int sc_main(int argc, char* argv[]) {
                 "weights exceed the 256 MiB host limit (--layers, --dim, --ff-dim)");
         require((c.lifecycle ? 3U : 2U) * c.workload_macs() <= max_host_macs,
                 "functional work exceeds 4e9 host MACs (--layers, --dim, --ff-dim, --prefill, --decode)");
-        require(c.required_sram() <= c.sram_bytes,
-                "--sram-bytes cannot hold the batch activations, attention scores and one layer's K/V");
+        require(c.fixed_sram_bytes() + c.weight_column_bytes() <= c.sram_bytes,
+                "--sram-bytes cannot hold the batch activations, attention scores, one layer's K/V "
+                "and one weight column");
         // SystemC appends .vcd: strip a user suffix, and refuse a VCD path that
         // aliases the progress file (including through links).
         if (!c.vcd.empty() && c.vcd.size() > 4U && c.vcd.compare(c.vcd.size() - 4U, 4U, ".vcd") == 0)
@@ -853,15 +907,19 @@ int sc_main(int argc, char* argv[]) {
             << ",\"dma_cycles\":" << s.dma_cycles << ",\"dma_transactions\":" << s.dma_transactions
             << ",\"dma_read_bytes\":" << s.dma_read_bytes << ",\"dma_write_bytes\":" << s.dma_write_bytes
             << ",\"weight_read_bytes\":" << s.weight_read_bytes
-            << ",\"kv_read_bytes\":" << s.kv_read_bytes << ",\"kv_write_bytes\":" << s.kv_write_bytes
-            << ",\"kv_live_bytes\":" << live_bytes << ",\"kv_capacity_bytes\":" << c.kv_capacity_bytes()
+            << ",\"kv_dram_read_bytes\":" << s.kv_dram_read_bytes
+            << ",\"kv_dram_write_bytes\":" << s.kv_dram_write_bytes
+            << ",\"kv_live_bytes\":" << live_bytes
+            << ",\"kv_dram_capacity_bytes\":" << c.kv_dram_capacity_bytes()
             << ",\"activation_buffer_bytes\":" << c.activation_buffer_bytes()
             << ",\"score_buffer_bytes\":" << c.score_buffer_bytes()
             << ",\"kv_buffer_bytes\":" << c.kv_buffer_bytes()
+            << ",\"weight_buffer_bytes\":" << c.weight_buffer_bytes()
             << ",\"reserved_sram_bytes\":" << c.required_sram()
             << ",\"sram_budget_bytes\":" << c.sram_bytes;
         if (c.dump) { std::cout << ",\"outputs\":"; print_sequence(driver.outputs); }
         std::cout << "}\n";
+        require(driver.partition_match, "batched and one-row execution disagree");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "npu-transformer-demo: " << error.what() << '\n';

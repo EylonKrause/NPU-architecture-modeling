@@ -78,7 +78,9 @@ def reference(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, tokens=6, see
     head_dim, kv_dim = dim // heads, dim // heads * kv_heads
 
     def weights(rows, cols, matrix):
-        return [[cast(((row * 17 + col * 13 + seed % 101 + matrix * 7) % 31 - 15) / 64)
+        # 1/64 up to 255 rows, then 1/sqrt(rows) rounded to a power of two, over 8.
+        divisor = 8 * 2 ** max(3, (rows.bit_length() - 1) // 2)
+        return [[cast(((row * 17 + col * 13 + seed % 101 + matrix * 7) % 31 - 15) / divisor)
                  for col in range(cols)] for row in range(rows)]
 
     def dense(vector, matrix):
@@ -159,24 +161,54 @@ def reference(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, tokens=6, see
     return hidden
 
 
+def buffers(*, dim=16, heads=4, kv_heads=2, ff_dim=32, context=32, prefill=3, width=2,
+            sram_bytes=1 << 20, **_) -> dict:
+    """SRAM buffers: the prompt batch's live rows at the peak of each half of a
+    layer (3d + 2kv during attention, 2d + 2ff during the FFN), FP32 scores and
+    probabilities of every head for one query row, one layer's K and V rows,
+    and a weight buffer taking the rest of --sram-bytes, up to the largest
+    weight matrix (d x max(d, ff))."""
+    kv = dim // heads * kv_heads
+    sizes = {'activation_buffer_bytes': prefill * width * max(3 * dim + 2 * kv, 2 * dim + 2 * ff_dim),
+             'score_buffer_bytes': 4 * 2 * heads * context,
+             'kv_buffer_bytes': 2 * context * kv * width}
+    sizes['weight_buffer_bytes'] = min(dim * max(dim, ff_dim) * width,
+                                       sram_bytes - sum(sizes.values()))
+    sizes['reserved_sram_bytes'] = sum(sizes.values())
+    return sizes
+
+
 def schedule(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, prefill=3, decode=3, width=2,
-             tensor_rate=64, vector_rate=16, dma_rate=32, dma_startup=2) -> list[list[tuple]]:
+             context=32, sram_bytes=1 << 20, tensor_rate=64, vector_rate=16, dma_rate=32,
+             dma_startup=2) -> list[list[tuple]]:
     """Stage list of every request, from the documented schedule.
 
     The prompt is one request of `prefill` rows; each decode token is a request
-    of one row. Per layer: RMSNorm (gamma DMA, vector), Q/K/V (weight DMA,
-    tensor), RoPE on Q and K, K/V rows written to DRAM, earlier K/V rows read
-    back, attention over p + 1 keys at position p, O, residual, RMSNorm,
-    gate, up, SiLU, down, residual. Stages run back to back: a DMA costs
-    startup + ceil(bytes / rate), tensor and vector work ceil(work / rate).
-    Each stage is (kind, amount, traffic class, cycles).
+    of one row. Per layer: RMSNorm (gamma DMA, vector), Q/K/V, RoPE on Q and K,
+    K/V rows written to DRAM, earlier K/V rows read back, attention over p + 1
+    keys at position p, O, residual, RMSNorm, gate, up, SiLU, down, residual.
+    A projection of depth D and C columns streams its weights in column panels
+    of floor(weight buffer / (D * width)) columns, the last one narrower; each
+    panel is a weight DMA followed by its tensor stage. Stages run back to
+    back: a DMA costs startup + ceil(bytes / rate), tensor and vector work
+    ceil(work / rate). Each stage is (kind, amount, traffic class, cycles).
     """
     kv = dim // heads * kv_heads
+    weight_buffer = buffers(dim=dim, heads=heads, kv_heads=kv_heads, ff_dim=ff_dim, context=context,
+                            prefill=prefill, width=width, sram_bytes=sram_bytes)['weight_buffer_bytes']
 
     def cycles(kind, amount):
         if kind == 'dma':
             return dma_startup + math.ceil(amount / dma_rate)
         return math.ceil(amount / (tensor_rate if kind == 'tensor' else vector_rate))
+
+    def dense(rows, depth, columns):
+        panel = min(columns, weight_buffer // (depth * width))
+        stages = []
+        for first in range(0, columns, panel):
+            span = min(panel, columns - first)
+            stages += [('dma', depth * span * width, 'weight'), ('tensor', rows * depth * span, None)]
+        return stages
 
     def request(start, rows):
         raw = [('dma', rows * dim * width, 'input')]
@@ -184,24 +216,50 @@ def schedule(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, prefill=3, dec
         for _ in range(layers):
             raw += [('dma', dim * width, 'weight'), ('vector', rows * (5 * dim + 2), None)]
             for cols in (dim, kv, kv):
-                raw += [('dma', dim * cols * width, 'weight'), ('tensor', rows * dim * cols, None)]
+                raw += dense(rows, dim, cols)
             raw += [('vector', rows * 5 * dim, None), ('vector', rows * 5 * kv, None)]
             raw += [('dma', rows * kv * width, 'kv_write')] * 2
             if start:
                 raw += [('dma', start * kv * width, 'kv_read')] * 2
             raw += [('tensor', sum(2 * dim * v for v in visible), None),
                     ('vector', sum(heads * (6 * v + 1) for v in visible), None)]
-            raw += [('dma', dim * dim * width, 'weight'), ('tensor', rows * dim * dim, None),
-                    ('vector', rows * dim, None)]
+            raw += dense(rows, dim, dim) + [('vector', rows * dim, None)]
             raw += [('dma', dim * width, 'weight'), ('vector', rows * (5 * dim + 2), None)]
-            raw += [('dma', dim * ff_dim * width, 'weight'), ('tensor', rows * dim * ff_dim, None)] * 2
+            raw += dense(rows, dim, ff_dim) * 2
             raw += [('vector', rows * 5 * ff_dim, None)]
-            raw += [('dma', ff_dim * dim * width, 'weight'), ('tensor', rows * ff_dim * dim, None),
-                    ('vector', rows * dim, None)]
+            raw += dense(rows, ff_dim, dim) + [('vector', rows * dim, None)]
         raw += [('dma', rows * dim * width, 'output')]
         return [(kind, amount, traffic, cycles(kind, amount)) for kind, amount, traffic in raw]
 
     return [request(0, prefill)] + [request(prefill + i, 1) for i in range(decode)]
+
+
+def stage_list(requests: list[list[tuple]]) -> list[tuple[str, int]]:
+    """(direction or kind, amount) per stage, as progress_stages() reports them."""
+    reads = ('input', 'weight', 'kv_read')
+    return [(('dma_read' if traffic in reads else 'dma_write') if kind == 'dma' else kind, amount)
+            for request in requests for kind, amount, traffic, _ in request]
+
+
+def progress_stages(path: Path) -> list[tuple[str, int]]:
+    """(direction or kind, amount) of every completed stage, from the counter
+    deltas between consecutive stage_complete events."""
+    fields = ('tensor_macs', 'vector_ops', 'dma_read_bytes', 'dma_write_bytes')
+    previous = dict.fromkeys(fields, 0)
+    stages = []
+    for line in path.read_text().splitlines():
+        event = json.loads(line)
+        if event['event'] != 'stage_complete':
+            continue
+        delta = {field: event[field] - previous[field] for field in fields}
+        previous = {field: event[field] for field in fields}
+        if event['stage'] == 1:
+            direction = 'dma_read' if delta['dma_read_bytes'] else 'dma_write'
+            stages.append((direction, delta[direction + '_bytes']))
+        else:
+            kind, field = ('tensor', 'tensor_macs') if event['stage'] == 2 else ('vector', 'vector_ops')
+            stages.append((kind, delta[field]))
+    return stages
 
 
 def totals(requests: list[list[tuple]]) -> dict:
@@ -219,7 +277,8 @@ def totals(requests: list[list[tuple]]) -> dict:
         'dma_cycles': sum_of('dma', field=3),
         'dma_transactions': sum(1 for stage in stages if stage[0] == 'dma'),
         'weight_read_bytes': sum_of('dma', 'weight'),
-        'kv_read_bytes': sum_of('dma', 'kv_read'), 'kv_write_bytes': sum_of('dma', 'kv_write'),
+        'kv_dram_read_bytes': sum_of('dma', 'kv_read'),
+        'kv_dram_write_bytes': sum_of('dma', 'kv_write'),
         'dma_read_bytes': sum_of('dma', 'input') + sum_of('dma', 'weight') + sum_of('dma', 'kv_read'),
         'dma_write_bytes': sum_of('dma', 'output') + sum_of('dma', 'kv_write'),
         'stages': len(stages),
@@ -280,6 +339,22 @@ class TransformerTests(unittest.TestCase):
                              seed=4294967295, precision='fp32')
         self.assert_sequence(result['outputs'], expected)
 
+    def test_weight_scale_follows_the_reduction_depth(self):
+        # Projections of depth 256 (weights over 128) and a down projection of
+        # depth 1024 (over 256) against the oracle, in the storage formats where
+        # an unscaled fixture loses range or precision first.
+        for flags, shape, precisions in (
+                (('--dim', '256', '--heads', '4', '--kv-heads', '2', '--ff-dim', '32'),
+                 {'dim': 256, 'heads': 4, 'kv_heads': 2, 'ff_dim': 32}, ('fp16',)),
+                (('--ff-dim', '1024',), {'ff_dim': 1024}, ('fp16', 'bf16'))):
+            for precision in precisions:
+                with self.subTest(flags=flags, precision=precision):
+                    result = run(*flags, '--precision', precision, '--prefill', '2', '--decode', '1',
+                                 '--dump-output')
+                    self.assert_sequence(result['outputs'],
+                                         reference(**shape, tokens=3, precision=precision))
+                    self.assertTrue(result['partition_match'])
+
     def test_stacked_layers_match_the_oracle(self):
         for precision in ('fp32', 'bf16'):
             with self.subTest(precision=precision):
@@ -288,7 +363,7 @@ class TransformerTests(unittest.TestCase):
                 self.assert_sequence(result['outputs'], reference(layers=3, tokens=7, precision=precision))
                 self.assertTrue(result['partition_match'])
                 width = 4 if precision == 'fp32' else 2
-                self.assertEqual(result['kv_capacity_bytes'], 2 * 3 * 32 * 8 * width)
+                self.assertEqual(result['kv_dram_capacity_bytes'], 2 * 3 * 32 * 8 * width)
 
     def test_prefill_incremental_partitions_and_no_future_leakage(self):
         whole = run('--prefill', '8', '--decode', '0', '--dump-output')
@@ -307,7 +382,7 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(result['rejected_requests'], 5)
         self.assertEqual(result['rejected_work_cycles'], failed_request_cycles(2, 2))
         self.assertEqual(result['tokens_completed'], result['tokens_executed'])
-        self.assertEqual(result['kv_live_bytes'], result['kv_capacity_bytes'])
+        self.assertEqual(result['kv_live_bytes'], result['kv_dram_capacity_bytes'])
         self.assertGreater(result['simulation_cycles'], result['workload_cycles'])
         self.assert_sequence(result['outputs'], reference())
 
@@ -320,7 +395,11 @@ class TransformerTests(unittest.TestCase):
                    'tensor_rate': 3, 'vector_rate': 7}),
                  (('--dim', '24', '--heads', '6', '--kv-heads', '3', '--ff-dim', '40', '--prefill', '7',
                    '--decode', '1', '--context', '9'),
-                  {'dim': 24, 'heads': 6, 'kv_heads': 3, 'ff_dim': 40, 'prefill': 7, 'decode': 1})]
+                  {'dim': 24, 'heads': 6, 'kv_heads': 3, 'ff_dim': 40, 'prefill': 7, 'decode': 1,
+                   'context': 9}),
+                 # 96 bytes past the 2624 of fixed buffers: 3-column panels of
+                 # the depth-16 projections and single columns of down (depth 32).
+                 (('--sram-bytes', '2720'), {'sram_bytes': 2720})]
         for flags, shape in cases:
             with self.subTest(flags=flags):
                 report = run(*flags)
@@ -328,6 +407,9 @@ class TransformerTests(unittest.TestCase):
                 for field, value in expected.items():
                     if field != 'stages':
                         self.assertEqual(report[field], value, field)
+                for field, value in buffers(**shape).items():
+                    self.assertEqual(report[field], value, field)
+                self.assertLessEqual(report['reserved_sram_bytes'], report['sram_budget_bytes'])
                 self.assertEqual(report['prefill_cycles'], report['ttft_cycles'])
                 self.assertEqual(report['decode_cycles'], sum(report['tpot_cycles']))
                 mean = sum(report['tpot_cycles']) / max(1, len(report['tpot_cycles']))
@@ -347,24 +429,49 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(report['tensor_macs'], layers * (tokens * per_layer + d * tokens * (tokens + 1)))
         # Weights and both RMSNorm gammas stream once per layer per request.
         self.assertEqual(report['weight_read_bytes'], (1 + decode) * layers * (per_layer + 2 * d) * width)
-        self.assertEqual(report['kv_write_bytes'], 2 * layers * tokens * kv * width)
-        self.assertEqual(report['kv_read_bytes'],
+        self.assertEqual(report['kv_dram_write_bytes'], 2 * layers * tokens * kv * width)
+        self.assertEqual(report['kv_dram_read_bytes'],
                          2 * layers * kv * width * sum(prefill + i for i in range(decode)))
-        self.assertEqual(report['dma_read_bytes'],
-                         tokens * d * width + report['weight_read_bytes'] + report['kv_read_bytes'])
-        self.assertEqual(report['dma_write_bytes'], tokens * d * width + report['kv_write_bytes'])
-        self.assertEqual(report['kv_capacity_bytes'], 2 * layers * context * kv * width)
+        self.assertEqual(report['dma_read_bytes'], tokens * d * width + report['weight_read_bytes'] +
+                         report['kv_dram_read_bytes'])
+        self.assertEqual(report['dma_write_bytes'], tokens * d * width + report['kv_dram_write_bytes'])
+        self.assertEqual(report['kv_dram_capacity_bytes'], 2 * layers * context * kv * width)
         self.assertEqual(report['kv_live_bytes'], 2 * layers * tokens * kv * width)
         self.assertEqual(report['activation_buffer_bytes'],
                          prefill * width * max(3 * d + 2 * kv, 2 * d + 2 * f))
         self.assertEqual(report['score_buffer_bytes'], 4 * 2 * h * context)
         self.assertEqual(report['kv_buffer_bytes'], 2 * context * kv * width)
+        # The default budget holds the largest matrix (gate/up, d x f) whole.
+        self.assertEqual(report['weight_buffer_bytes'], d * f * width)
         self.assertEqual(report['reserved_sram_bytes'], sum(report[field] for field in (
-            'activation_buffer_bytes', 'score_buffer_bytes', 'kv_buffer_bytes')))
+            'activation_buffer_bytes', 'score_buffer_bytes', 'kv_buffer_bytes', 'weight_buffer_bytes')))
+        # KV fields are DRAM traffic and capacity; the earlier on-chip names are gone.
+        for stale in ('kv_read_bytes', 'kv_write_bytes', 'kv_capacity_bytes'):
+            self.assertNotIn(stale, report)
         fp32 = run('--layers', str(layers), '--prefill', str(prefill), '--decode', str(decode),
                    '--precision', 'fp32')
         self.assertEqual(fp32['dma_read_bytes'], 2 * report['dma_read_bytes'])
-        self.assertEqual(fp32['kv_capacity_bytes'], 2 * report['kv_capacity_bytes'])
+        self.assertEqual(fp32['kv_dram_capacity_bytes'], 2 * report['kv_dram_capacity_bytes'])
+
+    def test_lifecycle_check_leaves_the_sram_reservation_unchanged(self):
+        # The lifecycle replay reuses the workload's partition, so the batch
+        # buffer still holds the prompt only: a budget that fits the run
+        # exactly also fits it with --verify-lifecycle.
+        flags = ('--prefill', '32', '--decode', '32', '--context', '64')
+        exact = run(*flags)['reserved_sram_bytes']
+        self.assertEqual(exact, buffers(prefill=32, context=64)['reserved_sram_bytes'])
+        for extra in ((), ('--verify-lifecycle',)):
+            with self.subTest(extra=extra):
+                report = run(*flags, '--sram-bytes', str(exact), *extra)
+                for field, value in buffers(prefill=32, context=64, sram_bytes=exact).items():
+                    self.assertEqual(report[field], value, field)
+                self.assertEqual(report['lifecycle_verified'], bool(extra))
+        # One byte less does not hold the largest matrix whole: Q, K, V and O
+        # still fit, gate and up split into 31 + 1 columns and down into 15 + 1.
+        tight = run(*flags, '--sram-bytes', str(exact - 1), '--verify-lifecycle')
+        shape = {'prefill': 32, 'decode': 32, 'context': 64, 'sram_bytes': exact - 1}
+        self.assertEqual(tight['ttft_cycles'], totals(schedule(**shape))['ttft_cycles'])
+        self.assertEqual(tight['dma_transactions'], totals(schedule(**shape))['dma_transactions'])
 
     def test_batched_prefill_streams_weights_once_per_layer(self):
         runs = {rows: run('--prefill', str(rows), '--decode', '0', '--layers', '2') for rows in (1, 4, 16)}
@@ -381,29 +488,53 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(len(tpot), 12)
         self.assertEqual(tpot, sorted(tpot))
         self.assertGreater(tpot[-1], tpot[0])
-        self.assertEqual(report['kv_read_bytes'], 2 * 8 * 2 * sum(range(4, 16)))
+        self.assertEqual(report['kv_dram_read_bytes'], 2 * 8 * 2 * sum(range(4, 16)))
         self.assertGreater(report['tpot_mean_cycles'], report['ttft_cycles'] / 4)
 
     def test_kv_head_reduction_reduces_cache_and_work(self):
         multi = run('--kv-heads', '4')
         grouped = run('--kv-heads', '1')
-        self.assertEqual(multi['kv_capacity_bytes'], 4 * grouped['kv_capacity_bytes'])
+        self.assertEqual(multi['kv_dram_capacity_bytes'], 4 * grouped['kv_dram_capacity_bytes'])
         self.assertGreater(multi['tensor_macs'], grouped['tensor_macs'])
         self.assertGreater(multi['dma_read_bytes'], grouped['dma_read_bytes'])
-        self.assertEqual(multi['kv_read_bytes'], 4 * grouped['kv_read_bytes'])
+        self.assertEqual(multi['kv_dram_read_bytes'], 4 * grouped['kv_dram_read_bytes'])
 
-    def test_largest_dimensions_run(self):
-        for flags, shape in ((('--dim', '2048', '--heads', '32', '--kv-heads', '8', '--ff-dim', '64'),
-                              {'dim': 2048, 'heads': 32, 'kv_heads': 8, 'ff_dim': 64}),
-                             (('--dim', '128', '--heads', '64', '--kv-heads', '64', '--ff-dim', '8192'),
-                              {'dim': 128, 'heads': 64, 'kv_heads': 64, 'ff_dim': 8192})):
-            with self.subTest(flags=flags):
-                report = run(*flags, '--precision', 'bf16', '--prefill', '2', '--decode', '1',
-                             '--context', '3', '--sram-bytes', '4194304', timeout=120)
-                expected = totals(schedule(**shape, prefill=2, decode=1))
-                self.assertEqual(report['tensor_macs'], expected['tensor_macs'])
-                self.assertEqual(report['ttft_cycles'], expected['ttft_cycles'])
-                self.assertEqual(report['tpot_cycles'], expected['tpot_cycles'])
+    def test_largest_dimensions_stream_weights_in_panels_that_fit_sram(self):
+        # Every stage, read back from the progress stream, matches the
+        # schedule: no weight DMA exceeds the weight buffer, and the buffers fit
+        # --sram-bytes. A 2048-wide matrix (8 MiB in 16 bits) cannot sit in the
+        # 4 MiB budget and streams in panels; the 128 x 8192 one (2 MiB) fits
+        # whole. The 2048 x 8192 layer runs at the default fp16 precision.
+        common = {'prefill': 2, 'decode': 1, 'context': 3, 'sram_bytes': 4194304}
+        for flags, shape, split in (
+                (('--dim', '2048', '--heads', '32', '--kv-heads', '8', '--ff-dim', '64',
+                  '--precision', 'bf16'),
+                 {'dim': 2048, 'heads': 32, 'kv_heads': 8, 'ff_dim': 64}, True),
+                (('--dim', '128', '--heads', '64', '--kv-heads', '64', '--ff-dim', '8192',
+                  '--precision', 'bf16'),
+                 {'dim': 128, 'heads': 64, 'kv_heads': 64, 'ff_dim': 8192}, False),
+                (('--dim', '2048', '--heads', '32', '--kv-heads', '8', '--ff-dim', '8192'),
+                 {'dim': 2048, 'heads': 32, 'kv_heads': 8, 'ff_dim': 8192}, True)):
+            with self.subTest(flags=flags), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / 'progress.jsonl'
+                report = run(*flags, '--prefill', '2', '--decode', '1', '--context', '3',
+                             '--sram-bytes', '4194304', '--progress-jsonl', str(path), timeout=120)
+                requests = schedule(**shape, **common)
+                self.assertEqual(progress_stages(path), stage_list(requests))
+                expected = totals(requests)
+                for field in ('tensor_macs', 'ttft_cycles', 'tpot_cycles', 'dma_transactions',
+                              'weight_read_bytes'):
+                    self.assertEqual(report[field], expected[field], field)
+                sizes = buffers(**shape, **common)
+                for field, value in sizes.items():
+                    self.assertEqual(report[field], value, field)
+                self.assertLessEqual(report['reserved_sram_bytes'], report['sram_budget_bytes'])
+                largest = shape['dim'] * max(shape['dim'], shape['ff_dim']) * 2
+                self.assertEqual(sizes['weight_buffer_bytes'] < largest, split)
+                weight_dmas = [stage[1] for request in requests for stage in request
+                               if stage[2] == 'weight']
+                self.assertLessEqual(max(weight_dmas), sizes['weight_buffer_bytes'])
+                self.assertTrue(report['partition_match'])
 
     def test_native_systemc_waveform(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -445,17 +576,30 @@ class TransformerTests(unittest.TestCase):
                 self.assertEqual(result['rejected_work_cycles'], failed_request_cycles(2, width))
                 events = [json.loads(line) for line in path.read_text().splitlines()]
                 batches = [e for e in events if e['event'] == 'batch_executed']
-                # Prompt, three decode tokens, then the single-batch replay after reset;
-                # the request that overflows mid-layer never completes a batch.
-                self.assertEqual([e['tokens_executed'] for e in batches], [3, 4, 5, 6, 12])
+                # Prompt, three decode tokens, then the same partition replayed after
+                # the reset; the request that overflows mid-layer never completes a batch.
+                self.assertEqual([e['tokens_executed'] for e in batches], [3, 4, 5, 6, 9, 10, 11, 12])
                 commits = [e for e in events if e['event'] == 'request_commit']
-                self.assertEqual([e['tokens_completed'] for e in commits], [3, 4, 5, 6, 12])
+                self.assertEqual([e['tokens_completed'] for e in commits], [3, 4, 5, 6, 9, 10, 11, 12])
                 after = [e for e in events if commits[3]['cycles'] < e['cycles'] < commits[4]['cycles']]
                 self.assertTrue(all(e['tokens_completed'] == 6 and e['kv_tokens'] == 0 for e in after))
         # Capacity one: the failing request holds only the overflowing row.
         one = run('--context', '1', '--prefill', '1', '--decode', '0', '--verify-lifecycle')
         self.assertTrue(one['lifecycle_verified'])
         self.assertEqual(one['rejected_work_cycles'], failed_request_cycles(1, 2))
+
+    def test_injected_output_fault_is_reported_and_exits_2(self):
+        clean = run('--dump-output')['outputs']
+        completed = invoke('--inject-output-fault', '4', '--dump-output')
+        self.assertEqual(completed.returncode, 2)
+        self.assertTrue(completed.stderr.startswith(
+            'npu-transformer-demo: batched and one-row execution disagree'), completed.stderr)
+        report = json.loads(completed.stdout)
+        self.assertFalse(report['partition_match'])
+        outputs = report['outputs']
+        self.assertEqual(outputs[:4] + outputs[5:], clean[:4] + clean[5:])
+        self.assertEqual(outputs[4][1:], clean[4][1:])
+        self.assertEqual(abs(word(outputs[4][0]) - word(clean[4][0])), 1)
 
     def test_aliased_artifact_destinations_fail_before_truncating_existing_file(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -527,6 +671,7 @@ class TransformerTests(unittest.TestCase):
                    ('--sram-bytes', '1'), ('--precision', 'int4'), ('--dma-bytes-per-cycle', '0'),
                    ('--tensor-macs-per-cycle', 'nan'), ('--vcd', ''), ('--round-f32-bits', '1,'),
                    ('--round-f32-bits', '4294967296'), ('--what', '1'), ('--dim',),
+                   ('--inject-output-fault', '6'), ('--inject-output-fault', 'x'),
                    ('--layers', '16', *llama_layer),
                    ('--prefill', '64', '--context', '128', *llama_layer)]
         for arguments in invalid:
