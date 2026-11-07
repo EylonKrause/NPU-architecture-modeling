@@ -35,6 +35,10 @@ OPS_PER_MAC = 2
 MAX_DIMENSION = 1 << 20
 MAX_BURST_BEATS = 256
 TEXT_KEYS = ("name", "description")
+# Minimum efficient burst of the memory behind each point's port, in bytes: Vela 5.2.0
+# Sram_burst_length for edge-256 (its port reads system SRAM) and Dram_burst_length for the
+# rest (docs/design-points.md). tile_rule and npuperf.mapper keep panels at least this deep.
+MIN_PANEL_DEPTH = {"edge-256": 32, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
 
 
 def config_path(name: str | Path) -> Path:
@@ -46,6 +50,11 @@ def config_path(name: str | Path) -> Path:
     if not path.is_file():
         raise FileNotFoundError(f"no design point {name!r} (known: {', '.join(names())})")
     return path
+
+
+def min_panel_depth(name: str) -> int:
+    """MIN_PANEL_DEPTH of a design point; 32 B (the smaller Vela burst) for any other."""
+    return MIN_PANEL_DEPTH.get(name, 32)
 
 
 def names() -> list[str]:

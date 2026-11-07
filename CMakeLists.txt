@@ -194,4 +194,6 @@ if(BUILD_TESTING)
     SCRIPT tests/npuperf_tests.py BINARY npu-sim TIMEOUT 300)
   npu_add_python_test(tools.analytic-model
     SCRIPT tests/analytic_model_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(tools.mapper
+    SCRIPT tests/mapper_tests.py BINARY npu-sim TIMEOUT 180)
 endif()

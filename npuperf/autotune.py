@@ -14,13 +14,21 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
-from . import analytic, cli, jsonio, sim, table
+from . import analytic, cli, designs, jsonio, sim, table
 
 MAX_CANDIDATES = 256
 
 
+def design_of(flags: dict[str, Any]) -> analytic.Design:
+    """The design the flags run: a --config file's keys, then the other flags over them."""
+    config = flags.get("config")
+    base = designs.leaves(designs.load(config)) if config else {}
+    return analytic.Design.from_flags({**base, **{key: value for key, value in flags.items()
+                                                  if key != "config"}})
+
+
 def _sram_range(flags: dict[str, Any]) -> tuple[int, int, int]:
-    design = analytic.Design.from_flags(flags)
+    design = design_of(flags)
     low = analytic.scratchpad_bytes(design, panel_buffers=1)
     high = analytic.scratchpad_bytes(design, panel_buffers=max(1, design.panel_buffers))
     return low, high, design.sram_bytes
