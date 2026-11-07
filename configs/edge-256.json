@@ -1,13 +1,14 @@
 {
   "name": "edge-256",
-  "description": "Hypothetical microcontroller-class NPU sized from public data on the Ethos-U55 top configuration (Arm Ethos-U product brief: 256 MACs, 18 to 50 KB internal SRAM, two 64-bit AXI, throughput quoted at 1 GHz). 16x16 output-stationary array: 256 MAC/cycle, 512 GOP/s at 1 GHz and 2 ops/MAC. SRAM 50 KiB, the top U55 figure. One 64-bit AXI port to system SRAM that holds every tensor (Vela Sram_Only memory mode); the model sets no capacity on it. Rate, latencies and outstanding limits from Vela 5.2.0 Ethos_U55_High_End_Embedded: 8 B/cycle, 32-cycle read and write latency, 4 reads and 4 writes outstanding. Bursts up to 16 beats, the shortest power of two with which 4 outstanding reads cover 32 cycles. Tiles 32x32x128: the largest power-of-two square tile whose two slots of two panel buffers fit with panels at least 32 B deep (Vela Sram_burst_length); the 7936 B left over is the weight cache. Pipeline 4 cycles per panel, the simulator default.",
+  "description": "Hypothetical microcontroller-class NPU sized from public data on the Ethos-U55 top configuration (Arm Ethos-U product brief: 256 MACs, 18 to 50 KB internal SRAM, two 64-bit AXI, throughput quoted at 1 GHz). 16x16 output-stationary array: 256 MAC/cycle, 512 GOP/s at 1 GHz and 2 ops/MAC. SRAM 50 KiB, the top U55 figure. One 64-bit AXI port to external DRAM that holds every tensor, where Arm's Corstone-300 reference platform places the model and tensor arena by default; the read-only flash port is not modeled. DRAM from Vela 5.2.0 Ethos_U65_Mid_End, the DRAM-attached system of the U55's sibling: 3.75 GB/s, of which 4 B/cycle is the smallest integer rate that reaches it at 1 GHz; 500-cycle read and 250-cycle write latency; 12 reads and 6 writes outstanding. Bursts up to 64 beats, the shortest power of two with which 12 outstanding reads cover 500 cycles. Tiles 32x32x128: the largest power-of-two square tile whose two slots of two panel buffers fit with panels at least 128 B deep (Vela Dram_burst_length); the 7936 B left over is the weight cache. Depthwise datapath 8 MAC/cycle, no public figure: the S9 rule: the smallest power of two at which MobileNetV2 runs within 5% of its latency with a depthwise datapath as wide as the array. Pipeline 4 cycles per panel, the simulator default.",
   "arch": {
-    "compute": {"array_rows": 16, "array_cols": 16, "dataflow": "os", "pipeline_cycles": 4},
+    "compute": {"array_rows": 16, "array_cols": 16, "dataflow": "os", "pipeline_cycles": 4,
+                "depthwise_macs_per_cycle": 8},
     "memory": {
       "model": "axi",
-      "dram_bytes_per_cycle": 8,
-      "axi": {"data_bytes": 8, "max_burst_beats": 16, "read_outstanding": 4,
-              "write_outstanding": 4, "read_latency": 32, "write_latency": 32}
+      "dram_bytes_per_cycle": 4,
+      "axi": {"data_bytes": 8, "max_burst_beats": 64, "read_outstanding": 12,
+              "write_outstanding": 6, "read_latency": 500, "write_latency": 250}
     },
     "sram_bytes": 51200,
     "weight_cache_bytes": 7936,

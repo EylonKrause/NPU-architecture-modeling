@@ -16,6 +16,10 @@ tests/design_point_tests.py:
   burst_rule   the shortest power-of-two burst with which the read outstanding limit covers
                the read latency, so a long run streams one beat per cycle
   weight cache the SRAM the slots leave free (cache_rule)
+
+Two fields have no public figure and are sized by simulation, each study failing when a
+config disagrees with its rule: the depthwise datapath rate (npuperf.studies S9) and the
+cluster cores' SRAM (S10).
 """
 from __future__ import annotations
 
@@ -36,12 +40,11 @@ MAX_DIMENSION = 1 << 20
 MAX_BURST_BEATS = 256
 TEXT_KEYS = ("name", "description")
 # Minimum efficient burst of the memory behind each point's port, in bytes: Vela 5.2.0
-# Sram_burst_length for edge-256 (its port reads system SRAM) and Dram_burst_length for the
-# rest (docs/design-points.md). tile_rule and npuperf.mapper keep panels at least this deep.
-MIN_PANEL_DEPTH = {"edge-256": 32, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
-# The memory behind each point's AXI port: edge-256 follows Vela's Sram_Only memory mode, every
-# tensor in system SRAM; the others stream every tensor from DRAM.
-EXTERNAL_MEMORY = {"edge-256": "system SRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
+# Dram_burst_length, as every point streams its tensors from DRAM (docs/design-points.md).
+# tile_rule and npuperf.mapper keep panels at least this deep.
+MIN_PANEL_DEPTH = {"edge-256": 128, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
+# The memory behind each point's AXI port.
+EXTERNAL_MEMORY = {"edge-256": "DRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
                    "workstation-32c": "DRAM"}
 
 
@@ -185,6 +188,7 @@ class Summary:
     peak_tops: float
     sram_bytes: int              # per core
     weight_cache_bytes: int      # per core, inside sram_bytes
+    depthwise_macs_per_cycle: int  # per core
     axi_bits: int                # per core port
     dram_bytes_per_cycle: int
     dram_gbps: float
@@ -203,7 +207,8 @@ def summary(document: Mapping[str, Any]) -> Summary:
         cores=d.cores, frequency_mhz=d.frequency_mhz,
         peak_tops=OPS_PER_MAC * peak * d.frequency_mhz / 1e6,
         sram_bytes=d.sram_bytes, weight_cache_bytes=d.weight_cache_bytes,
-        axi_bits=8 * d.axi_data_bytes, dram_bytes_per_cycle=d.dram_bytes_per_cycle,
+        depthwise_macs_per_cycle=d.depthwise_macs_per_cycle, axi_bits=8 * d.axi_data_bytes,
+        dram_bytes_per_cycle=d.dram_bytes_per_cycle,
         dram_gbps=d.dram_bytes_per_cycle * d.frequency_mhz / 1e3,
         ridge_macs_per_byte=d.ridge)
 
@@ -215,12 +220,13 @@ def _per_core(cores: int, text: str) -> str:
 def markdown(rows: Sequence[Summary]) -> str:
     """The design-point table of docs/design-points.md."""
     header = ("Design point", "MAC/cycle", "Array", "Cores", "Clock", "Peak TOP/s", "SRAM",
-              "AXI", "DRAM B/cycle", "DRAM GB/s", "Ridge MAC/B")
+              "Depthwise MAC/cycle", "AXI", "DRAM B/cycle", "DRAM GB/s", "Ridge MAC/B")
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for row in rows:
         cells = (f"`{row.name}`", str(row.macs_per_cycle), row.array, str(row.cores),
                  f"{row.frequency_mhz:g} MHz", f"{row.peak_tops:.6g}",
                  _per_core(row.cores, f"{row.sram_bytes / 1024:g} KiB"),
+                 _per_core(row.cores, str(row.depthwise_macs_per_cycle)),
                  _per_core(row.cores, f"{row.axi_bits}-bit"), str(row.dram_bytes_per_cycle),
                  f"{row.dram_gbps:.6g}", f"{row.ridge_macs_per_byte:.4g}")
         lines.append("| " + " | ".join(cells) + " |")

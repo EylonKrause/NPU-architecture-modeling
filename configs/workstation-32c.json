@@ -1,19 +1,20 @@
 {
   "name": "workstation-32c",
-  "description": "Hypothetical two-die workstation NPU: two client-16c dies sharing one DRAM, 32 cores, the core count of the 32-core Neural Engine Apple states for M3 Ultra together with over 800GB/s of memory bandwidth (no operations-per-second figure stated). 32 cores of 32x32 output-stationary arrays: 32768 MAC/cycle, 78.6432 TOP/s at 1.2 GHz and 2 ops/MAC. DRAM 667 B/cycle, the smallest integer rate that reaches 800 GB/s at 1.2 GHz (800.4 GB/s), shared with the CPU and GPU; no die-to-die link is modeled. Every per-core parameter is client-16c's: SRAM 133.5 KiB, one 256-bit AXI port (32 read channels of 32 B/cycle against 667 B/cycle of DRAM), Vela 5.2.0 Ethos-U85 DRAM latencies and outstanding limits, 8-beat bursts, tiles 64x64x128 and a 29696 B weight cache. Partition auto. Pipeline 4 cycles per panel, the simulator default.",
+  "description": "Hypothetical two-die workstation NPU: two client-16c dies sharing one DRAM, 32 cores, the core count of the 32-core Neural Engine Apple states for M3 Ultra together with over 800GB/s of memory bandwidth (no operations-per-second figure stated). 32 cores of 32x32 output-stationary arrays: 32768 MAC/cycle, 78.6432 TOP/s at 1.2 GHz and 2 ops/MAC. DRAM 667 B/cycle, the smallest integer rate that reaches 800 GB/s at 1.2 GHz (800.4 GB/s), shared with the CPU and GPU; no die-to-die link is modeled. Every per-core parameter is client-16c's: SRAM 256 KiB (the S10 rule over both points), one 256-bit AXI port (32 read channels of 32 B/cycle against 667 B/cycle of DRAM), Vela 5.2.0 Ethos-U85 DRAM latencies and outstanding limits, 8-beat bursts, tiles 64x64x256 and an 89600 B weight cache, and the depthwise datapath 128 MAC/cycle, which the S9 rule picks on this point too. Partition auto. Pipeline 4 cycles per panel, the simulator default.",
   "arch": {
-    "compute": {"array_rows": 32, "array_cols": 32, "dataflow": "os", "pipeline_cycles": 4},
+    "compute": {"array_rows": 32, "array_cols": 32, "dataflow": "os", "pipeline_cycles": 4,
+                "depthwise_macs_per_cycle": 128},
     "memory": {
       "model": "axi",
       "dram_bytes_per_cycle": 667,
       "axi": {"data_bytes": 32, "max_burst_beats": 8, "read_outstanding": 64,
               "write_outstanding": 32, "read_latency": 500, "write_latency": 250}
     },
-    "sram_bytes": 136704,
-    "weight_cache_bytes": 29696,
+    "sram_bytes": 262144,
+    "weight_cache_bytes": 89600,
     "frequency_mhz": 1200,
     "cores": 32
   },
-  "mapping": {"tile_m": 64, "tile_n": 64, "tile_k": 128, "buffer_slots": 2, "panel_buffers": 2,
+  "mapping": {"tile_m": 64, "tile_n": 64, "tile_k": 256, "buffer_slots": 2, "panel_buffers": 2,
               "partition": "auto"}
 }
