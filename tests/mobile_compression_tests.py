@@ -125,11 +125,44 @@ class CompressionChecks(unittest.TestCase):
             size, nonzero, retained, decode, _ = record
             # Input quantization-file carries three INT32 vectors plus bias.
             read = k + size + 16 * n
-            compute = ((n * k if codec == "palette" else nonzero) + 7) // 8 + decode
+            # The decoder overlaps the MACs: the panel takes the longer of the two.
+            compute = max(((n * k if codec == "palette" else nonzero) + 7) // 8, decode)
             self.assertEqual(result["read_bytes"], read)
             self.assertEqual(result["weight_read_bytes"], size)
             self.assertEqual(result["cycles"], read + compute + n)
             self.assertEqual(result["compute_busy_cycles"], compute)
+
+    def test_decoder_overlaps_mac_work(self):
+        # Every panel takes max(MAC cycles, decode cycles) + pipeline. A slow
+        # decoder bounds the panel; a fast one costs nothing over dense.
+        rng = random.Random(77)
+        m, n, k, tile_m, tile_n, tile_k = 5, 7, 11, 2, 3, 4
+        a = [rng.randint(-128, 127) for _ in range(m * k)]
+        w = [rng.choice([0, 0, 0, 1, -1, 2]) for _ in range(k * n)]
+        bias = [rng.randint(-50, 50) for _ in range(n)]
+        flags = ["--pipeline-cycles", "3", "--macs-per-cycle", "8"]
+        dense = self.run_case(a, w, bias, m, n, k, codec="dense", tile_m=tile_m, tile_n=tile_n,
+                              tile_k=tile_k, extra=flags)
+        for codec in ("palette", "sparse"):
+            for rate in (1, 3, 1000):
+                with self.subTest(codec=codec, rate=rate):
+                    result = self.run_case(a, w, bias, m, n, k, codec=codec, tile_m=tile_m,
+                                           tile_n=tile_n, tile_k=tile_k, decode_rate=rate,
+                                           extra=flags)
+                    records = encoded_sizes(w, [0] * n, n, k, tile_n, tile_k, codec,
+                                            decode_rate=rate)
+                    overlapped = summed = 0
+                    for row in range(0, m, tile_m):
+                        rows = min(tile_m, m - row)
+                        for _, nonzero, _, decode, count in records:
+                            macs = (rows * (count if codec == "palette" else nonzero) + 7) // 8
+                            overlapped += max(macs, decode) + 3
+                            summed += macs + decode + 3
+                    self.assertEqual(result["compute_busy_cycles"], overlapped)
+                    self.assertLess(result["compute_busy_cycles"], summed)
+                    if codec == "palette" and rate == 1000:
+                        self.assertEqual(result["compute_busy_cycles"],
+                                         dense["compute_busy_cycles"])
 
     def test_all_zero_centered_sparse_keeps_bias_without_macs(self):
         m, n, k = 3, 3, 7
@@ -221,8 +254,9 @@ class CompressionChecks(unittest.TestCase):
         result = self.run_case([1] * 10, [0, 1] * 10, [0] * 4, 2, 4, 5,
             codec="palette", palette_bits=1, tile_m=2, tile_n=4, tile_k=0,
             extra=["--array-rows", "2", "--array-cols", "2", "--pipeline-cycles", "3"])
-        # Two 2x2 waves, K plus fill/drain, pipeline plus LUT decoder.
-        self.assertEqual(result["compute_busy_cycles"], 2 * (5 + 2) + 3 + 2)
+        # Two 2x2 output waves of K = 5 back to back and skew 2 + 2 - 2 once
+        # hide the LUT decoder's ceil(20 / 16) cycles; then pipeline 3.
+        self.assertEqual(result["compute_busy_cycles"], max(2 * 5 + 2, 2) + 3)
 
 
 if __name__ == "__main__":

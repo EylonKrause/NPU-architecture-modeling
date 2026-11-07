@@ -8,6 +8,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <tuple>
 #include <vector>
 
 namespace {
@@ -26,6 +27,20 @@ void rejects(Function function, const std::string& message) {
     throw std::runtime_error("expected rejection: " + message);
 }
 
+// Only std::invalid_argument counts, and its text must contain `expected`.
+template <typename Function>
+void rejects_with(Function function, const std::string& expected) {
+    try {
+        function();
+    } catch (const std::invalid_argument& error) {
+        if (std::string(error.what()).find(expected) == std::string::npos)
+            throw std::runtime_error("message '" + std::string(error.what()) + "' lacks '" +
+                                     expected + "'");
+        return;
+    }
+    throw std::runtime_error("expected rejection containing '" + expected + "'");
+}
+
 void check_arithmetic() {
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     require(npu::checked_add(maximum, 0) == maximum, "add boundary");
@@ -40,7 +55,7 @@ void check_arithmetic() {
 }
 
 void check_requantization() {
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
     q.multiplier = 1;
     q.shift = 1;
@@ -73,9 +88,11 @@ void check_requantization() {
             "negative output zero ReLU");
     q.shift = 32;
     rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "shift exceeds 31");
+    q.shift = -1;
+    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "negative native shift");
     q.shift = 0;
-    q.multiplier = UINT32_MAX;
-    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "multiplier exceeds INT32");
+    q.multiplier = -1;
+    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "negative multiplier");
     q.multiplier = 1;
     q.input_zero = -129;
     rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "input zero is not INT8");
@@ -88,9 +105,9 @@ void check_requantization() {
 }
 
 void check_even_rounding() {
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
-    q.rounding = "even";
+    q.rounding = npu::Rounding::HalfToEven;
     q.multiplier = 1;
     q.shift = 1;
     const std::vector<std::int32_t> inputs = {-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5};
@@ -112,8 +129,9 @@ void check_even_rounding() {
                 npu::requantize(6, q, 1) == 2 && npu::requantize(-6, q, 1) == -2 &&
                 npu::requantize(20, q, 2) == 2 && npu::requantize(-20, q, 2) == -2,
             "per-channel nearest-even at different scales");
-    q.rounding = "floor";
-    rejects<std::invalid_argument>([&] { npu::requantize(1, q); }, "unsupported rounding mode");
+    require(!npu::from_string<npu::Rounding>("floor") &&
+                npu::from_string<npu::Rounding>("even") == npu::Rounding::HalfToEven,
+            "rounding spellings are closed");
 }
 
 void check_known_dense() {
@@ -123,7 +141,7 @@ void check_known_dense() {
     p.activations = {1, 2, 3, -1, 0, 2};
     p.weights = {4, -2, 5, 1, -3, 2};
     p.bias = {7, -5};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = 1;
     q.weight_zero = -1;
     q.output_zero = 3;
@@ -151,7 +169,7 @@ void check_per_channel_quantization() {
     p.activations = {1, 3, -2, 4};
     p.weights = {2, -3, 7, -4, 6, -8};
     p.bias = {5, -7, 3};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = 1;
     q.weight_zero = 0;
     q.weight_zero_points = {1, -2, 3};
@@ -181,7 +199,7 @@ void check_per_channel_quantization() {
     q.relu = false;
     require(npu::requantize(-1, q, 1) == 4 && npu::requantize(-2, q, 2) == 4,
             "independently optional per-channel shifts and negative ties");
-    q.multipliers = {0, static_cast<std::uint32_t>(INT32_MAX), 2};
+    q.multipliers = {0, INT32_MAX, 2};
     q.shifts = {0, 0, 31};
     require(npu::requantize(INT32_MIN, q, 0) == 5 &&
                 npu::requantize(INT32_MAX, q, 1) == 127 &&
@@ -196,7 +214,7 @@ void check_per_channel_quantization() {
     q.multipliers.clear();
     q.shifts = {0, 32, 0};
     rejects<std::invalid_argument>([&] { npu::reference(p, q); },
-                                   "per-channel shift exceeds31");
+                                   "per-channel shift exceeds 31");
     q.shifts.clear();
     q.weight_zero_points = {0, 128, 0};
     rejects<std::invalid_argument>([&] { npu::reference(p, q); },
@@ -205,8 +223,8 @@ void check_per_channel_quantization() {
 
 void check_int4() {
     npu::Config c;
-    c.m = c.n = c.k = 2;
-    c.weight_bits = 4;
+    c.shape.m = c.shape.n = c.shape.k = 2;
+    c.weights.bits = 4;
     c.quant.weight_zero = 0;
     const auto p = npu::make_problem(c);
     require(p.weights == std::vector<std::int8_t>{-8, 7, -6, 1},
@@ -219,7 +237,7 @@ void check_int4() {
     known.activations = {127, -128};
     known.weights = {-8, 7, 7, -8};
     known.bias = {1, -1};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
     q.shift = 0;
     const auto result = npu::reference(known, q);
@@ -233,22 +251,22 @@ void check_int4() {
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "INT4 channel zero outside range");
     c.quant.weight_zero_points = {-8, 7};
     npu::validate(c);
-    c.weight_bits = 3;
-    rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be4 or8");
+    c.weights.bits = 3;
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be 4 or 8");
 }
 
 void check_fixture() {
     npu::Config c;
-    c.m = 2;
-    c.n = 2;
-    c.k = 2;
+    c.shape.m = 2;
+    c.shape.n = 2;
+    c.shape.k = 2;
     const auto p = npu::make_problem(c);
     require(p.activations == std::vector<std::int8_t>{-9, 6, -5, 5},
             "LCG activation golden fixture");
     require(p.weights == std::vector<std::int8_t>{13, -10, 0, 4},
             "LCG weight golden fixture");
     require(p.bias == std::vector<std::int32_t>{39, 35}, "LCG bias golden fixture");
-    c.seed += UINT64_C(1) << 32;
+    c.shape.seed += UINT64_C(1) << 32;
     const auto wrap = npu::make_problem(c);
     require(p.activations == wrap.activations && p.weights == wrap.weights && p.bias == wrap.bias,
             "seed masks to low 32 bits");
@@ -262,14 +280,14 @@ void check_fixture() {
 
 void check_tiles_and_timing() {
     npu::Config c;
-    c.m = 5;
-    c.n = 7;
-    c.k = 3;
-    c.tile_m = 3;
-    c.tile_n = 4;
-    c.macs_per_cycle = 7;
-    c.pipeline_cycles = 2;
-    c.buffer_slots = 2;
+    c.shape.m = 5;
+    c.shape.n = 7;
+    c.shape.k = 3;
+    c.mapping.tile_m = 3;
+    c.mapping.tile_n = 4;
+    c.arch.compute.macs_per_cycle = 7;
+    c.arch.compute.pipeline_cycles = 2;
+    c.mapping.buffer_slots = 2;
     const auto tiles = npu::make_tiles(c);
     require(tiles.size() == 4, "edge tile count");
     require(tiles[0].id == 0 && tiles[0].row == 0 && tiles[0].col == 0 &&
@@ -286,22 +304,22 @@ void check_tiles_and_timing() {
     for (const auto& tile : tiles)
         for (auto r = tile.row; r < tile.row + tile.rows; ++r)
             for (auto col = tile.col; col < tile.col + tile.cols; ++col)
-                ++coverage[static_cast<std::size_t>(r * c.n + col)];
+                ++coverage[static_cast<std::size_t>(r * c.shape.n + col)];
     require(std::all_of(coverage.begin(), coverage.end(), [](unsigned n) { return n == 1; }),
             "tiles cover every output exactly once");
-    c.tile_m = c.tile_n = 4096;
+    c.mapping.tile_m = c.mapping.tile_n = 4096;
     require(npu::make_tiles(c).size() == 1, "oversized mapping handles one edge tile");
     require(npu::scratchpad_bytes(c) == 2 * (15 + 21 + 28 + 5 * 35),
-            "oversized mapping allocates actual extents");
+            "oversized mapping allocates the clipped extents");
 }
 
 void check_reduction_panels_and_systolic() {
     npu::Config c;
-    c.m = 5; c.n = 7; c.k = 5;
-    c.tile_m = 3; c.tile_n = 4; c.tile_k = 2;
-    c.weight_bits = 4;
-    c.macs_per_cycle = 7;
-    c.pipeline_cycles = 2;
+    c.shape.m = 5; c.shape.n = 7; c.shape.k = 5;
+    c.mapping.tile_m = 3; c.mapping.tile_n = 4; c.mapping.tile_k = 2;
+    c.weights.bits = 4;
+    c.arch.compute.macs_per_cycle = 7;
+    c.arch.compute.pipeline_cycles = 2;
     c.quant.weight_zero_points.assign(7, 0);
     c.quant.multipliers.assign(7, 1);
     c.quant.shifts.assign(7, 0);
@@ -314,34 +332,68 @@ void check_reduction_panels_and_systolic() {
                 npu::panel_read_bytes(c, tile, 2) == 5 &&
                 npu::tile_read_bytes(c, tile) == 89,
             "INT4 panel traffic includes first-panel bias and quant metadata");
-    require(npu::scratchpad_bytes(c) == 268,
-            "SRAM fits one Kpanel plus persistent accumulators and metadata per slot");
+    // Per slot: 16 B bias + 48 B channel vectors, panel buffers of
+    // 3*2 activations + 4 INT4 weight bytes, 5 B per accumulator and output.
+    require(npu::slot_panel_buffers(c) == 2 && npu::scratchpad_bytes(c) == 2 * (64 + 2 * 10 + 60),
+            "SRAM holds two K panels plus persistent accumulators and metadata per slot");
+    c.mapping.panel_buffers = 1;
+    require(npu::slot_panel_buffers(c) == 1 && npu::scratchpad_bytes(c) == 2 * (64 + 10 + 60),
+            "one panel buffer per slot");
+    for (const std::uint64_t buffers : {UINT64_C(0), UINT64_C(3)}) {
+        c.mapping.panel_buffers = buffers;
+        rejects_with([&] { npu::validate(c); }, "panel buffers must be 1 or 2");
+    }
+    c.mapping.panel_buffers = 2;
+    c.mapping.tile_k = 0;
+    require(npu::slot_panel_buffers(c) == 1, "a single K panel uses one buffer");
+    c.mapping.tile_k = 2;
     require(npu::panel_compute_cycles(c, tile, 0) == 6 &&
                 npu::panel_compute_cycles(c, tile, 2) == 4 &&
                 npu::tile_compute_cycles(c, tile) == 16,
-            "vector pipeline charged for every Kpanel");
-    c.array_rows = 2; c.array_cols = 3;
+            "vector pipeline charged for every K panel");
+    c.arch.compute.array_rows = 2; c.arch.compute.array_cols = 3;
+    // os: ceil(3/2) * ceil(4/3) = 4 output waves of K cycles back to back,
+    // skew 2 + 3 - 2 once per panel, pipeline 2.
     require(npu::peak_macs_per_cycle(c) == 6 &&
-                npu::panel_compute_cycles(c, tile, 0) == 22 &&
-                npu::panel_compute_cycles(c, tile, 2) == 18 &&
-                npu::tile_compute_cycles(c, tile) == 62,
-            "systolic fold waves and fill/drain including edge Kpanel");
+                npu::panel_compute_cycles(c, tile, 0) == 4 * 2 + 3 + 2 &&
+                npu::panel_compute_cycles(c, tile, 2) == 4 * 1 + 3 + 2 &&
+                npu::tile_compute_cycles(c, tile) == 13 + 13 + 9,
+            "output-stationary waves including the edge K panel");
+    const npu::Tile row{0, 0, 0, 1, 4};
+    require(npu::panel_compute_cycles(c, row, 0) == 2 * 2 + 3 + 2, "one-row output waves");
+    c.arch.compute.dataflow = npu::Dataflow::WeightStationary;
+    // ws: ceil(2/2) * ceil(4/3) = 2 weight folds. Three rows hide the second
+    // 2-cycle preload: preload 2, fold 3, last fold 3, skew 3, pipeline 2.
+    require(npu::peak_macs_per_cycle(c) == 6 &&
+                npu::panel_compute_cycles(c, tile, 0) == 2 + 3 + 3 + 3 + 2 &&
+                npu::panel_compute_cycles(c, tile, 2) == 13 &&
+                npu::tile_compute_cycles(c, tile) == 3 * 13,
+            "weight-stationary folds including the edge K panel");
+    // One row cannot hide the preload, so the first fold occupies 2 cycles.
+    require(npu::panel_compute_cycles(c, row, 0) == 2 + 2 + 1 + 3 + 2,
+            "a preload longer than the row stream is exposed");
+    c.arch.compute.dataflow = npu::Dataflow::OutputStationary;
     rejects<std::invalid_argument>([&] { npu::panel_k(c, 3); }, "K block bounds");
-    c.array_rows = 0;
+    c.arch.compute.array_rows = 0;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "both array dimensions required");
-    c.array_rows = 257;
+    c.arch.compute.array_rows = 257;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
-    c.array_rows = c.array_cols = 0;
-    c.tile_k = 4097;
-    rejects<std::invalid_argument>([&] { npu::validate(c); }, "Ktile bound");
+    c.arch.compute.array_rows = c.arch.compute.array_cols = 0;
+    c.arch.compute.dataflow = npu::Dataflow::WeightStationary;
+    rejects_with([&] { npu::validate(c); },
+                 "weight-stationary dataflow requires --array-rows and --array-cols");
+    c.arch.compute.dataflow = npu::Dataflow::OutputStationary;
+    c.mapping.tile_k = npu::max_dimension + 1;
+    rejects_with([&] { npu::validate(c); }, "reduction tile dimension must be zero (full K) or "
+                                            "in 1..1048576");
     c = npu::Config{};
-    c.m = 1; c.n = 3; c.k = 3;
-    c.tile_m = 1; c.tile_n = 3; c.tile_k = 1; c.weight_bits = 4;
+    c.shape.m = 1; c.shape.n = 3; c.shape.k = 3;
+    c.mapping.tile_m = 1; c.mapping.tile_n = 3; c.mapping.tile_k = 1; c.weights.bits = 4;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 21,
-            "odd INT4 nibble is padded separately in each DMApanel");
-    c.tile_k = 0;
+            "odd INT4 nibble is padded separately in each DMA panel");
+    c.mapping.tile_k = 0;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 20,
-            "fullK uses only one INT4 pad nibble");
+            "full K uses only one INT4 pad nibble");
 }
 
 void check_random_edges() {
@@ -352,23 +404,23 @@ void check_random_edges() {
     };
     for (unsigned trial = 0; trial < 64; ++trial) {
         npu::Config c;
-        c.m = 1 + next() % 19;
-        c.n = 1 + next() % 17;
-        c.k = 1 + next() % 23;
-        c.tile_m = 1 + next() % 11;
-        c.tile_n = 1 + next() % 9;
-        c.seed = next();
+        c.shape.m = 1 + next() % 19;
+        c.shape.n = 1 + next() % 17;
+        c.shape.k = 1 + next() % 23;
+        c.mapping.tile_m = 1 + next() % 11;
+        c.mapping.tile_n = 1 + next() % 9;
+        c.shape.seed = next();
         c.quant.input_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.weight_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.output_zero = static_cast<std::int32_t>(next() % 256) - 128;
-        c.quant.multiplier = next() % 257;
-        c.quant.shift = next() % 18;
+        c.quant.multiplier = static_cast<std::int32_t>(next() % 257);
+        c.quant.shift = static_cast<std::int32_t>(next() % 18);
         c.quant.relu = next() % 2 != 0;
         if (trial % 2) {
-            for (std::uint64_t col = 0; col < c.n; ++col) {
+            for (std::uint64_t col = 0; col < c.shape.n; ++col) {
                 c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 256) - 128);
-                c.quant.multipliers.push_back(next() % 257);
-                c.quant.shifts.push_back(next() % 18);
+                c.quant.multipliers.push_back(static_cast<std::int32_t>(next() % 257));
+                c.quant.shifts.push_back(static_cast<std::int32_t>(next() % 18));
             }
         }
         const auto p = npu::make_problem(c);
@@ -395,7 +447,7 @@ void check_overflow_and_shapes() {
     p.activations = {127};
     p.weights = {127};
     p.bias = {std::numeric_limits<std::int32_t>::max()};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = 0;
     rejects<std::overflow_error>([&] { npu::reference(p, q); }, "reference INT32 overflow");
     rejects<std::overflow_error>([&] {
@@ -429,6 +481,332 @@ void check_overflow_and_shapes() {
     }, "malformed output storage");
 }
 
+
+// TOSA 1.0.2 apply_scale_32. Golden vectors are quant_semantics.md section 5;
+// the remaining expectations come from TFLite MultiplyByQuantizedMultiplier
+// evaluated with tosa shift = 31 - TFLite shift (tests/quantization_tests.py).
+void check_tosa_rescale() {
+    struct Vector { std::int32_t value, multiplier, shift, single, twice; };
+    const Vector vectors[] = {
+        {3, 1861152495, 32, 1, 2},
+        {-6, 1073741824, 32, -1, -2},
+        {-3, 1073741824, 31, -1, -1},
+        {5038971, 2062684434, 33, 1209998, 1209999},
+        // Ties: single rounding rounds half toward +infinity; double rounding
+        // matches it up to shift 31 and rounds away from zero beyond.
+        {3, 1 << 30, 31, 2, 2},
+        {-1, 1 << 30, 31, 0, 0},
+        {2, 1 << 30, 32, 1, 1},
+        {-2, 1 << 30, 32, 0, -1},
+        // Extremes of value and multiplier.
+        {INT32_MIN, INT32_MAX, 62, -1, -1},
+        {INT32_MAX, INT32_MAX, 62, 1, 1},
+        {INT32_MIN, INT32_MAX, 33, -536870912, -536870912},
+        {INT32_MAX, INT32_MAX, 40, 4194304, 4194304},
+        {INT32_MIN, 1, 33, 0, 0},
+        {INT32_MIN, 0, 62, 0, 0},
+        {-2, 1, 2, 0, 0},
+    };
+    for (const auto& v : vectors) {
+        const auto label = std::to_string(v.value) + "*" + std::to_string(v.multiplier) + ">>" +
+                           std::to_string(v.shift);
+        require(npu::apply_scale_32(v.value, v.multiplier, v.shift, false) == v.single,
+                "single rounding " + label);
+        require(npu::apply_scale_32(v.value, v.multiplier, v.shift, true) == v.twice,
+                "double rounding " + label);
+    }
+    // The REQUIRE clauses of apply_scale_32.
+    rejects_with([] { npu::apply_scale_32(0, -1, 31, false); }, "nonnegative");
+    rejects_with([] { npu::apply_scale_32(0, 1, 1, false); }, "2..62");
+    rejects_with([] { npu::apply_scale_32(0, 1, 63, true); }, "2..62");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(2, 1, 2, false); },
+                                 "shift 2 takes values in [-2, 2)");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(-3, 1, 2, true); },
+                                 "shift 2 lower input bound");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(INT32_MIN, 1, 31, false); },
+                                 "shift 31 takes values in [-2^30, 2^30)");
+    // -0.5 and 0.5 - 2^-32: single rounding sends both to 0.
+    require(npu::apply_scale_32(INT32_MIN, 1, 32, false) == 0 &&
+                npu::apply_scale_32(INT32_MAX, 1, 32, false) == 0 &&
+                npu::apply_scale_32(INT32_MIN, 1, 32, true) == -1,
+            "shift 32 accepts every INT32 value");
+
+    // Through requantize: output zero point, ReLU and INT8 saturation follow
+    // the scale exactly as in native mode.
+    npu::Requant q;
+    q.input_zero = q.weight_zero = q.output_zero = 0;
+    for (const auto mode : {npu::RescaleMode::TosaSingle, npu::RescaleMode::TosaDouble}) {
+        q.rescale = mode;
+        const bool twice = mode == npu::RescaleMode::TosaDouble;
+        for (const auto& v : vectors) {
+            q.multiplier = v.multiplier;
+            q.shift = v.shift;
+            const auto expected = std::clamp<std::int32_t>(twice ? v.twice : v.single, -128, 127);
+            require(npu::requantize(v.value, q) == expected, "TOSA requantize to INT8");
+        }
+    }
+    // -1.5 from -6 * 4 / 2^4: native rounds the magnitude away from zero.
+    q.multiplier = 4;
+    q.shift = 4;
+    q.rescale = npu::RescaleMode::Native;
+    require(npu::requantize(-6, q) == -2, "native rounds the magnitude");
+    q.rescale = npu::RescaleMode::TosaSingle;
+    require(npu::requantize(-6, q) == -1, "TOSA single rounds half toward +infinity");
+    q.output_zero = 9;
+    q.relu = true;
+    // 7 * 4 / 16 = 1.75 rounds to 2; shift 4 accepts inputs in [-8, 8) only.
+    require(npu::requantize(-6, q) == 9 && npu::requantize(7, q) == 11, "TOSA with ReLU");
+    rejects<std::overflow_error>([&] { npu::requantize(8, q); }, "shift 4 input range");
+    q.relu = false;
+    q.output_zero = 0;
+    // Signed per-channel shifts across the whole TOSA range.
+    q.multipliers = {1 << 30, 1 << 30, INT32_MAX};
+    q.shifts = {31, 32, 62};
+    require(npu::requantize(-3, q, 0) == -1 && npu::requantize(-2, q, 1) == 0 &&
+                npu::requantize(INT32_MAX, q, 2) == 1,
+            "per-channel TOSA shifts");
+    q.rescale = npu::RescaleMode::TosaDouble;
+    require(npu::requantize(-2, q, 1) == -1, "per-channel double rounding");
+    q.shifts = {31, 1, 62};
+    rejects_with([&] { npu::requantize(0, q, 1); },
+                 "per-channel shifts must be in 2..62 for tosa-double rescale");
+    q.shifts = {31, 32, 63};
+    rejects_with([&] { npu::requantize(0, q, 2); }, "2..62");
+    q.multipliers.clear();
+    q.shifts.clear();
+    q.multiplier = 1;
+    q.shift = 1;
+    rejects_with([&] { npu::requantize(0, q); },
+                 "requantization shift must be in 2..62 for tosa-double rescale");
+    q.shift = 40;
+    q.rounding = npu::Rounding::HalfToEven;
+    rejects_with([&] { npu::requantize(0, q); }, "rounding even applies to native rescale only");
+    q.rounding = npu::Rounding::HalfAwayFromZero;
+
+    // The reference reports an accumulator outside the apply_scale_32 range.
+    npu::Problem p;
+    p.m = p.n = p.k = 1;
+    p.activations = {10};
+    p.weights = {1};
+    p.bias = {0};
+    q.multiplier = 3;
+    q.shift = 5;
+    require(npu::reference(p, q).quantized == std::vector<std::int8_t>{1}, "30 / 32 rounds to 1");
+    q.shift = 4;
+    rejects<std::overflow_error>([&] { npu::reference(p, q); }, "10 is outside [-8, 8)");
+}
+
+// G blocks: a grouped GEMM equals G independent GEMMs placed side by side.
+void check_grouped_gemm() {
+    std::uint32_t state = 0x6e0u;
+    const auto next = [&state]() {
+        state = state * UINT32_C(1664525) + UINT32_C(1013904223);
+        return state;
+    };
+    for (unsigned trial = 0; trial < 24; ++trial) {
+        npu::Config c;
+        c.shape.groups = 1 + next() % 6;
+        c.shape.m = 1 + next() % 7;
+        c.shape.n = trial % 4 == 0 ? 1 : 1 + next() % 5;  // n = 1: depthwise
+        c.shape.k = trial % 4 == 0 ? 9 : 1 + next() % 8;
+        c.shape.seed = next();
+        c.mapping.tile_m = 1 + next() % 4;
+        c.mapping.tile_n = 1 + next() % 3;
+        c.mapping.tile_k = next() % 4;
+        const auto channels = c.shape.groups * c.shape.n;
+        c.quant.input_zero = static_cast<std::int32_t>(next() % 31) - 15;
+        if (trial % 2) {
+            c.quant.rescale = npu::RescaleMode::TosaDouble;
+            for (std::uint64_t channel = 0; channel < channels; ++channel) {
+                c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 31) - 15);
+                const auto multiplier = (1U << 30) + next() % (1U << 30);
+                c.quant.multipliers.push_back(static_cast<std::int32_t>(multiplier));
+                c.quant.shifts.push_back(static_cast<std::int32_t>(33 + next() % 10));
+            }
+        } else {
+            c.quant.shift = static_cast<std::int32_t>(next() % 9);
+        }
+        const auto p = npu::make_problem(c);
+        require(p.groups == c.shape.groups &&
+                    p.activations.size() == c.shape.m * c.shape.groups * c.shape.k &&
+                    p.weights.size() == c.shape.groups * c.shape.k * c.shape.n &&
+                    p.bias.size() == channels,
+                "grouped tensor sizes");
+        const auto grouped = npu::reference(p, c.quant);
+        for (std::uint64_t g = 0; g < c.shape.groups; ++g) {
+            npu::Problem single;
+            single.m = c.shape.m; single.n = c.shape.n; single.k = c.shape.k;
+            for (std::uint64_t row = 0; row < c.shape.m; ++row)
+                for (std::uint64_t k = 0; k < c.shape.k; ++k)
+                    single.activations.push_back(p.activations[static_cast<std::size_t>(
+                        row * c.shape.groups * c.shape.k + g * c.shape.k + k)]);
+            const auto block = static_cast<std::ptrdiff_t>(g * c.shape.k * c.shape.n);
+            single.weights.assign(p.weights.begin() + block,
+                                  p.weights.begin() + block +
+                                      static_cast<std::ptrdiff_t>(c.shape.k * c.shape.n));
+            const auto first = static_cast<std::ptrdiff_t>(g * c.shape.n);
+            const auto last = first + static_cast<std::ptrdiff_t>(c.shape.n);
+            single.bias.assign(p.bias.begin() + first, p.bias.begin() + last);
+            auto lane = c.quant;
+            for (auto* vector : {&lane.weight_zero_points, &lane.multipliers, &lane.shifts})
+                if (!vector->empty())
+                    *vector = std::vector<std::int32_t>(vector->begin() + first,
+                                                        vector->begin() + last);
+            const auto part = npu::reference(single, lane);
+            for (std::uint64_t row = 0; row < c.shape.m; ++row)
+                for (std::uint64_t col = 0; col < c.shape.n; ++col) {
+                    const auto at = static_cast<std::size_t>(row * channels + g * c.shape.n + col);
+                    const auto from = static_cast<std::size_t>(row * c.shape.n + col);
+                    require(grouped.accumulators[at] == part.accumulators[from] &&
+                                grouped.quantized[at] == part.quantized[from],
+                            "group " + std::to_string(g) + " equals its own GEMM, trial " +
+                                std::to_string(trial));
+                }
+        }
+        auto tiles = npu::make_tiles(c);
+        require(tiles.size() == npu::tile_count(c), "tile count includes groups");
+        for (std::size_t i = 0; i < tiles.size(); ++i) {
+            const auto& t = tiles[i];
+            require(t.id == i && t.group < c.shape.groups && t.col + t.cols <= c.shape.n,
+                    "tiles stay inside one group");
+            if (i) {
+                const auto& before = tiles[i - 1];
+                require(std::tie(before.group, before.row, before.col) <
+                            std::tie(t.group, t.row, t.col),
+                        "tile order is group-major, then row, then column");
+            }
+        }
+        std::reverse(tiles.begin(), tiles.end());
+        npu::Output tiled;
+        for (const auto& tile : tiles) npu::compute_tile(p, c.quant, tile, tiled);
+        require(tiled.accumulators == grouped.accumulators && tiled.quantized == grouped.quantized,
+                "grouped tiled datapath equals the reference, trial " + std::to_string(trial));
+        for (const auto encoding : {npu::WeightEncoding::Palette, npu::WeightEncoding::Sparse}) {
+            auto e = c;
+            e.weights.encoding = encoding;
+            e.weights.palette_bits = 8;
+            const auto panels = npu::encode_weights(e, p);
+            require(panels.size() == c.shape.groups * npu::ceil_div(c.shape.n, c.mapping.tile_n) *
+                                         npu::reduction_blocks(c),
+                    "one encoded panel per group, column panel and K panel");
+            npu::Output encoded;
+            for (const auto& tile : npu::make_tiles(e)) {
+                for (std::uint64_t block = 0; block < npu::reduction_blocks(e); ++block)
+                    require(npu::weight_panel(e, panels, tile, block).group == tile.group,
+                            "panel lookup is group-aware");
+                npu::compute_tile_encoded(p, e, panels, tile, encoded);
+            }
+            require(encoded.accumulators == grouped.accumulators &&
+                        encoded.quantized == grouped.quantized,
+                    "grouped encoded datapath equals the reference");
+        }
+    }
+
+    // Per-channel vectors cover G*N channels.
+    npu::Config depthwise;
+    depthwise.shape.groups = 8; depthwise.shape.m = 4; depthwise.shape.n = 1; depthwise.shape.k = 9;
+    depthwise.quant.shifts.assign(8, 3);
+    npu::validate(depthwise);
+    depthwise.quant.shifts.assign(1, 3);
+    rejects_with([&] { npu::validate(depthwise); }, "per-channel shift count must equal G*N");
+    depthwise.quant.shifts.clear();
+    npu::Problem wrong = npu::make_problem(npu::Config{});
+    wrong.groups = 2;
+    rejects_with([&] { npu::reference(wrong, npu::Requant{}); },
+                 "activation vector size does not match M*G*K");
+    npu::Output output;
+    rejects_with([&] {
+        npu::compute_tile(npu::make_problem(depthwise), npu::Requant{}, {0, 0, 0, 1, 1, 8}, output);
+    }, "tile is outside the output matrix");
+}
+
+void check_decoder_overlap() {
+    npu::Config c;
+    c.shape.m = 4; c.shape.n = 8; c.shape.k = 16;
+    c.mapping.tile_m = 4; c.mapping.tile_n = 8; c.mapping.tile_k = 8;
+    c.arch.compute.macs_per_cycle = 16;
+    c.arch.compute.pipeline_cycles = 3;
+    c.quant.input_zero = c.quant.weight_zero = 0;
+    c.weights.palette_bits = 2;
+    c.weights.sparse_block = 4;
+    // Column 0 holds 1 and every other weight is 0: one nonzero per K row.
+    npu::Problem p;
+    p.m = 4; p.n = 8; p.k = 16;
+    p.activations.assign(64, 1);
+    p.bias.assign(8, 0);
+    for (std::uint64_t index = 0; index < 128; ++index)
+        p.weights.push_back(static_cast<std::int8_t>(index % 8 == 0));
+    const npu::Tile tile{0, 0, 0, 4, 8};
+    // A K panel of 8: 4*8*8 MACs at 16 per cycle is 16 cycles.
+    const auto panel_cycles = [&](npu::WeightEncoding encoding, std::uint64_t rate) {
+        c.weights.encoding = encoding;
+        c.arch.compute.weight_decode_values_per_cycle = rate;
+        const auto panels = npu::encode_weights(c, p);
+        return npu::encoded_panel_compute_cycles(c, tile, 1,
+                                                 npu::weight_panel(c, panels, tile, 1));
+    };
+    // Palette decodes 64 values: 4 cycles at 16 per cycle hide under the MACs.
+    require(panel_cycles(npu::WeightEncoding::Palette, 16) == 16 + 3, "MAC-bound palette panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 16 + 3, "palette bound equals dense");
+    require(panel_cycles(npu::WeightEncoding::Palette, 1) == 64 + 3, "decode-bound palette panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 64 + 3, "palette decode bound");
+    // Sparse: 16 bitmap blocks, 8 of them kept (32 values), 8 nonzero
+    // weights. At 2 per cycle decode is 8 + 16 cycles; MACs ceil(4*8/16).
+    require(panel_cycles(npu::WeightEncoding::Sparse, 2) == 24 + 3, "decode-bound sparse panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 32 + 8 + 3,
+            "sparse bound decodes every value and block");
+    require(panel_cycles(npu::WeightEncoding::Sparse, 64) == 2 + 3, "MAC-bound sparse panel");
+    c.weights.encoding = npu::WeightEncoding::Dense;
+    require(npu::panel_compute_cycles(c, tile, 1) == 16 + 3, "dense panel");
+}
+
+void check_limits() {
+    const auto shape_error = [](const std::function<void(npu::Config&)>& mutation,
+                                const std::string& expected) {
+        npu::Config c;
+        mutation(c);
+        rejects_with([&] { npu::validate(c); }, expected);
+    };
+    shape_error([](auto& c) { c.shape.m = npu::max_dimension + 1; },
+                "matrix dimensions must be in 1..1048576");
+    shape_error([](auto& c) { c.shape.groups = npu::max_dimension + 1; },
+                "groups must be in 1..1048576");
+    shape_error([](auto& c) { c.shape.groups = 1024; c.shape.n = 1025; },
+                "groups*N and groups*K must be at most 1048576");
+    // Exactly 4e9 MACs is a legal bit-exact run; one more row is not.
+    npu::Config functional;
+    functional.shape.m = 62500; functional.shape.n = 64; functional.shape.k = 1000;
+    require(npu::total_macs(functional.shape) == npu::max_functional_macs, "boundary workload");
+    npu::validate(functional);
+    ++functional.shape.m;
+    rejects_with([&] { npu::validate(functional); },
+                 "workload exceeds 4000000000 MACs for a bit-exact run; --timing-only allows up "
+                 "to 10000000000000");
+    functional.sim.timing_only = true;
+    npu::validate(functional);
+    rejects_with([&] { npu::make_problem(functional); }, "--timing-only runs generate no tensors");
+    // The timing-only limit, with tiles large enough for the host budget.
+    npu::Config timing;
+    timing.sim.timing_only = true;
+    timing.shape.m = 1000000; timing.shape.n = 1000; timing.shape.k = 10000;
+    timing.mapping.tile_m = timing.mapping.tile_n = 1000;
+    timing.arch.sram_bytes = UINT64_C(1) << 30;
+    require(npu::total_macs(timing.shape) == npu::max_timing_only_macs, "timing-only boundary");
+    npu::validate(timing);
+    ++timing.shape.k;
+    rejects_with([&] { npu::validate(timing); },
+                 "workload exceeds 10000000000000 MACs, the --timing-only limit");
+    // Largest dimensions without materialized tensors.
+    npu::Config wide;
+    wide.sim.timing_only = true;
+    wide.shape.m = 1; wide.shape.n = npu::max_dimension; wide.shape.k = npu::max_dimension;
+    wide.mapping.tile_n = 4096; wide.mapping.tile_k = 4096;
+    wide.arch.sram_bytes = UINT64_C(1) << 30;
+    npu::validate(wide);
+    wide.weights.encoding = npu::WeightEncoding::Palette;
+    rejects_with([&] { npu::validate(wide); }, "--timing-only supports dense weights only");
+}
+
 void check_validation() {
     npu::validate(npu::Config{});
     const auto bad = [](const std::function<void(npu::Config&)>& mutation) {
@@ -436,58 +814,424 @@ void check_validation() {
         mutation(c);
         rejects([&] { npu::validate(c); }, "invalid configuration");
     };
-    bad([](auto& c) { c.m = 0; });
-    bad([](auto& c) { c.n = 4097; });
-    bad([](auto& c) { c.k = UINT64_MAX; });
-    bad([](auto& c) { c.m = c.n = c.k = 4096; });
-    bad([](auto& c) { c.tile_m = 0; });
-    bad([](auto& c) { c.tile_n = 4097; });
-    bad([](auto& c) { c.macs_per_cycle = 0; });
-    bad([](auto& c) { c.memory_bytes_per_cycle = 0; });
-    bad([](auto& c) { c.memory_latency = UINT64_MAX; });
-    bad([](auto& c) { c.pipeline_cycles = 1000000001; });
-    bad([](auto& c) { c.buffer_slots = 0; });
-    bad([](auto& c) { c.buffer_slots = 65; });
-    bad([](auto& c) { c.sram_bytes = 1; });
-    bad([](auto& c) { c.frequency_mhz = 0; });
-    bad([](auto& c) { c.frequency_mhz = 1e-300; });
-    bad([](auto& c) { c.frequency_mhz = std::numeric_limits<double>::quiet_NaN(); });
-    bad([](auto& c) { c.frequency_mhz = std::numeric_limits<double>::infinity(); });
-    bad([](auto& c) { c.timing = "rtl"; });
+    bad([](auto& c) { c.shape.m = 0; });
+    bad([](auto& c) { c.shape.n = npu::max_dimension + 1; });
+    bad([](auto& c) { c.shape.groups = 0; });
+    bad([](auto& c) { c.shape.k = UINT64_MAX; });
+    bad([](auto& c) { c.shape.m = c.shape.n = c.shape.k = 4096; });
+    bad([](auto& c) { c.mapping.tile_m = 0; });
+    bad([](auto& c) { c.mapping.tile_n = npu::max_dimension + 1; });
+    bad([](auto& c) { c.arch.compute.macs_per_cycle = 0; });
+    bad([](auto& c) { c.arch.memory.bytes_per_cycle = 0; });
+    bad([](auto& c) { c.arch.memory.latency = UINT64_MAX; });
+    bad([](auto& c) { c.arch.compute.pipeline_cycles = 1000000001; });
+    bad([](auto& c) { c.mapping.buffer_slots = 0; });
+    bad([](auto& c) { c.mapping.buffer_slots = 65; });
+    bad([](auto& c) { c.arch.sram_bytes = 1; });
+    bad([](auto& c) { c.arch.frequency_mhz = 0; });
+    bad([](auto& c) { c.arch.frequency_mhz = 1e-300; });
+    bad([](auto& c) { c.arch.frequency_mhz = std::numeric_limits<double>::quiet_NaN(); });
+    bad([](auto& c) { c.arch.frequency_mhz = std::numeric_limits<double>::infinity(); });
     bad([](auto& c) { c.quant.output_zero = 128; });
     bad([](auto& c) {
-        c.m = c.n = 4096; c.k = 1;
-        c.tile_m = c.tile_n = 1;
-        c.sram_bytes = UINT64_MAX;
+        c.shape.m = c.shape.n = 4096; c.shape.k = 1;
+        c.mapping.tile_m = c.mapping.tile_n = 1;
+        c.arch.sram_bytes = UINT64_MAX;
     }); // Tile metadata alone exceeds the host memory safety budget.
     bad([](auto& c) {
-        c.m = c.n = 1000; c.k = 1;
-        c.tile_m = c.tile_n = 1;
-    }); // Trace/metadata storage alone exceeds the host safety budget.
+        c.shape.m = c.shape.n = 1000; c.shape.k = 1;
+        c.mapping.tile_m = c.mapping.tile_n = 1;
+        c.sim.trace_path = "trace.csv";
+    }); // Trace storage for 10^6 tiles alone exceeds the host safety budget.
+    npu::Config untraced;
+    untraced.shape.m = untraced.shape.n = 1000; untraced.shape.k = 1;
+    untraced.mapping.tile_m = untraced.mapping.tile_n = 1;
+    npu::validate(untraced); // Without a trace, 10^6 tile records fit.
     npu::Config c;
-    c.frequency_mhz = 1e-6;
+    c.arch.frequency_mhz = 1e-6;
     npu::validate(c); // A 1 Hz target remains representable and valid.
-    c.sram_bytes = npu::scratchpad_bytes(c);
+    c.arch.sram_bytes = npu::scratchpad_bytes(c);
     npu::validate(c);
-    --c.sram_bytes;
+    --c.arch.sram_bytes;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "exact SRAM capacity boundary");
 
     npu::Config slow;
-    slow.m = slow.n = slow.k = slow.tile_m = slow.tile_n = slow.buffer_slots = 1;
-    slow.memory_latency = slow.pipeline_cycles = 1000000000;
+    slow.shape.m = slow.shape.n = slow.shape.k = 1;
+    slow.mapping.tile_m = slow.mapping.tile_n = slow.mapping.buffer_slots = 1;
+    slow.arch.memory.latency = slow.arch.compute.pipeline_cycles = 1000000000;
     npu::validate(slow); // Event mode jumps directly across long stage waits.
-    slow.timing = "cycle";
+    slow.sim.timing = npu::TimingMode::Cycle;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
                                    "cycle mode rejects impractical wait iteration count");
-    slow.macs_per_cycle = slow.memory_bytes_per_cycle = 1;
-    slow.memory_latency = 0;
-    slow.pipeline_cycles = 9999992;
+    slow.arch.compute.macs_per_cycle = slow.arch.memory.bytes_per_cycle = 1;
+    slow.arch.memory.latency = 0;
+    slow.arch.compute.pipeline_cycles = 9999992;
     npu::validate(slow); // Read6 + compute(1+9999992) + write1 = 10000000.
-    ++slow.pipeline_cycles;
+    ++slow.arch.compute.pipeline_cycles;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
                                    "cycle mode rejects one iteration beyond boundary");
-    slow.pipeline_cycles = 0;
+    slow.arch.compute.pipeline_cycles = 0;
     npu::validate(slow); // The minimal mapping costs eight serial cycles.
+}
+
+// AXI bursts, the DRAM timeline and the address map, from first principles.
+void check_memory_map() {
+    npu::AxiConfig axi;
+    axi.data_bytes = 16;
+    axi.max_burst_beats = 16;
+    const auto burst = [&](std::uint64_t address, std::uint64_t end, std::uint64_t bytes,
+                           std::uint64_t beats, const char* what) {
+        const auto b = npu::next_burst(axi, address, end);
+        require(b.address == address && b.bytes == bytes && b.beats == beats, what);
+    };
+    burst(0x1000, 0x1000 + 1000, 256, 16, "aligned burst of max_burst_beats");
+    burst(0x1008, 0x2000, 248, 16, "misaligned start: a partial first beat");
+    burst(0x0FF0, 0x2000, 16, 1, "a 4 KiB boundary ends the burst");
+    burst(0x100, 0x114, 20, 2, "a partial last beat");
+    burst(0x105, 0x107, 2, 1, "two bytes inside one beat");
+    axi.max_burst_beats = 256;
+    burst(0, 0x10000, 4096, 256, "256 beats of 16 bytes fill a 4 KiB page");
+    axi.data_bytes = 64;
+    burst(0x20, 0x5000, 0xFE0, 64, "the page ends before 256 beats of 64 bytes");
+    rejects_with([&] { npu::next_burst(axi, 5, 5); }, "a burst starts inside its run");
+    std::uint64_t state = 12345;
+    const auto next = [&state](std::uint64_t bound) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (state >> 33) % bound;
+    };
+    for (int i = 0; i < 2000; ++i) {
+        axi.data_bytes = UINT64_C(8) << next(4);
+        axi.max_burst_beats = 1 + next(256);
+        const auto start = next(20000), length = 1 + next(20000), end = start + length;
+        std::uint64_t address = start, beats = 0;
+        while (address < end) {
+            const auto b = npu::next_burst(axi, address, end);
+            require(b.bytes >= 1 && b.beats >= 1 && b.beats <= axi.max_burst_beats,
+                    "burst size within the limits");
+            require(address / 4096 == (address + b.bytes - 1) / 4096,
+                    "no burst crosses a 4 KiB boundary");
+            require(b.beats == npu::ceil_div(address + b.bytes, axi.data_bytes) -
+                                   address / axi.data_bytes,
+                    "beats count the slots touched");
+            beats += b.beats;
+            address += b.bytes;
+        }
+        require(address == end, "bursts tile the run");
+        require(beats == npu::ceil_div(end, axi.data_bytes) - start / axi.data_bytes,
+                "bursts after the first start beat aligned");
+    }
+
+    npu::DramTimeline dram;
+    require(dram.reserve(100, 50) == 100, "empty timeline");
+    require(dram.reserve(0, 100) == 0, "a gap of exactly the size fits");
+    require(dram.intervals() == 1, "touching reservations merge");
+    require(dram.reserve(0, 10) == 150, "full up to 150");
+    require(dram.reserve(400, 10) == 400, "a later reservation leaves a hole");
+    require(dram.intervals() == 2, "[0, 160) and [400, 410)");
+    require(dram.reserve(120, 240) == 160, "the hole [160, 400) holds 240 bytes");
+    require(dram.intervals() == 1, "filling the hole joins both sides");
+    require(dram.reserve(155, 1) == 410, "no hole remains before 410");
+    require(dram.reserve(50, 0) == 50, "an empty reservation takes nothing");
+    require(dram.reserve(500, 20) == 500 && dram.reserve(600, 5) == 600, "two more holes");
+    require(dram.intervals() == 3, "[0, 411), [500, 520) and [600, 605)");
+    dram.release(520);
+    require(dram.intervals() == 1, "release drops intervals ending by then");
+    require(dram.reserve(0, 5) == 0, "released time is free again");
+    require(dram.reserve(590, 10) == 590 && dram.intervals() == 2, "joins the next interval");
+    // Against a timeline that keeps every reservation apart and forgets none.
+    struct Apart {
+        std::vector<std::pair<std::uint64_t, std::uint64_t>> busy;
+        std::uint64_t reserve(std::uint64_t begin, std::uint64_t bytes) {
+            if (!bytes) return begin;
+            for (bool moved = true; moved;) {
+                moved = false;
+                for (const auto& [low, high] : busy)
+                    if (low < begin + bytes && begin < high) {
+                        begin = high;
+                        moved = true;
+                    }
+            }
+            busy.emplace_back(begin, begin + bytes);
+            return begin;
+        }
+    };
+    std::uint64_t seed = 5;
+    const auto pick = [&seed](std::uint64_t range) {
+        seed = seed * 6364136223846793005ULL + 1442695040888963407ULL;
+        return (seed >> 33) % range;
+    };
+    for (int round = 0; round < 50; ++round) {
+        npu::DramTimeline merged;
+        Apart apart;
+        std::uint64_t now = 0;
+        for (int step = 0; step < 200; ++step) {
+            const auto earliest = now + pick(300);
+            const auto bytes = pick(40);
+            require(merged.reserve(earliest, bytes) == apart.reserve(earliest, bytes),
+                    "merging intervals leaves every gap in place");
+            if (pick(4) == 0) {
+                now += pick(50);
+                merged.release(now);
+            }
+        }
+    }
+
+    npu::Config c;
+    c.shape = {5, 7, 10, 3, 1};
+    c.mapping.tile_m = 2;
+    c.mapping.tile_n = 3;
+    c.mapping.tile_k = 4;
+    c.weights.bits = 4;
+    std::uint64_t cursor = 0;
+    for (std::uint64_t group = 0; group < 3; ++group)
+        for (std::uint64_t col = 0; col < 7; col += 3)
+            for (std::uint64_t block = 0; block < 3; ++block) {
+                const auto cols = std::min<std::uint64_t>(3, 7 - col);
+                require(npu::dense_weight_offset(c, {0, 0, col, 2, cols, group}, block) == cursor,
+                        "dense panels pack back to back in load order");
+                cursor += npu::ceil_div(npu::panel_k(c, block) * cols * 4, 8);
+            }
+    std::vector<npu::AddressRun> runs;
+    for (const auto& tile : npu::make_tiles(c)) {
+        for (std::uint64_t block = 0; block < 3; ++block) {
+            const auto weights = npu::ceil_div(npu::panel_k(c, block) * tile.cols * 4, 8);
+            npu::panel_read_runs(c, tile, block, 77, weights, runs);
+            std::uint64_t total = 0;
+            for (const auto& run : runs) total += run.length;
+            require(total == npu::panel_read_bytes(c, tile, block), "runs carry the panel bytes");
+            require(runs.size() == tile.rows + 1 + (block == 0), "activation rows, weights, bias");
+            require(runs[0].base == npu::activation_base + tile.row * 30 + tile.group * 10 +
+                                        block * 4 && runs[0].length == npu::panel_k(c, block),
+                    "activation rows are G*K apart");
+            require(runs[tile.rows].base == npu::weight_base + 77, "weight panel at its offset");
+            if (block == 0)
+                require(runs.back().base == npu::param_base + (tile.group * 7 + tile.col) * 4 &&
+                            runs.back().length == 4 * tile.cols,
+                        "one bias record per channel");
+            npu::panel_read_runs(c, tile, block, 77, 0, runs);
+            require(runs.size() == tile.rows + (block == 0), "a cached panel skips the weights");
+        }
+        npu::tile_store_runs(c, tile, runs);
+        require(runs.size() == tile.rows && runs[0].length == tile.cols &&
+                    runs[0].base == npu::output_base + tile.row * 21 + tile.group * 7 + tile.col &&
+                    runs.back().base == runs[0].base + (tile.rows - 1) * 21,
+                "output rows are G*N apart");
+    }
+    require(npu::param_record_bytes(c) == 4, "bias only");
+    c.quant.multipliers.assign(21, 1);
+    c.quant.shifts.assign(21, 7);
+    require(npu::param_record_bytes(c) == 12, "bias, multiplier and shift");
+
+    npu::Config m;
+    require(npu::peak_memory_bytes_per_cycle(m) == 16, "serial peak is bytes_per_cycle");
+    m.arch.memory.model = npu::MemoryModel::Axi;
+    m.arch.memory.axi.data_bytes = 32;
+    require(npu::peak_memory_bytes_per_cycle(m) == 64, "two AXI channels");
+    m.arch.memory.dram_bytes_per_cycle = 40;
+    require(npu::peak_memory_bytes_per_cycle(m) == 40, "DRAM caps the port");
+    m.arch.memory.dram_bytes_per_cycle = 100;
+    require(npu::peak_memory_bytes_per_cycle(m) == 64, "a faster DRAM does not");
+    npu::validate(m);
+    using Mutation = std::function<void(npu::AxiConfig&, npu::MemoryConfig&)>;
+    const auto bad = [](const Mutation& mutation, const std::string& message) {
+        npu::Config config;
+        config.arch.memory.model = npu::MemoryModel::Axi;
+        mutation(config.arch.memory.axi, config.arch.memory);
+        rejects_with([&] { npu::validate(config); }, message);
+    };
+    bad([](auto& a, auto&) { a.data_bytes = 12; }, "AXI data bytes must be 8, 16, 32 or 64");
+    bad([](auto& a, auto&) { a.data_bytes = 0; }, "AXI data bytes must be 8, 16, 32 or 64");
+    bad([](auto& a, auto&) { a.max_burst_beats = 0; }, "AXI burst beats must be in 1..256");
+    bad([](auto& a, auto&) { a.max_burst_beats = 257; }, "AXI burst beats must be in 1..256");
+    bad([](auto& a, auto&) { a.read_outstanding = 0; }, "AXI outstanding bursts must be in 1..64");
+    bad([](auto& a, auto&) { a.write_outstanding = 65; }, "AXI outstanding bursts must be");
+    bad([](auto& a, auto&) { a.write_latency = 1000000001; }, "AXI latencies must be at most");
+    bad([](auto&, auto& memory) { memory.dram_bytes_per_cycle = 1000000001; },
+        "DRAM bytes per cycle must be at most 1000000000");
+    // Every burst pays the latency in the bound: 1e9 cycles times 1e9 bytes
+    // per cycle leaves 64 bits.
+    bad([](auto& a, auto& memory) {
+            a.read_latency = 1000000000;
+            memory.dram_bytes_per_cycle = 1000000000;
+        },
+        "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
+}
+
+// Replays one core's weight-cache lookups in load order, as the loader makes
+// them: an LRU over (channel panel, block) keys holding whole panels, dense or
+// the encoded buffers in `panels`.
+std::uint64_t replay_weight_reads(const npu::Config& c, const std::vector<npu::Tile>& tiles,
+                                  const std::vector<npu::EncodedWeightPanel>& panels) {
+    struct Line { std::uint64_t key, bytes; };
+    std::vector<Line> lru;  // Most recent first.
+    std::uint64_t cached = 0, reads = 0;
+    const auto cache = c.arch.weight_cache_bytes;
+    const auto blocks = npu::reduction_blocks(c);
+    for (const auto& tile : tiles) {
+        for (std::uint64_t block = 0; block < blocks; ++block) {
+            const auto bytes = panels.empty() ?
+                (npu::panel_k(c, block) * tile.cols * c.weights.bits + 7) / 8 :
+                npu::weight_panel(c, panels, tile, block).buffer.size();
+            const auto key = (tile.group * c.shape.n + tile.col) * blocks + block;
+            const auto hit = std::find_if(lru.begin(), lru.end(),
+                                          [key](const Line& line) { return line.key == key; });
+            if (cache && hit != lru.end()) {
+                const auto line = *hit;
+                lru.erase(hit);
+                lru.insert(lru.begin(), line);
+                continue;
+            }
+            reads += bytes;
+            if (!cache || bytes > cache) continue;
+            while (cached + bytes > cache) {
+                cached -= lru.back().bytes;
+                lru.pop_back();
+            }
+            lru.insert(lru.begin(), {key, bytes});
+            cached += bytes;
+        }
+    }
+    return reads;
+}
+
+void check_cluster_plan() {
+    // Units split into contiguous runs whose sizes differ by at most one.
+    for (std::uint64_t units = 1; units <= 40; ++units) {
+        for (std::uint64_t cores = 1; cores <= 9; ++cores) {
+            npu::ClusterPlan plan;
+            plan.cores = cores;
+            plan.units = units;
+            std::uint64_t next = 0;
+            for (std::uint64_t core = 0; core < cores; ++core) {
+                const auto count = plan.unit_count(core);
+                require(plan.first_unit(core) == next, "runs are contiguous");
+                require(count == units / cores || count == units / cores + 1, "balanced runs");
+                require(core == 0 || count <= plan.unit_count(core - 1), "longer runs first");
+                for (auto unit = next; unit < next + count; ++unit)
+                    require(plan.unit_core(unit) == core, "a unit belongs to its run");
+                next += count;
+            }
+            require(next == units, "every unit has a core");
+        }
+    }
+
+    npu::Config c;
+    c.arch.memory.model = npu::MemoryModel::Axi;
+    c.shape = {10, 7, 9, 2, 1};
+    c.mapping.tile_m = 3;
+    c.mapping.tile_n = 2;
+    c.arch.cores = 2;
+    require(npu::cluster_plan(c, npu::Partition::M).split == npu::ClusterSplit::Groups &&
+                npu::cluster_plan(c, npu::Partition::M).units == 2,
+            "groups >= cores go to cores whole");
+    c.arch.cores = 3;
+    const auto rows = npu::cluster_plan(c, npu::Partition::M);
+    const auto columns = npu::cluster_plan(c, npu::Partition::N);
+    require(rows.split == npu::ClusterSplit::Rows && rows.units == 2 * 4, "row units");
+    require(columns.split == npu::ClusterSplit::Columns && columns.units == 2 * 4, "column units");
+    require(npu::to_string(npu::ClusterSplit::Columns) == "columns", "split names");
+    rejects_with([&] { npu::cluster_plan(c, npu::Partition::Auto); }, "splits by m or n");
+
+    // The closed-form estimate against a replay of every core's tiles: exact
+    // read, weight and write bytes, MACs and compute cycles per core, dense or
+    // timed from the encoded panels.
+    std::uint64_t state = 99;
+    const auto draw = [&state](std::uint64_t low, std::uint64_t high) {
+        state = state * 6364136223846793005ULL + 1442695040888963407ULL;
+        return low + (state >> 33) % (high - low + 1);
+    };
+    for (int round = 0; round < 400; ++round) {
+        npu::Config r;
+        r.arch.memory.model = npu::MemoryModel::Axi;
+        r.shape = {draw(1, 30), draw(1, 30), draw(1, 40), draw(1, 4), 1};
+        r.mapping.tile_m = draw(1, 9);
+        r.mapping.tile_n = draw(1, 9);
+        r.mapping.tile_k = draw(0, 1) ? 0 : draw(1, r.shape.k);
+        r.arch.cores = draw(1, 9);
+        r.arch.weight_cache_bytes = draw(0, 2) ? std::uint64_t{0} : draw(1, 600);
+        r.weights.bits = draw(0, 1) ? 4 : 8;
+        r.arch.compute.macs_per_cycle = draw(1, 64);
+        r.arch.sram_bytes = 1ULL << 26;
+        const auto encoding = draw(0, 2);
+        r.weights.encoding = encoding == 0 ? npu::WeightEncoding::Dense :
+                             encoding == 1 ? npu::WeightEncoding::Palette :
+                                             npu::WeightEncoding::Sparse;
+        r.weights.palette_bits = 8;
+        r.weights.sparse_block = draw(1, 8);
+        r.arch.compute.weight_decode_values_per_cycle = draw(1, 64);
+        npu::validate(r);
+        std::vector<npu::EncodedWeightPanel> panels;
+        if (r.weights.encoding != npu::WeightEncoding::Dense) {
+            auto problem = npu::make_problem(r);
+            // Sparse rounds zero three weights in four so whole blocks drop.
+            if (r.weights.encoding == npu::WeightEncoding::Sparse)
+                for (auto& weight : problem.weights)
+                    if (draw(0, 3)) weight = static_cast<std::int8_t>(r.quant.weight_zero);
+            panels = npu::encode_weights(r, problem);
+        }
+        const auto costs = panels.empty() ? npu::dense_column_costs(r) :
+                                            npu::encoded_column_costs(r, panels);
+        const auto tiles = npu::make_tiles(r);
+        for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
+            const auto plan = npu::cluster_plan(r, partition);
+            const auto estimate = npu::estimate_cluster(r, plan, costs);
+            std::vector<std::vector<npu::Tile>> assigned(plan.cores);
+            for (const auto& tile : tiles)
+                assigned[plan.unit_core(npu::tile_unit(r, plan, tile))].push_back(tile);
+            std::uint64_t reads = 0;
+            for (std::uint64_t core = 0; core < plan.cores; ++core) {
+                const auto& e = estimate.cores[core];
+                std::uint64_t activations = 0, params = 0, writes = 0, macs = 0, cycles = 0;
+                for (const auto& tile : assigned[core]) {
+                    activations += tile.rows * r.shape.k;
+                    params += tile.cols * npu::param_record_bytes(r);
+                    writes += npu::tile_write_bytes(tile);
+                    macs += tile.rows * tile.cols * r.shape.k;
+                    if (panels.empty()) cycles += npu::tile_compute_cycles(r, tile);
+                    for (std::uint64_t block = 0; !panels.empty() &&
+                                                  block < npu::reduction_blocks(r); ++block)
+                        cycles += npu::encoded_panel_compute_cycles(
+                            r, tile, block, npu::weight_panel(r, panels, tile, block));
+                }
+                const auto weights = replay_weight_reads(r, assigned[core], panels);
+                const auto label = " (round " + std::to_string(round) + ", core " +
+                                   std::to_string(core) + ")";
+                require(e.tiles == assigned[core].size(), "tiles per core" + label);
+                require(e.weight_bytes == weights, "weight-cache closed form" + label);
+                require(e.read_bytes == activations + weights + params, "read bytes" + label);
+                require(e.write_bytes == writes && e.macs == macs, "writes and MACs" + label);
+                require(e.compute_cycles == cycles, "compute cycles" + label);
+                reads += e.read_bytes;
+            }
+            require(estimate.read_bytes == reads, "estimate totals");
+        }
+    }
+
+    // A wide DRAM bound and the tie rule.
+    npu::ClusterEstimate m, n;
+    m.bound_cycles = n.bound_cycles = 10;
+    m.read_bytes = n.read_bytes = 5;
+    require(npu::auto_partition(m, n) == npu::Partition::N, "ties go to n");
+    m.read_bytes = 4;
+    require(npu::auto_partition(m, n) == npu::Partition::M, "then fewer bytes");
+    m.bound_cycles = 11;
+    require(npu::auto_partition(m, n) == npu::Partition::N, "the bound decides first");
+
+    npu::Config p;
+    p.arch.memory.model = npu::MemoryModel::Axi;
+    p.arch.memory.axi.data_bytes = 32;
+    p.arch.cores = 4;
+    require(npu::peak_memory_bytes_per_cycle(p) == 256, "every core's two channels");
+    p.arch.memory.dram_bytes_per_cycle = 100;
+    require(npu::peak_memory_bytes_per_cycle(p) == 100, "DRAM caps the cluster");
+    npu::validate(p);
+    p.arch.cores = 0;
+    rejects_with([&] { npu::validate(p); }, "cores must be in 1..64");
+    p.arch.cores = 65;
+    rejects_with([&] { npu::validate(p); }, "cores must be in 1..64");
+    p.arch.cores = 2;
+    p.arch.memory.model = npu::MemoryModel::Serial;
+    rejects_with([&] { npu::validate(p); }, "more than one core requires --memory-model axi");
 }
 
 }  // namespace
@@ -505,7 +1249,13 @@ int main() {
         check_reduction_panels_and_systolic();
         check_random_edges();
         check_overflow_and_shapes();
+        check_tosa_rescale();
+        check_grouped_gemm();
+        check_decoder_overlap();
+        check_limits();
         check_validation();
+        check_memory_map();
+        check_cluster_plan();
         std::cout << "core tests: all checks passed\n";
         return 0;
     } catch (const std::exception& error) {

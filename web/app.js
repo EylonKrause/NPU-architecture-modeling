@@ -1,6 +1,9 @@
 "use strict";
 // npu-sim live: binds GET /api/state (npuperf/live.py) to the page.
-//   telemetry  npu-sim live snapshot (schema_version 1, src/main.cpp snapshot_json)
+//   telemetry  npu-sim live snapshot (schema_version 2, src/main.cpp snapshot_json; 1 from
+//              older builds). Its config is nested by option-table path (shape.m,
+//              arch.compute.macs_per_cycle, mapping.panel_buffers, ...); the page does not
+//              parse it, the controller resolves it into workload and machine.
 //   workload   shape and weight format resolved from the snapshot config
 //   machine    peak rates, ridge point and analytic bound of the running design
 //   slices     counter deltas over the last advances (strip chart)
@@ -137,6 +140,8 @@ function renderMachine(value) {
     parts.push(`tile ${machine.tile_m}×${machine.tile_n}×${depth ?? "k"}`);
   }
   if (isNum(machine.buffer_slots)) parts.push(`${machine.buffer_slots} slots`);
+  if (isNum(machine.panel_buffers))
+    parts.push(machine.panel_buffers > 1 ? `${machine.panel_buffers} panel buffers` : "1 panel buffer");
   if (isNum(machine.macs_per_cycle)) parts.push(`${machine.macs_per_cycle} MAC/cyc`);
   if (isNum(machine.bytes_per_cycle)) parts.push(`${sig(machine.bytes_per_cycle)} B/cyc`);
   if (isNum(machine.memory_latency) && machine.memory_model === "serial")
@@ -658,6 +663,7 @@ const COUNTERS = [
   ["tiles_total", "tiles total", int], ["inflight_tiles", "tiles in flight", int],
   ["read_queue_depth", "read queue", int], ["write_queue_depth", "write queue", int],
 ];
+const SCHEMA_VERSIONS = [1, 2];
 const NOT_COUNTERS = new Set([
   "schema_version", "type", "simulation", "config", "cycles", "completed", "validated", "numerics",
   "numerical_match", "compute_utilization", "memory_utilization", "dma_busy", "compute_busy",
@@ -741,7 +747,7 @@ function renderPreviews(value) {
 function render(value) {
   state = value;
   const t = value.telemetry || {};
-  const schemaOk = t.schema_version === undefined || t.schema_version === 1;
+  const schemaOk = t.schema_version === undefined || SCHEMA_VERSIONS.includes(t.schema_version);
   renderControls(value);
   if (schemaOk) {
     renderMachine(value);
@@ -754,7 +760,8 @@ function render(value) {
     renderPreviews(value);
   }
   renderJobs(value);
-  if (!schemaOk) showMessage(`unsupported snapshot schema_version ${t.schema_version}; expected 1`);
+  const expected = SCHEMA_VERSIONS.join(" or ");
+  if (!schemaOk) showMessage(`unsupported snapshot schema_version ${t.schema_version}; expected ${expected}`);
   else showMessage(value.error || "");
   text("connection", `${value.profile} · ${int(value.slice_cycles)} cycles per tick`);
   text("refreshed", new Date().toLocaleTimeString("en-GB"));

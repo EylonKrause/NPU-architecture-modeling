@@ -23,6 +23,10 @@ from . import binary as binaries
 
 Flags = Mapping[str, Any] | Sequence[Any]
 MAX_LIVE_MESSAGE = 1_048_576
+# Result and snapshot layouts this package reads. Version 2 nests "config" by option-table
+# path (shape.m, arch.frequency_mhz, ...) and adds "memory", "cluster" and "cores"; version 1
+# carried a flat config. config_value() reads either layout.
+RESULT_SCHEMA_VERSIONS = (1, 2)
 _MISSING = object()
 
 
@@ -198,10 +202,20 @@ def result_numerics(result: Mapping[str, Any]) -> str | None:
     return None
 
 
+def schema_version(value: Any) -> int | None:
+    """The result or snapshot layout version of ``value``, or None if it is not one we read."""
+    if not isinstance(value, Mapping):
+        return None
+    version = value.get("schema_version")
+    if type(version) is not int or version not in RESULT_SCHEMA_VERSIONS:
+        return None
+    return version
+
+
 def validate_result(result: Any) -> dict:
     """Reject anything that is not a complete, self-consistent npu-sim result."""
-    if not isinstance(result, dict) or result.get("schema_version") != 1:
-        raise CheckError("expected a JSON object with schema_version 1")
+    if not isinstance(result, dict) or schema_version(result) is None:
+        raise CheckError("expected a JSON object with schema_version 1 or 2")
     numerics = result_numerics(result)
     if numerics is None:
         raise CheckError("simulator did not report full numerical agreement")
@@ -295,9 +309,9 @@ def execute(binary: Path | str, flags: Flags, timeout: float = 60) -> tuple[dict
     except json.JSONDecodeError as error:
         raise SimError(f"{name} stdout is not one JSON object", 0, process.stderr,
                        command) from error
-    if not isinstance(value, dict) or value.get("schema_version") != 1:
-        raise SimError(f"{name} did not return a schema_version 1 object", 0, process.stderr,
-                       command)
+    if not isinstance(value, dict) or schema_version(value) is None:
+        raise SimError(f"{name} did not return a schema_version 1 or 2 object", 0,
+                       process.stderr, command)
     return value, command, elapsed
 
 

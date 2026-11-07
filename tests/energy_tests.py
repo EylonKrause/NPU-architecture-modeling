@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Independent unit arithmetic, malformed-input and CLI energy checks."""
 
+import argparse
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -12,8 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from npuperf import energy
 
+BINARY: Path
+
 
 def fixture():
+    """A schema_version 1 result: flat config keys."""
     return {"schema_version": 1, "numerical_match": True, "cycles": 20,
             "macs": 10, "read_bytes": 7, "write_bytes": 3,
             "modeled_latency_ns": 100, "output_hash": 123,
@@ -21,10 +26,9 @@ def fixture():
 
 
 def nested_fixture():
-    """fixture() with the option-table config layout (SPEC 1.1)."""
-    result = fixture()
-    result["config"] = {"shape": {"m": 1, "n": 1, "k": 10}, "arch": {"frequency_mhz": 200}}
-    return result
+    """fixture() at schema_version 2: config nested by option-table path."""
+    return {**fixture(), "schema_version": 2,
+            "config": {"shape": {"m": 1, "n": 1, "k": 10}, "arch": {"frequency_mhz": 200}}}
 
 
 class EnergyTests(unittest.TestCase):
@@ -102,13 +106,54 @@ class EnergyTests(unittest.TestCase):
 
     def test_schema_and_numerical_agreement_required(self):
         for key, value in (("schema_version", True), ("schema_version", 1.0),
-                           ("schema_version", 2), ("numerical_match", False),
+                           ("schema_version", 0), ("schema_version", 3),
+                           ("schema_version", "2"), ("numerical_match", False),
                            ("numerical_match", 1), ("numerical_match", "true")):
             with self.subTest(key=key, value=value):
                 result = fixture()
                 result[key] = value
                 with self.assertRaises(ValueError):
                     energy.estimate(result, 1, 1)
+
+    def test_either_config_layout_at_either_schema_version(self):
+        expected = energy.estimate(fixture(), 2, 3, 4)
+        self.assertEqual(energy.estimate(nested_fixture(), 2, 3, 4), expected)
+        # The clock is found in whichever layout the config uses.
+        flat_v2 = {**fixture(), "schema_version": 2}
+        nested_v1 = {**nested_fixture(), "schema_version": 1}
+        for result in (flat_v2, nested_v1):
+            with self.subTest(result=result):
+                self.assertEqual(energy.estimate(result, 2, 3, 4), expected)
+        # A config without a clock in either layout is still rejected.
+        for config in ({"arch": 200}, {"arch": {}}, {"shape": {"m": 1}}, {}):
+            result = {**nested_fixture(), "config": config}
+            with self.subTest(config=config), self.assertRaises(ValueError):
+                energy.estimate(result, 1, 1)
+
+    def test_npu_sim_result_feeds_the_estimate(self):
+        process = subprocess.run([str(BINARY), "--m", "8", "--n", "8", "--k", "16",
+                                  "--frequency-mhz", "400"],
+                                 capture_output=True, text=True, timeout=60)
+        self.assertEqual(process.returncode, 0, process.stderr)
+        result = json.loads(process.stdout)
+        self.assertEqual(result["schema_version"], 2)
+        self.assertEqual(result["config"]["arch"]["frequency_mhz"], 400)
+        self.assertNotIn("frequency_mhz", result["config"])
+        report = energy.estimate(result, mac_pj=2, dram_byte_pj=3, static_mw=4)
+        self.assertEqual(report["component_pj"]["mac"], 2 * result["executed_macs"])
+        self.assertEqual(report["component_pj"]["dram_read"], 3 * result["read_bytes"])
+        self.assertEqual(report["component_pj"]["dram_write"], 3 * result["write_bytes"])
+        # mW times ns is pJ; 400 MHz is 2.5 ns per cycle.
+        self.assertAlmostEqual(report["component_pj"]["static"], result["cycles"] * 2.5 * 4)
+        with tempfile.TemporaryDirectory() as folder:
+            source = Path(folder) / "result.json"
+            source.write_text(process.stdout, encoding="utf-8")
+            cli = subprocess.run([sys.executable, str(ROOT / "scripts" / "energy_report.py"),
+                                  "--result", str(source), "--mac-pj", "2", "--dram-byte-pj", "3",
+                                  "--static-mw", "4"],
+                                 text=True, capture_output=True, timeout=10)
+            self.assertEqual(cli.returncode, 0, cli.stderr)
+            self.assertEqual(json.loads(cli.stdout), report)
 
     def test_missing_fields_and_graph_report_rejected(self):
         for key in fixture():
@@ -207,4 +252,11 @@ class EnergyTests(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--binary", type=Path, default=os.environ.get("NPU_SIM"),
+                        help="npu-sim executable (default: $NPU_SIM)")
+    arguments, remaining = parser.parse_known_args()
+    if arguments.binary is None:
+        parser.error("pass --binary or set NPU_SIM")
+    BINARY = arguments.binary.resolve()
+    unittest.main(argv=[__file__, *remaining])

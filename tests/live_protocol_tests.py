@@ -152,6 +152,10 @@ class LiveProtocolChecks(unittest.TestCase):
                              "loaded_panels", "panels_completed", "compute_busy_cycles", "dma_busy_cycles"):
                     self.assertGreaterEqual(current[name], previous[name], name)
                 self.assertLessEqual(current["inflight_tiles"], 2)
+                # A loaded panel holds one of its slot's two panel buffers
+                # until compute finishes it.
+                self.assertLessEqual(current["loaded_panels"] - current["panels_completed"],
+                                     2 * current["inflight_tiles"])
                 seen_dma |= current["dma_busy"]
                 seen_compute |= current["compute_busy"]
                 if not current["completed"]:
@@ -164,6 +168,25 @@ class LiveProtocolChecks(unittest.TestCase):
                              "a completed model must not keep advancing")
             stopped = child.command("stop")
             self.assertEqual(stopped, dict(current, type="stopped"))
+            self.assertEqual(child.process.wait(timeout=3), 0, child.errors())
+
+    def test_single_panel_buffer_steps_to_its_batch_result(self):
+        single, double = self.batch(["--panel-buffers", "1"]), self.batch()
+        # K = 7 in panels of 3: one buffer serialises each panel load behind
+        # the previous panel's compute.
+        self.assertGreater(single["cycles"], double["cycles"])
+        self.assertGreater(single["panel_wait_cycles"], 0)
+        with LiveChild(["--panel-buffers", "1"]) as child:
+            current = child.read()
+            self.assertEqual(current["config"]["mapping"]["panel_buffers"], 1)
+            deadline = time.monotonic() + 15
+            while not current["completed"]:
+                self.assertLess(time.monotonic(), deadline, "bounded live completion deadline")
+                current = child.command("advance 5")
+                self.assertLessEqual(current["loaded_panels"] - current["panels_completed"],
+                                     current["inflight_tiles"])
+            self.assert_final(current, single)
+            self.assertEqual(child.command("stop")["type"], "stopped")
             self.assertEqual(child.process.wait(timeout=3), 0, child.errors())
 
     def test_invalid_commands_do_not_advance_or_terminate(self):

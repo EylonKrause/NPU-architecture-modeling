@@ -103,14 +103,19 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(state["jobs_completed"], 1, profile)
             result = state["recent_jobs"][0]["telemetry"]
             self.assertTrue(result["validated"], profile)
+            # A schema_version 2 snapshot echoes the complete design, so the machine panel
+            # describes what actually ran rather than the profile's flags.
+            self.assertEqual(state["machine"]["source"], "snapshot", profile)
+            self.assertEqual(state["machine"]["cores"],
+                             result["config"]["arch"]["cores"], profile)
             analysis = state["machine"]["analysis"]
             if analysis is None:
                 continue
             # A lower bound of the simulated machine: no run may beat it.
             self.assertGreaterEqual(result["cycles"], analysis["lower_bound_cycles"], profile)
-            if profile == "compute-bound" and state["machine"]["source"] == "profile":
-                # This simulator (one panel buffer per slot) meets the bound exactly on the
-                # compute-bound profile; a two-buffer design would claim fewer cycles.
+            if profile == "compute-bound":
+                # The simulator meets the bound of the design its snapshot echoes (two panel
+                # buffers per slot) exactly on the compute-bound profile.
                 self.assertEqual(result["cycles"], analysis["lower_bound_cycles"])
 
     def test_palette_decode_varies_inputs_and_cleans_fixture(self):
@@ -129,6 +134,11 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(sim.config_value(result["config"], "weight_encoding"), "palette")
             self.assertEqual(sim.config_value(result["config"], "weight_bits"), 8)
             self.assertEqual(sim.config_value(result["config"], "palette_bits"), 2)
+            # schema_version 2 snapshots nest the weight format under "weights".
+            self.assertEqual(result["schema_version"], 2)
+            weights = result["config"]["weights"]
+            self.assertEqual((weights["encoding"], weights["bits"], weights["palette_bits"]),
+                             ("palette", 8, 2))
             self.assertLess(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])
             self.assertGreater(result["weight_decode_cycles"], 0)
             self.assertEqual(result["executed_macs"], result["macs"])
@@ -227,11 +237,13 @@ class DashboardTests(unittest.TestCase):
         machine = state["machine"]
         self.assertEqual(set(machine), set(dashboard.MACHINE_KEYS))
         self.assertEqual(set(machine["analysis"]), set(dashboard.ANALYSIS_KEYS))
-        # The snapshot config echoes the shape only, so the design comes from the profile
-        # with the simulator's single panel buffer per slot.
-        self.assertEqual(machine["source"], "profile")
+        # The schema_version 2 snapshot config echoes the complete design, so the machine
+        # comes from the snapshot, with the simulator's default of two panel buffers per slot.
+        self.assertEqual(machine["source"], "snapshot")
+        self.assertEqual(machine["panel_buffers"],
+                         state["telemetry"]["config"]["mapping"]["panel_buffers"])
         design = analytic.Design.from_flags({**sim.from_flags(dashboard.PROFILE_ARGS["balanced"]),
-                                             "panel_buffers": 1})
+                                             "panel_buffers": 2})
         expected = analytic.analyze(design)
         self.assertEqual((machine["macs_per_cycle"], machine["bytes_per_cycle"], machine["ridge"]),
                          (64, 16.0, 4.0))

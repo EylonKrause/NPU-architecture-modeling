@@ -64,16 +64,17 @@ SLICE_HISTORY = 200
 TIMELINE_STRIDE = 8
 TIMELINE_WINDOW = 512
 TIMELINE_TRANSITIONS = 512
-# Keys the live snapshot config does not echo take the behaviour of the simulator that emits
-# it: one panel buffer per slot, one group, serial memory, one core. These are the values
-# analytic.Design.from_result assumes for the same keys.
+# A schema_version 2 snapshot echoes the complete design (nested by option-table path). Keys
+# an older, schema_version 1 snapshot config does not echo take the behaviour of the simulator
+# that emitted it: one panel buffer per slot, one group, serial memory, one core. These are
+# the values analytic.Design.from_result assumes for the same keys.
 SNAPSHOT_DEFAULTS = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
                      "partition": "auto", "dram_bytes_per_cycle": 0}
 STAGE_KEYS = ("dma_busy", "dma_read", "dma_tile_id", "compute_busy", "compute_tile_id")
 WORKLOAD_KEYS = ("m", "n", "k", "groups", "weight_bits", "weight_encoding", "frequency_mhz")
 MACHINE_KEYS = ("source", "macs_per_cycle", "bytes_per_cycle", "ridge", "memory_model",
-                "memory_latency", "pipeline_cycles", "buffer_slots", "cores", "tile_m", "tile_n",
-                "tile_k", "frequency_mhz", "analysis")
+                "memory_latency", "pipeline_cycles", "buffer_slots", "panel_buffers", "cores",
+                "tile_m", "tile_n", "tile_k", "frequency_mhz", "analysis")
 ANALYSIS_KEYS = ("bound", "resource_bound_cycles", "lower_bound_cycles", "estimate_cycles",
                  "compute_busy_cycles", "memory_cycles", "dram_bytes", "arithmetic_intensity",
                  "effective_bytes_per_cycle")
@@ -127,8 +128,9 @@ def profile_design(profile: str, config: object = None) -> analytic.Design:
 def machine_summary(profile: str, telemetry: dict) -> dict:
     """Peak rates, ridge point and analytic bound of the running design.
 
-    A snapshot that echoes the complete config is read directly; an older one (shape and
-    weight format only) is completed by profile_design."""
+    A snapshot that echoes the complete config (schema_version 2, nested) is read directly
+    (``source`` "snapshot"); an older one (shape and weight format only) is completed by
+    profile_design (``source`` "profile")."""
     try:
         design = analytic.Design.from_result(telemetry)
         source = "snapshot"
@@ -141,8 +143,9 @@ def machine_summary(profile: str, telemetry: dict) -> dict:
                "ridge": design.ridge if bandwidth > 0 else None,
                "memory_model": design.memory_model, "memory_latency": design.memory_latency,
                "pipeline_cycles": design.pipeline_cycles, "buffer_slots": design.buffer_slots,
-               "cores": design.cores, "tile_m": design.tile_m, "tile_n": design.tile_n,
-               "tile_k": design.tile_k, "frequency_mhz": design.frequency_mhz,
+               "panel_buffers": design.panel_buffers, "cores": design.cores,
+               "tile_m": design.tile_m, "tile_n": design.tile_n, "tile_k": design.tile_k,
+               "frequency_mhz": design.frequency_mhz,
                "analysis": None}
     try:
         result = analytic.analyze(design)

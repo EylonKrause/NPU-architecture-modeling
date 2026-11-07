@@ -70,11 +70,11 @@ endif()
 set(NPU_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
 npu_generate_version_header("${NPU_GENERATED_INCLUDE_DIR}/npu/version.hpp")
 
-add_library(npu_core STATIC src/core.cpp)
+add_library(npu_core STATIC src/core.cpp src/json.cpp src/options.cpp)
 target_include_directories(npu_core PUBLIC include "${NPU_GENERATED_INCLUDE_DIR}")
 npu_project_target(npu_core)
 
-npu_add_tool(npu-sim src/main.cpp src/model.cpp)
+npu_add_tool(npu-sim src/main.cpp src/model.cpp src/memory.cpp)
 npu_add_tool(npu-tlm-demo src/tlm_platform.cpp)
 npu_add_tool(npu-transformer-demo src/transformer.cpp)
 npu_add_tool(npu-mobile-demo src/mobile_platform.cpp)
@@ -87,6 +87,9 @@ if(BUILD_TESTING)
     TARGET npu-core-tests SOURCES tests/core_tests.cpp TIMEOUT 60)
   npu_add_unit_test(core.weight-codec
     TARGET npu-compression-core-tests SOURCES tests/mobile_compression_core_tests.cpp TIMEOUT 60)
+  npu_add_unit_test(core.config
+    TARGET npu-config-tests SOURCES tests/config_tests.cpp TIMEOUT 60
+    ARGS "${PROJECT_SOURCE_DIR}/configs/example.json")
 
   npu_add_python_test(sim.gemm-oracle
     SCRIPT tests/integration.py BINARY npu-sim TIMEOUT 180)
@@ -98,6 +101,12 @@ if(BUILD_TESTING)
     SCRIPT tests/mobile_compression_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(sim.observability
     SCRIPT tests/systemc_observability_tests.py BINARY npu-sim)
+  npu_add_python_test(sim.config-file
+    SCRIPT tests/config_file_tests.py BINARY npu-sim)
+  npu_add_python_test(sim.memory-model
+    SCRIPT tests/memory_model_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(sim.cluster
+    SCRIPT tests/cluster_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(graph.runtime
     SCRIPT tests/graph_runtime_tests.py BINARY npu-sim)
   npu_add_python_test(graph.fusion
@@ -115,7 +124,7 @@ if(BUILD_TESTING)
   npu_add_python_test(tools.launcher
     SCRIPT tests/launcher_tests.py BINARY npu-sim TIMEOUT 90)
   npu_add_python_test(tools.energy
-    SCRIPT tests/energy_tests.py)
+    SCRIPT tests/energy_tests.py BINARY npu-sim)
   npu_add_python_test(tools.autotune
     SCRIPT tests/autotune_tests.py BINARY npu-sim)
 

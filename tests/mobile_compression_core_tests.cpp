@@ -17,15 +17,15 @@ void rejects(Operation operation, const char* message) {
     require(threw, message);
 }
 
-void independent_storage(const std::string& codec) {
+void independent_storage(npu::WeightEncoding codec) {
     npu::Config c;
-    c.m = 3; c.n = 3; c.k = 5;
-    c.tile_m = 2; c.tile_n = 2; c.tile_k = 3;
-    c.weight_encoding = codec;
-    c.palette_bits = 2; c.sparse_block = 3;
+    c.shape.m = 3; c.shape.n = 3; c.shape.k = 5;
+    c.mapping.tile_m = 2; c.mapping.tile_n = 2; c.mapping.tile_k = 3;
+    c.weights.encoding = codec;
+    c.weights.palette_bits = 2; c.weights.sparse_block = 3;
     c.quant.weight_zero_points = {1, -2, 3};
     npu::Problem p;
-    p.m = c.m; p.n = c.n; p.k = c.k;
+    p.m = c.shape.m; p.n = c.shape.n; p.k = c.shape.k;
     p.activations = {1, -2, 3, -4, 5, -6, 7, -8, 9, -10, 11, -12, 13, -14, 15};
     p.weights = {1, -2, 3, 4, -2, 3, 1, -5, 3, 1, -2, 6, 1, -2, 3};
     p.bias = {19, -27, 31};
@@ -64,7 +64,7 @@ void independent_storage(const std::string& codec) {
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
             "misaligned encoded panel must be rejected");
     corrupted = encoded;
-    if (codec == "sparse") {
+    if (codec == npu::WeightEncoding::Sparse) {
         ++corrupted.front().retained_values;
         rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
                 "sparse retained count must match bitmap and payload");
@@ -78,9 +78,9 @@ void independent_storage(const std::string& codec) {
 
 void complete_int8_palette() {
     npu::Config c;
-    c.m = 1; c.n = 1; c.k = 256;
-    c.tile_m = 1; c.tile_n = 1;
-    c.weight_encoding = "palette"; c.palette_bits = 8;
+    c.shape.m = 1; c.shape.n = 1; c.shape.k = 256;
+    c.mapping.tile_m = 1; c.mapping.tile_n = 1;
+    c.weights.encoding = npu::WeightEncoding::Palette; c.weights.palette_bits = 8;
     auto p = npu::make_problem(c);
     for (int value = -128; value <= 127; ++value)
         p.weights.at(static_cast<std::size_t>(value + 128)) = static_cast<std::int8_t>(value);
@@ -98,8 +98,8 @@ void complete_int8_palette() {
 
 int main() {
     try {
-        independent_storage("palette");
-        independent_storage("sparse");
+        independent_storage(npu::WeightEncoding::Palette);
+        independent_storage(npu::WeightEncoding::Sparse);
         complete_int8_palette();
         std::cout << "Compressed storage, corruption guards and full INT8 LUT verified\n";
         return 0;

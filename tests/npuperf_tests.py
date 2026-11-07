@@ -217,6 +217,10 @@ class FlagTests(unittest.TestCase):
                 "compute_utilization": 0.2, "memory_utilization": 0.3,
                 "modeled_latency_ns": 50, "config": {}, "output_hash": 7}
         sim.validate_result(dict(good))
+        sim.validate_result({**good, "schema_version": 2})
+        for version in (0, 3, True, 2.0, "2"):
+            with self.subTest(schema_version=version), self.assertRaises(sim.CheckError):
+                sim.validate_result({**good, "schema_version": version})
         sim.validate_result({**good, "numerics": "bit-exact"})
         skipped = {**good, "numerics": "skipped"}
         del skipped["numerical_match"], skipped["output_hash"]

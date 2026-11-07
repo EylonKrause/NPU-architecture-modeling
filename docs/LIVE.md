@@ -69,7 +69,7 @@ The labels name model parameters; they do not describe measured silicon.
 
 | Panel | Shows | Source |
 | --- | --- | --- |
-| Title bar | Shape, tile, slots, peak rates, DMA latency, weight format, clock | `workload`, `machine` |
+| Title bar | Shape, tile, slots, panel buffers, peak rates, DMA latency, weight format, clock | `workload`, `machine` |
 | Cycles, MAC/cycle, DRAM B/cycle, arithmetic intensity | Current job. "% of peak" divides executed MACs per cycle by the array peak; MAC/cycle and intensity count every MAC of the workload | `telemetry`, `machine` |
 | Bound | Analytic bound class, the analytic lower bound in cycles and the share of it the last completed job attained. Without an analytic model (palette weights) it shows a dash and the MAC and DMA busy fractions | `machine.analysis` |
 | Roofline | Compute roof, DRAM roof, the latency-inclusive DRAM roof when request latency lowers it, completed jobs, the current job and the analytic lower bound | `machine`, `recent_jobs` |
@@ -80,11 +80,13 @@ The labels name model parameters; they do not describe measured silicon.
 | Counters | Every numeric snapshot counter; nested objects and arrays of objects (memory channels, per-core state) appear under their own names when a snapshot carries them | `telemetry` |
 
 The machine description comes from the snapshot config when it echoes the whole
-design (`machine.source` is `snapshot`). The current live snapshot echoes the
-shape, tiling and weight format only, so the controller completes the design from
-the profile's flags and the simulator's behaviour for keys it does not echo: one
-panel buffer per slot, one group, serial memory and one core (`machine.source` is
-`profile`).
+design (`machine.source` is `snapshot`). A schema_version 2 snapshot does: its
+`config` is the complete configuration nested by option-table path
+(`shape.m`, `arch.compute.macs_per_cycle`, `mapping.panel_buffers`, ...). A
+schema_version 1 snapshot from an older build echoes the shape, tiling and weight
+format only, so the controller completes the design from the profile's flags and
+that simulator's behaviour for keys it does not echo: one panel buffer per slot,
+one group, serial memory and one core (`machine.source` is `profile`).
 
 The pipeline chart is sampled. Every advance samples the stages each 8 cycles
 over its last 512 cycles, so a stage change appears up to 8 cycles late. A step
@@ -113,9 +115,9 @@ simulator. Fields:
 | Field | Content |
 | --- | --- |
 | `state`, `profile`, `error` | Controller state (`idle`, `running`, `paused`, `stopped`, `error`), selected profile, last error |
-| `telemetry` | Latest unmodified npu-sim snapshot (schema_version 1) |
+| `telemetry` | Latest unmodified npu-sim snapshot (schema_version 2; 1 from older builds) |
 | `workload` | `m`, `n`, `k`, `groups`, `weight_bits`, `weight_encoding`, `frequency_mhz` resolved from the snapshot config (null when absent) |
-| `machine` | `source`, peak `macs_per_cycle` and `bytes_per_cycle`, `ridge`, `memory_model`, `memory_latency`, `pipeline_cycles`, `buffer_slots`, `cores`, tile sizes, `frequency_mhz`, and `analysis` (null without an analytic model): `bound`, `lower_bound_cycles`, `resource_bound_cycles`, `estimate_cycles`, `compute_busy_cycles`, `memory_cycles`, `dram_bytes`, `arithmetic_intensity`, `effective_bytes_per_cycle` |
+| `machine` | `source`, peak `macs_per_cycle` and `bytes_per_cycle`, `ridge`, `memory_model`, `memory_latency`, `pipeline_cycles`, `buffer_slots`, `panel_buffers`, `cores`, tile sizes, `frequency_mhz`, and `analysis` (null without an analytic model): `bound`, `lower_bound_cycles`, `resource_bound_cycles`, `estimate_cycles`, `compute_busy_cycles`, `memory_cycles`, `dram_bytes`, `arithmetic_intensity`, `effective_bytes_per_cycle` |
 | `slice` | Counter deltas over the last advance |
 | `slices` | The last 200 advances: `job`, `end_cycle`, `cycles`, `compute_busy_cycles`, `dma_busy_cycles`, their `_fraction`s, and `executed_macs`, `read_bytes`, `write_bytes` deltas |
 | `timeline` | `stride_cycles` and up to 512 `transitions`: `job`, `cycle` and the tile in `load`, `compute` and `store` (null when idle). A transition with `unsampled_from` ends an unsampled interval that started at that cycle |

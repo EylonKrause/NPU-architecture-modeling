@@ -42,8 +42,8 @@ def uint64(value: Any, name: str, positive: bool = False) -> int:
 
 def estimate(result: Any, mac_pj: float, dram_byte_pj: float, static_mw: float = 0.0) -> dict:
     if not isinstance(result, dict) or type(result.get("schema_version")) is not int \
-            or result["schema_version"] != 1:
-        raise ValueError("expected a simulator JSON object with schema_version 1")
+            or result["schema_version"] not in sim.RESULT_SCHEMA_VERSIONS:
+        raise ValueError("expected a simulator JSON object with schema_version 1 or 2")
     numerics = sim.result_numerics(result)
     if numerics is None:
         raise ValueError('simulator must report numerical_match true, or numerics "skipped" '
