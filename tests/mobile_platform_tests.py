@@ -85,26 +85,35 @@ class MobilePlatformTests(unittest.TestCase):
             self.assertAlmostEqual(write['requested_ns'], job['compute_end_ns'])
             self.assertAlmostEqual(write['end_ns'], job['finish_ns'])
 
-    def check_round_robin(self, report: dict, cores: int) -> int:
-        """Replay the arbiter: a grant at time T goes to the first core at or after
-        the round-robin pointer among requests issued strictly before T. With
-        none pending the bus was idle and the grant is the request just issued.
-        Returns the number of contended grants checked."""
-        transactions = sorted(report['bus_transactions'], key=lambda tx: tx['begin_ns'])
-        pointer, contended, previous_end = 0, 0, 0.0
+    def check_round_robin(self, report: dict, cores: int) -> tuple[int, int]:
+        """Replay the arbiter from bus_transactions, with every event stamped
+        (ns, delta cycles into that timestep). The bus decides one delta after
+        it frees, or one delta after a request reaches it idle, and grants the
+        first core at or after the round-robin pointer among requests stamped
+        before the decision. Returns (contended grants, contended grants won
+        by a request issued at the decision's own timestamp over an older one)."""
+        def stamp(tx: dict, event: str) -> tuple[float, int]:
+            return tx[event + '_ns'], tx[event + '_delta']
+
+        transactions = sorted(report['bus_transactions'], key=lambda tx: stamp(tx, 'begin'))
+        pointer, contended, same_instant, free = 0, 0, 0, None
         for index, grant in enumerate(transactions):
-            self.assertGreaterEqual(grant['begin_ns'], previous_end)
-            previous_end = grant['end_ns']
-            waiting = {tx['core'] for tx in transactions[index:]
-                       if tx['requested_ns'] < grant['begin_ns']}
-            if waiting:
-                expected = min(waiting, key=lambda core: (core - pointer) % cores)
-                self.assertEqual(grant['core'], expected, f'grant {index} at {grant["begin_ns"]} ns')
-                contended += len(waiting) > 1
-            else:
-                self.assertEqual(grant['requested_ns'], grant['begin_ns'])
+            pending = transactions[index:]
+            first = min(stamp(tx, 'requested') for tx in pending)
+            decision = (first[0], first[1] + 1)
+            if free is not None:
+                decision = max(decision, (free, 1))
+            self.assertEqual(stamp(grant, 'begin'), decision, f'grant {index}')
+            eligible = [tx for tx in pending if stamp(tx, 'requested') < decision]
+            expected = min({tx['core'] for tx in eligible}, key=lambda core: (core - pointer) % cores)
+            self.assertEqual(grant['core'], expected, f'grant {index} at {grant["begin_ns"]} ns')
+            if len(eligible) > 1:
+                contended += 1
+                same_instant += (grant['requested_ns'] == grant['begin_ns'] and
+                                 any(tx['requested_ns'] < grant['begin_ns'] for tx in eligible))
+            free = grant['end_ns']
             pointer = (grant['core'] + 1) % cores
-        return contended
+        return contended, same_instant
 
     def test_round_robin_bus_arbitration_by_core_id(self):
         # All four cores leave power gating in the same delta and request DRAM
@@ -121,7 +130,43 @@ class MobilePlatformTests(unittest.TestCase):
             with self.subTest(flags=flags):
                 report = run(*flags)
                 self.assertEqual(report, run(*flags))
-                self.assertGreater(self.check_round_robin(report, cores), 10)
+                self.assertGreater(self.check_round_robin(report, cores)[0], 10)
+
+    def test_request_raised_as_the_bus_frees_competes_in_that_decision(self):
+        # Core 2's write frees the bus at 760 ns and moves the pointer to core 3,
+        # whose compute ends at 760 ns. Its write request, raised in that
+        # timestep's first delta, is in the decision and beats core 1's read,
+        # waiting since 742 ns; it used to be deferred behind core 1 and core 2.
+        report = run('--cores', '4', '--jobs', '12', '--models', '1', '--bus-latency-ns', '8',
+                     '--bus-bytes-per-ns', '16', '--macs-per-cycle', '4', '--priorities', '0')
+        self.assertEqual(report['jobs'][3]['compute_end_ns'], 760)
+        transactions = report['bus_transactions']
+        freed = next(tx for tx in transactions if tx['end_ns'] == 760)
+        self.assertEqual(freed['core'], 2)
+        waiting = next(tx for tx in transactions if tx['core'] == 1 and tx['requested_ns'] == 742)
+        self.assertGreater(waiting['begin_ns'], 760)
+        grant = next(tx for tx in transactions if tx['begin_ns'] == 760)
+        self.assertEqual((grant['core'], grant['job'], grant['write']), (3, 3, True))
+        self.assertEqual((grant['requested_delta'], grant['begin_delta']), (0, 1))
+        self.check_round_robin(report, 4)
+        # Across a grid, every write request is raised in the first delta of
+        # the instant its compute ends, and the replay holds wherever such a
+        # request meets an older one.
+        same_instant = 0
+        for cores in (2, 3, 4):
+            for latency, bandwidth, rate in ((0, 16, 16), (4, 4, 4), (8, 16, 4), (13, 1, 64)):
+                flags = ('--cores', str(cores), '--jobs', '12', '--bus-latency-ns', str(latency),
+                         '--bus-bytes-per-ns', str(bandwidth), '--macs-per-cycle', str(rate),
+                         '--priorities', '0')
+                with self.subTest(flags=flags):
+                    report = run(*flags)
+                    for job in report['jobs']:
+                        write = next(tx for tx in report['bus_transactions']
+                                     if tx['job'] == job['id'] and tx['write'])
+                        self.assertEqual((write['requested_ns'], write['requested_delta']),
+                                         (job['compute_end_ns'], 0))
+                    same_instant += self.check_round_robin(report, cores)[1]
+        self.assertGreater(same_instant, 0)
 
     def test_concurrent_systemc_workers_reduce_compute_bound_makespan(self):
         flags = ('--jobs', '8', '--m', '8', '--n', '8', '--k', '64',

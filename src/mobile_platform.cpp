@@ -207,18 +207,24 @@ Options parse_options(int argc, char* argv[]) {
     return options;
 }
 
+// *_delta: delta cycles into the timestep (0 = the first evaluation at that time).
 struct BusRecord {
     U64 core = 0, job = 0, bytes = 0;
     bool write = false;
     double requested_ns = 0, begin_ns = 0, end_ns = 0;
+    sc_dt::uint64 requested_delta = 0, begin_delta = 0;
 };
 
 // One DRAM channel, one transfer at a time, held for latency plus data time.
 // Each core has at most one request outstanding (transfer() blocks), so the
-// pending set is one slot per core. Grants go round-robin by core id over the
-// requests issued in earlier delta cycles: the order processes run within a
-// delta is unspecified (IEEE 1666), so a request issued in the arbiter's own
-// delta waits for the next decision instead of racing it.
+// pending set is one slot per core. The arbiter decides one delta after the
+// bus frees, or one delta after a request reaches an idle bus, so a decision
+// sees every request of the delta before it, including those raised by timed
+// wakes at the instant the bus frees (a core whose compute ends then). It
+// grants round-robin by core id, from a pointer advanced past the last
+// grantee, among requests issued before the decision delta: the order processes
+// run within one delta is unspecified (IEEE 1666), so a request from the
+// decision delta itself waits for the next decision instead of racing it.
 class SharedBus final : public sc_module {
 public:
     sc_signal<bool> busy{"busy"};
@@ -232,7 +238,8 @@ public:
 
     void transfer(U64 core, U64 job, bool write, U64 bytes) {
         Request request;
-        request.record = {core, job, bytes, write, nanoseconds(sc_time_stamp()), 0, 0};
+        request.record = {core, job, bytes, write, nanoseconds(sc_time_stamp()), 0, 0,
+                          sc_delta_count_at_current_time(), 0};
         request.delta = sc_delta_count();
         auto& slot = pending_[static_cast<std::size_t>(core)];
         require(slot == nullptr, "core issued a second DRAM request while one is pending");
@@ -273,6 +280,7 @@ private:
             auto* request = grant();
             if (!request) { wait(available_); continue; }
             request->record.begin_ns = nanoseconds(sc_time_stamp());
+            request->record.begin_delta = sc_delta_count_at_current_time();
             busy.write(true);
             owner.write(static_cast<unsigned>(request->record.core + 1));
             wait(ns(duration(request->record.bytes)));
@@ -281,6 +289,7 @@ private:
             busy.write(false);
             owner.write(0);
             request->done.notify(SC_ZERO_TIME);
+            wait(SC_ZERO_TIME);
         }
     }
 };
@@ -646,7 +655,9 @@ void report(Platform& platform) {
         const auto& tx = platform.bus.records[i];
         std::cout << "{\"core\":" << tx.core << ",\"job\":" << tx.job << ",\"write\":" << (tx.write ? "true" : "false")
                   << ",\"bytes\":" << tx.bytes << ",\"requested_ns\":" << tx.requested_ns
-                  << ",\"begin_ns\":" << tx.begin_ns << ",\"end_ns\":" << tx.end_ns << '}';
+                  << ",\"requested_delta\":" << tx.requested_delta
+                  << ",\"begin_ns\":" << tx.begin_ns << ",\"begin_delta\":" << tx.begin_delta
+                  << ",\"end_ns\":" << tx.end_ns << '}';
     }
     std::cout << "],\"jobs\":[";
     for (std::size_t i = 0; i < platform.jobs.size(); ++i) {
