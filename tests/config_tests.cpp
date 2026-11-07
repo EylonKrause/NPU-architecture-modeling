@@ -112,6 +112,7 @@ void check_option_table() {
              "--rounding", "--relu", "--trace"})
         option(legacy);
     require(npu::is_switch(option("--relu")) && !npu::is_switch(option("--m")), "switches");
+    require(npu::find_option_by_flag("--rescale")->path == "quant.rescale", "rescale option");
     std::ostringstream help;
     npu::write_config_help(help);
     for (const auto& entry : table) {
@@ -120,7 +121,9 @@ void check_option_table() {
         require(entry.flag.empty() || help.str().find(entry.flag) != std::string::npos,
                 "help lists " + std::string(entry.flag));
     }
-    require(help.str().find("dense|palette|sparse") != std::string::npos, "help shows choices");
+    require(help.str().find("dense|palette|sparse") != std::string::npos &&
+                help.str().find("native|tosa-single|tosa-double") != std::string::npos,
+            "help shows choices");
     require(help.str().find("(default 16)") != std::string::npos, "help shows defaults");
 }
 
@@ -228,13 +231,15 @@ void check_loader(const std::string& example_path) {
     load_text(builder,
               "{\"name\":\"probe\",\"shape\":{\"m\":4},\"arch\":{\"frequency_mhz\":1.5e3,"
               "\"memory\":{\"burst_bytes\":64}},\"quant\":{\"relu\":true,\"rounding\":\"even\","
-              "\"shifts\":[1,2,3,4],\"weight_zero_points\":[-1,0,1,2]},"
-              "\"weights\":{\"encoding\":\"palette\"},\"sim\":{\"timing\":\"cycle\"}}");
+              "\"shifts\":[1,-2,3,62],\"weight_zero_points\":[-1,0,1,2],"
+              "\"rescale\":\"tosa-double\"},\"weights\":{\"encoding\":\"palette\"},"
+              "\"sim\":{\"timing\":\"cycle\"}}");
     const auto& c = builder.config;
     require(c.name == "probe" && c.shape.m == 4 && c.arch.frequency_mhz == 1500.0 &&
                 c.arch.memory.burst_bytes == 64 && c.quant.relu &&
                 c.quant.rounding == npu::Rounding::HalfToEven &&
-                c.quant.shifts == std::vector<std::uint32_t>{1, 2, 3, 4} &&
+                c.quant.shifts == std::vector<std::int32_t>{1, -2, 3, 62} &&
+                c.quant.rescale == npu::RescaleMode::TosaDouble &&
                 c.quant.weight_zero_points == std::vector<std::int32_t>{-1, 0, 1, 2} &&
                 c.weights.encoding == npu::WeightEncoding::Palette &&
                 c.sim.timing == npu::TimingMode::Cycle,
@@ -260,7 +265,9 @@ void check_loader(const std::string& example_path) {
         {"{\"shape\":{\"m\":18446744073709551616}}", "got 18446744073709551616"},
         {"{\"shape\":{\"m\":null}}", "got null"},
         {"{\"quant\":{\"input_zero\":2147483648}}", "quant.input_zero expects a signed 32-bit"},
-        {"{\"quant\":{\"multiplier\":4294967296}}", "quant.multiplier expects an unsigned 32-bit"},
+        {"{\"quant\":{\"multiplier\":2147483648}}", "quant.multiplier expects a signed 32-bit"},
+        {"{\"quant\":{\"rescale\":\"tosa\"}}",
+         "quant.rescale expects one of native|tosa-single|tosa-double, got \"tosa\""},
         {"{\"quant\":{\"relu\":1}}", "quant.relu expects true or false, got 1"},
         {"{\"quant\":{\"rounding\":\"floor\"}}",
          "quant.rounding expects one of away|even, got \"floor\""},
@@ -268,7 +275,7 @@ void check_loader(const std::string& example_path) {
         {"{\"arch\":{\"frequency_mhz\":\"fast\"}}", "arch.frequency_mhz expects a finite number"},
         {"{\"arch\":{\"frequency_mhz\":1e999}}", "got 1e999"},
         {"{\"quant\":{\"shifts\":3}}", "quant.shifts expects an array, got 3"},
-        {"{\"quant\":{\"shifts\":[1,-1]}}", "1:23: quant.shifts expects an unsigned 32-bit"},
+        {"{\"quant\":{\"shifts\":[1,2147483648]}}", "1:23: quant.shifts expects a signed 32-bit"},
         {"{\"quant\":{\"weight_zero_points\":[true]}}",
          "expects a signed 32-bit integer, got true"},
         {"{\"name\":5}", "name expects a string, got 5"},
@@ -319,7 +326,10 @@ void check_command_line_values() {
         {{"--m", "-1"}, "got '-1'"},
         {{"--m", "18446744073709551616"}, "got '18446744073709551616'"},
         {{"--input-zero", "2147483648"}, "--input-zero: expected a signed 32-bit integer"},
-        {{"--multiplier", "-1"}, "--multiplier: expected an unsigned 32-bit integer, got '-1'"},
+        {{"--multiplier", "2147483648"},
+         "--multiplier: expected a signed 32-bit integer, got '2147483648'"},
+        {{"--shift", "1.5"}, "--shift: expected a signed 32-bit integer, got '1.5'"},
+        {{"--rescale", "tosa"}, "--rescale: expected native|tosa-single|tosa-double, got 'tosa'"},
         {{"--frequency-mhz", "abc"}, "--frequency-mhz: expected a decimal number, got 'abc'"},
         {{"--frequency-mhz", "nan"}, "--frequency-mhz: expected a decimal number, got 'nan'"},
         {{"--frequency-mhz", "inf"}, "--frequency-mhz: expected a decimal number"},
@@ -346,6 +356,24 @@ void check_command_line_values() {
     builder.set(option("--input-zero"), "-129");
     require(builder.config.quant.input_zero == -129, "range checks belong to validate()");
     rejects([&] { npu::validate(builder.config); }, "input zero point must be signed INT8");
+    builder.set(option("--input-zero"), "0");
+    builder.set(option("--multiplier"), "-1");
+    builder.set(option("--shift"), "-3");
+    require(builder.config.quant.multiplier == -1 && builder.config.quant.shift == -3,
+            "multiplier and shift parse as signed");
+    rejects([&] { npu::validate(builder.config); },
+            "requantization multiplier must be in 0..2147483647");
+    builder.set(option("--multiplier"), "1");
+    rejects([&] { npu::validate(builder.config); },
+            "requantization shift must be in 0..31 for native rescale");
+    builder.set(option("--rescale"), "tosa-single");
+    rejects([&] { npu::validate(builder.config); },
+            "requantization shift must be in 2..62 for tosa-single rescale");
+    builder.set(option("--shift"), "62");
+    npu::validate(builder.config);
+    builder.set(option("--rounding"), "even");
+    rejects([&] { npu::validate(builder.config); }, "rounding even applies to native rescale only");
+    builder.set(option("--rounding"), "away");
     builder.set(option("--weight-encoding"), "sparse");
     builder.set(option("--timing"), "cycle");
     require(builder.config.weights.encoding == npu::WeightEncoding::Sparse &&
@@ -398,10 +426,11 @@ void check_echo() {
     c.quant.multiplier = 2147483647;
     c.quant.shift = 31;
     c.quant.relu = true;
+    c.quant.rescale = npu::RescaleMode::TosaSingle;
     c.quant.rounding = npu::Rounding::HalfToEven;
     c.quant.weight_zero_points = {-8, 0, 7, 1, 2, 3};
-    c.quant.multipliers = {0, 1, 4294967295U, 3, 4, 5};
-    c.quant.shifts = {0, 31, 2, 3, 4, 5};
+    c.quant.multipliers = {0, 1, 2147483647, 3, 4, 5};
+    c.quant.shifts = {0, 31, -2, 62, 4, -2147483647 - 1};
     c.sim.timing = npu::TimingMode::Cycle;
     c.sim.trace_path = "C:\\traces\\run 1.csv";
     const auto text = npu::config_json(c);
@@ -412,8 +441,10 @@ void check_echo() {
         require(builder.source(entry.path) == npu::OptionSource::File,
                 "echo assigns " + std::string(entry.path));
     const auto& r = builder.config;
-    require(r.shape.seed == (1ULL << 40) && r.arch.frequency_mhz == c.arch.frequency_mhz &&
-                r.quant.multipliers == c.quant.multipliers && r.name == c.name &&
+    require(r.shape.seed == (1ULL << 40) &&
+                r.arch.frequency_mhz == c.arch.frequency_mhz &&
+                r.quant.multipliers == c.quant.multipliers && r.quant.shifts == c.quant.shifts &&
+                r.quant.rescale == c.quant.rescale && r.name == c.name &&
                 r.sim.trace_path == c.sim.trace_path,
             "echoed values are exact");
 }

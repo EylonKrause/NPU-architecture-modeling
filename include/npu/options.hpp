@@ -21,7 +21,7 @@ template <class... T> struct FieldTypes {
 using OptionFieldTypes = FieldTypes<std::uint64_t, std::int32_t, std::uint32_t, double, bool,
                                     std::string, Rounding, RescaleMode, WeightEncoding,
                                     TimingMode, Dataflow, MemoryModel, Partition,
-                                    std::vector<std::int32_t>, std::vector<std::uint32_t>>;
+                                    std::vector<std::int32_t>>;
 using FieldRef = OptionFieldTypes::Mutable;
 using ConstFieldRef = OptionFieldTypes::Const;
 

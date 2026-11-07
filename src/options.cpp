@@ -83,20 +83,28 @@ const std::vector<ConfigOption> option_table = {
     {"--weight-zero", "quant.weight_zero", "", "weight zero point", NPU_FIELD(quant.weight_zero)},
     {"--output-zero", "quant.output_zero", "", "INT8 output zero point",
      NPU_FIELD(quant.output_zero)},
-    {"--multiplier", "quant.multiplier", "", "rescale multiplier; scale = multiplier / 2^shift",
+    {"--multiplier", "quant.multiplier", "",
+     "rescale multiplier in 0..2147483647; scale = multiplier / 2^shift",
      NPU_FIELD(quant.multiplier)},
-    {"--shift", "quant.shift", "", "rescale right shift", NPU_FIELD(quant.shift)},
+    {"--shift", "quant.shift", "", "rescale right shift: 0..31 native, 2..62 tosa modes",
+     NPU_FIELD(quant.shift)},
     {"--relu", "quant.relu", "", "clamp outputs below the output zero point",
      NPU_FIELD(quant.relu)},
-    {"--rounding", "quant.rounding", "", "rescale tie rounding: away from zero or to even",
-     NPU_FIELD(quant.rounding)},
+    {"--rescale", "quant.rescale", "",
+     "native rounds the magnitude of acc*multiplier per --rounding; tosa-single and "
+     "tosa-double are TOSA 1.0.2 RESCALE apply_scale_32 (TFLite single rounding and "
+     "gemmlowp double rounding with tosa shift = 31 - TFLite shift)",
+     NPU_FIELD(quant.rescale)},
+    {"--rounding", "quant.rounding", "",
+     "native rescale tie rounding: away from zero or to even", NPU_FIELD(quant.rounding)},
     {"", "quant.weight_zero_points", "",
      "per-channel weight zero points, one per output channel; --quantization-file sets "
      "all three per-channel vectors",
      NPU_FIELD(quant.weight_zero_points)},
     {"", "quant.multipliers", "", "per-channel multipliers, one per output channel",
      NPU_FIELD(quant.multipliers)},
-    {"", "quant.shifts", "", "per-channel shifts, one per output channel", NPU_FIELD(quant.shifts)},
+    {"", "quant.shifts", "", "per-channel signed shifts, one per output channel",
+     NPU_FIELD(quant.shifts)},
 
     {"--timing", "sim.timing", "",
      "event jumps across stage waits; cycle waits one cycle at a time", NPU_FIELD(sim.timing)},
@@ -209,8 +217,7 @@ void assign_json(const ConfigOption& option, Config& config, const JsonValue& va
                 json_error(origin, value, std::string(path) + " expects one of " +
                                               enum_choices<T>() + ", got " + describe(value));
             *field = *parsed;
-        } else if constexpr (std::is_same_v<T, std::vector<std::int32_t>> ||
-                             std::is_same_v<T, std::vector<std::uint32_t>>) {
+        } else if constexpr (std::is_same_v<T, std::vector<std::int32_t>>) {
             if (value.type != JsonValue::Type::Array)
                 json_error(origin, value, std::string(path) + " expects an array, got " +
                                               describe(value));
@@ -287,8 +294,7 @@ std::string default_text(const ConfigOption& option) {
     const bool empty = std::visit([](const auto* field) {
         using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
         if constexpr (std::is_same_v<T, std::string> ||
-                      std::is_same_v<T, std::vector<std::int32_t>> ||
-                      std::is_same_v<T, std::vector<std::uint32_t>>)
+                      std::is_same_v<T, std::vector<std::int32_t>>)
             return field->empty();
         else return false;
     }, view);

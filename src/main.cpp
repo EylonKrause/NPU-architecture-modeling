@@ -54,7 +54,8 @@ const RunOption run_options[] = {
      [](Arguments& a, std::string_view v) { a.builder.load_file(nonempty_path("--config", v)); }},
     {"--input", "PATH", "NPU1 tensor file: M N K, then activations, weights and bias",
      [](Arguments& a, std::string_view v) { a.input_path = nonempty_path("--input", v); }},
-    {"--quantization-file", "PATH", "NPUQ1 file: N, then weight_zero multiplier shift per channel",
+    {"--quantization-file", "PATH",
+     "NPUQ1 file: N, then weight_zero multiplier shift per channel; signed shifts",
      [](Arguments& a, std::string_view v) {
          a.quantization_path = nonempty_path("--quantization-file", v);
      }},
@@ -240,8 +241,8 @@ void input_quantization(Arguments& args) {
         if (!input_token(file, zero) || !input_token(file, multiplier) || !input_token(file, shift))
             throw std::invalid_argument("truncated quantization parameters");
         q.weight_zero_points.push_back(npu::parse_int32(zero, "NPUQ1 weight zero point"));
-        q.multipliers.push_back(npu::parse_uint32(multiplier, "NPUQ1 multiplier"));
-        q.shifts.push_back(npu::parse_uint32(shift, "NPUQ1 shift"));
+        q.multipliers.push_back(npu::parse_int32(multiplier, "NPUQ1 multiplier"));
+        q.shifts.push_back(npu::parse_int32(shift, "NPUQ1 shift"));
     }
     std::string extra;
     if (input_token(file, extra)) throw std::invalid_argument("unexpected trailing quantization token");

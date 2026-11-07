@@ -51,6 +51,14 @@ std::vector<Tile> make_tiles(const Config& config);
 Output reference(const Problem& problem, const Requant& quant);
 void compute_tile(const Problem& problem, const Requant& quant,
                   const Tile& tile, Output& output);
+// TOSA 1.0.2 apply_scale_32 (pseudocode/library/scale_helpers.tosac): returns
+// (value * multiplier + round) >> shift, an arithmetic shift, with
+// round = 2^(shift-1) moved 2^30 away from zero for double_round when
+// shift > 31. Throws std::invalid_argument when multiplier < 0 or shift is
+// outside 2..62, and std::overflow_error when value is outside
+// [-2^(shift-1), 2^(shift-1)), the spec's REQUIRE on the input.
+std::int32_t apply_scale_32(std::int32_t value, std::int32_t multiplier, std::int32_t shift,
+                            bool double_round);
 std::int8_t requantize(std::int32_t accumulator, const Requant& quant);
 std::int8_t requantize(std::int32_t accumulator, const Requant& quant,
                       std::uint64_t channel);

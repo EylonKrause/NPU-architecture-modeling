@@ -113,18 +113,22 @@ struct WeightFormat {
     std::uint64_t sparse_block = 8;
 };
 
+// scale = multiplier / 2^shift. Native accepts multiplier 0..INT32_MAX and
+// shift 0..31 and rounds the magnitude with `rounding`; the TOSA modes accept
+// shift 2..62 and round as TOSA 1.0.2 apply_scale_32.
 struct Requant {
     std::int32_t input_zero = -3;
     std::int32_t weight_zero = 2;
     std::int32_t output_zero = 0;
-    std::uint32_t multiplier = 1;
-    std::uint32_t shift = 7;
+    std::int32_t multiplier = 1;
+    std::int32_t shift = 7;
     bool relu = false;
+    RescaleMode rescale = RescaleMode::Native;
     Rounding rounding = Rounding::HalfAwayFromZero;
     // Per-channel overrides; each is empty or holds one entry per output channel.
     std::vector<std::int32_t> weight_zero_points;
-    std::vector<std::uint32_t> multipliers;
-    std::vector<std::uint32_t> shifts;
+    std::vector<std::int32_t> multipliers;
+    std::vector<std::int32_t> shifts;
 };
 
 struct SimOptions {

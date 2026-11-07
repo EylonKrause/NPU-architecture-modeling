@@ -26,6 +26,20 @@ void rejects(Function function, const std::string& message) {
     throw std::runtime_error("expected rejection: " + message);
 }
 
+// Only std::invalid_argument counts, and its text must contain `expected`.
+template <typename Function>
+void rejects_with(Function function, const std::string& expected) {
+    try {
+        function();
+    } catch (const std::invalid_argument& error) {
+        if (std::string(error.what()).find(expected) == std::string::npos)
+            throw std::runtime_error("message '" + std::string(error.what()) + "' lacks '" +
+                                     expected + "'");
+        return;
+    }
+    throw std::runtime_error("expected rejection containing '" + expected + "'");
+}
+
 void check_arithmetic() {
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
     require(npu::checked_add(maximum, 0) == maximum, "add boundary");
@@ -73,9 +87,11 @@ void check_requantization() {
             "negative output zero ReLU");
     q.shift = 32;
     rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "shift exceeds 31");
+    q.shift = -1;
+    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "negative native shift");
     q.shift = 0;
-    q.multiplier = UINT32_MAX;
-    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "multiplier exceeds INT32");
+    q.multiplier = -1;
+    rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "negative multiplier");
     q.multiplier = 1;
     q.input_zero = -129;
     rejects<std::invalid_argument>([&] { npu::requantize(0, q); }, "input zero is not INT8");
@@ -182,7 +198,7 @@ void check_per_channel_quantization() {
     q.relu = false;
     require(npu::requantize(-1, q, 1) == 4 && npu::requantize(-2, q, 2) == 4,
             "independently optional per-channel shifts and negative ties");
-    q.multipliers = {0, static_cast<std::uint32_t>(INT32_MAX), 2};
+    q.multipliers = {0, INT32_MAX, 2};
     q.shifts = {0, 0, 31};
     require(npu::requantize(INT32_MIN, q, 0) == 5 &&
                 npu::requantize(INT32_MAX, q, 1) == 127 &&
@@ -197,7 +213,7 @@ void check_per_channel_quantization() {
     q.multipliers.clear();
     q.shifts = {0, 32, 0};
     rejects<std::invalid_argument>([&] { npu::reference(p, q); },
-                                   "per-channel shift exceeds31");
+                                   "per-channel shift exceeds 31");
     q.shifts.clear();
     q.weight_zero_points = {0, 128, 0};
     rejects<std::invalid_argument>([&] { npu::reference(p, q); },
@@ -235,7 +251,7 @@ void check_int4() {
     c.quant.weight_zero_points = {-8, 7};
     npu::validate(c);
     c.weights.bits = 3;
-    rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be4 or8");
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be 4 or 8");
 }
 
 void check_fixture() {
@@ -293,7 +309,7 @@ void check_tiles_and_timing() {
     c.mapping.tile_m = c.mapping.tile_n = 4096;
     require(npu::make_tiles(c).size() == 1, "oversized mapping handles one edge tile");
     require(npu::scratchpad_bytes(c) == 2 * (15 + 21 + 28 + 5 * 35),
-            "oversized mapping allocates actual extents");
+            "oversized mapping allocates the clipped extents");
 }
 
 void check_reduction_panels_and_systolic() {
@@ -316,17 +332,17 @@ void check_reduction_panels_and_systolic() {
                 npu::tile_read_bytes(c, tile) == 89,
             "INT4 panel traffic includes first-panel bias and quant metadata");
     require(npu::scratchpad_bytes(c) == 268,
-            "SRAM fits one Kpanel plus persistent accumulators and metadata per slot");
+            "SRAM fits one K panel plus persistent accumulators and metadata per slot");
     require(npu::panel_compute_cycles(c, tile, 0) == 6 &&
                 npu::panel_compute_cycles(c, tile, 2) == 4 &&
                 npu::tile_compute_cycles(c, tile) == 16,
-            "vector pipeline charged for every Kpanel");
+            "vector pipeline charged for every K panel");
     c.arch.compute.array_rows = 2; c.arch.compute.array_cols = 3;
     require(npu::peak_macs_per_cycle(c) == 6 &&
                 npu::panel_compute_cycles(c, tile, 0) == 22 &&
                 npu::panel_compute_cycles(c, tile, 2) == 18 &&
                 npu::tile_compute_cycles(c, tile) == 62,
-            "systolic fold waves and fill/drain including edge Kpanel");
+            "systolic fold waves and fill/drain including edge K panel");
     rejects<std::invalid_argument>([&] { npu::panel_k(c, 3); }, "K block bounds");
     c.arch.compute.array_rows = 0;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "both array dimensions required");
@@ -334,15 +350,15 @@ void check_reduction_panels_and_systolic() {
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
     c.arch.compute.array_rows = c.arch.compute.array_cols = 0;
     c.mapping.tile_k = 4097;
-    rejects<std::invalid_argument>([&] { npu::validate(c); }, "Ktile bound");
+    rejects<std::invalid_argument>([&] { npu::validate(c); }, "K tile bound");
     c = npu::Config{};
     c.shape.m = 1; c.shape.n = 3; c.shape.k = 3;
     c.mapping.tile_m = 1; c.mapping.tile_n = 3; c.mapping.tile_k = 1; c.weights.bits = 4;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 21,
-            "odd INT4 nibble is padded separately in each DMApanel");
+            "odd INT4 nibble is padded separately in each DMA panel");
     c.mapping.tile_k = 0;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 20,
-            "fullK uses only one INT4 pad nibble");
+            "full K uses only one INT4 pad nibble");
 }
 
 void check_random_edges() {
@@ -430,6 +446,121 @@ void check_overflow_and_shapes() {
     }, "malformed output storage");
 }
 
+
+// TOSA 1.0.2 apply_scale_32. Golden vectors are quant_semantics.md section 5;
+// the remaining expectations come from TFLite MultiplyByQuantizedMultiplier
+// evaluated with tosa shift = 31 - TFLite shift (tests/quantization_tests.py).
+void check_tosa_rescale() {
+    struct Vector { std::int32_t value, multiplier, shift, single, twice; };
+    const Vector vectors[] = {
+        {3, 1861152495, 32, 1, 2},
+        {-6, 1073741824, 32, -1, -2},
+        {-3, 1073741824, 31, -1, -1},
+        {5038971, 2062684434, 33, 1209998, 1209999},
+        // Ties: single rounding rounds half toward +infinity; double rounding
+        // matches it up to shift 31 and rounds away from zero beyond.
+        {3, 1 << 30, 31, 2, 2},
+        {-1, 1 << 30, 31, 0, 0},
+        {2, 1 << 30, 32, 1, 1},
+        {-2, 1 << 30, 32, 0, -1},
+        // Extremes of value and multiplier.
+        {INT32_MIN, INT32_MAX, 62, -1, -1},
+        {INT32_MAX, INT32_MAX, 62, 1, 1},
+        {INT32_MIN, INT32_MAX, 33, -536870912, -536870912},
+        {INT32_MAX, INT32_MAX, 40, 4194304, 4194304},
+        {INT32_MIN, 1, 33, 0, 0},
+        {INT32_MIN, 0, 62, 0, 0},
+        {-2, 1, 2, 0, 0},
+    };
+    for (const auto& v : vectors) {
+        const auto label = std::to_string(v.value) + "*" + std::to_string(v.multiplier) + ">>" +
+                           std::to_string(v.shift);
+        require(npu::apply_scale_32(v.value, v.multiplier, v.shift, false) == v.single,
+                "single rounding " + label);
+        require(npu::apply_scale_32(v.value, v.multiplier, v.shift, true) == v.twice,
+                "double rounding " + label);
+    }
+    // The REQUIRE clauses of apply_scale_32.
+    rejects_with([] { npu::apply_scale_32(0, -1, 31, false); }, "nonnegative");
+    rejects_with([] { npu::apply_scale_32(0, 1, 1, false); }, "2..62");
+    rejects_with([] { npu::apply_scale_32(0, 1, 63, true); }, "2..62");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(2, 1, 2, false); },
+                                 "shift 2 takes values in [-2, 2)");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(-3, 1, 2, true); },
+                                 "shift 2 lower input bound");
+    rejects<std::overflow_error>([] { npu::apply_scale_32(INT32_MIN, 1, 31, false); },
+                                 "shift 31 takes values in [-2^30, 2^30)");
+    // -0.5 and 0.5 - 2^-32: single rounding sends both to 0.
+    require(npu::apply_scale_32(INT32_MIN, 1, 32, false) == 0 &&
+                npu::apply_scale_32(INT32_MAX, 1, 32, false) == 0 &&
+                npu::apply_scale_32(INT32_MIN, 1, 32, true) == -1,
+            "shift 32 accepts every INT32 value");
+
+    // Through requantize: output zero point, ReLU and INT8 saturation follow
+    // the scale exactly as in native mode.
+    npu::Requant q;
+    q.input_zero = q.weight_zero = q.output_zero = 0;
+    for (const auto mode : {npu::RescaleMode::TosaSingle, npu::RescaleMode::TosaDouble}) {
+        q.rescale = mode;
+        const bool twice = mode == npu::RescaleMode::TosaDouble;
+        for (const auto& v : vectors) {
+            q.multiplier = v.multiplier;
+            q.shift = v.shift;
+            const auto expected = std::clamp<std::int32_t>(twice ? v.twice : v.single, -128, 127);
+            require(npu::requantize(v.value, q) == expected, "TOSA requantize to INT8");
+        }
+    }
+    // -1.5 from -6 * 4 / 2^4: native rounds the magnitude away from zero.
+    q.multiplier = 4;
+    q.shift = 4;
+    q.rescale = npu::RescaleMode::Native;
+    require(npu::requantize(-6, q) == -2, "native rounds the magnitude");
+    q.rescale = npu::RescaleMode::TosaSingle;
+    require(npu::requantize(-6, q) == -1, "TOSA single rounds half toward +infinity");
+    q.output_zero = 9;
+    q.relu = true;
+    // 7 * 4 / 16 = 1.75 rounds to 2; shift 4 accepts inputs in [-8, 8) only.
+    require(npu::requantize(-6, q) == 9 && npu::requantize(7, q) == 11, "TOSA with ReLU");
+    rejects<std::overflow_error>([&] { npu::requantize(8, q); }, "shift 4 input range");
+    q.relu = false;
+    q.output_zero = 0;
+    // Signed per-channel shifts across the whole TOSA range.
+    q.multipliers = {1 << 30, 1 << 30, INT32_MAX};
+    q.shifts = {31, 32, 62};
+    require(npu::requantize(-3, q, 0) == -1 && npu::requantize(-2, q, 1) == 0 &&
+                npu::requantize(INT32_MAX, q, 2) == 1,
+            "per-channel TOSA shifts");
+    q.rescale = npu::RescaleMode::TosaDouble;
+    require(npu::requantize(-2, q, 1) == -1, "per-channel double rounding");
+    q.shifts = {31, 1, 62};
+    rejects_with([&] { npu::requantize(0, q, 1); },
+                 "per-channel shifts must be in 2..62 for tosa-double rescale");
+    q.shifts = {31, 32, 63};
+    rejects_with([&] { npu::requantize(0, q, 2); }, "2..62");
+    q.multipliers.clear();
+    q.shifts.clear();
+    q.multiplier = 1;
+    q.shift = 1;
+    rejects_with([&] { npu::requantize(0, q); },
+                 "requantization shift must be in 2..62 for tosa-double rescale");
+    q.shift = 40;
+    q.rounding = npu::Rounding::HalfToEven;
+    rejects_with([&] { npu::requantize(0, q); }, "rounding even applies to native rescale only");
+    q.rounding = npu::Rounding::HalfAwayFromZero;
+
+    // The reference reports an accumulator outside the apply_scale_32 range.
+    npu::Problem p;
+    p.m = p.n = p.k = 1;
+    p.activations = {10};
+    p.weights = {1};
+    p.bias = {0};
+    q.multiplier = 3;
+    q.shift = 5;
+    require(npu::reference(p, q).quantized == std::vector<std::int8_t>{1}, "30 / 32 rounds to 1");
+    q.shift = 4;
+    rejects<std::overflow_error>([&] { npu::reference(p, q); }, "10 is outside [-8, 8)");
+}
+
 void check_validation() {
     npu::validate(npu::Config{});
     const auto bad = [](const std::function<void(npu::Config&)>& mutation) {
@@ -506,6 +637,7 @@ int main() {
         check_reduction_panels_and_systolic();
         check_random_edges();
         check_overflow_and_shapes();
+        check_tosa_rescale();
         check_validation();
         std::cout << "core tests: all checks passed\n";
         return 0;

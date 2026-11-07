@@ -5,6 +5,7 @@
 #include <cmath>
 #include <limits>
 #include <stdexcept>
+#include <string>
 
 namespace npu {
 namespace {
@@ -19,26 +20,44 @@ void require(bool condition, const char* message) {
     if (!condition) throw std::invalid_argument(message);
 }
 
+[[noreturn]] void fail(const std::string& message) { throw std::invalid_argument(message); }
+
+std::string range_text(std::int64_t low, std::int64_t high) {
+    return std::to_string(low) + ".." + std::to_string(high);
+}
+
+// Shift range of a rescale mode: native keeps the original 0..31; the TOSA
+// modes take the apply_scale_32 range 2..62.
+struct ShiftRange { std::int32_t low, high; };
+ShiftRange shift_range(RescaleMode mode) {
+    return mode == RescaleMode::Native ? ShiftRange{0, 31} : ShiftRange{2, 62};
+}
+
+std::string shift_rule(RescaleMode mode) {
+    const auto range = shift_range(mode);
+    return range_text(range.low, range.high) + " for " + std::string(to_string(mode)) + " rescale";
+}
+
+bool int8_value(std::int32_t value) { return value >= -128 && value <= 127; }
+
 void validate_quant(const Requant& quant) {
-    require(quant.input_zero >= -128 && quant.input_zero <= 127,
-            "input zero point must be signed INT8");
-    require(quant.weight_zero >= -128 && quant.weight_zero <= 127,
-            "weight zero point must be signed INT8");
-    require(quant.output_zero >= -128 && quant.output_zero <= 127,
-            "output zero point must be signed INT8");
-    require(quant.multiplier <= static_cast<std::uint32_t>(
-                std::numeric_limits<std::int32_t>::max()),
-            "requantization multiplier must be at most INT32_MAX");
-    require(quant.shift <= 31, "requantization shift must be in 0..31");
+    require(int8_value(quant.input_zero), "input zero point must be signed INT8");
+    require(int8_value(quant.weight_zero), "weight zero point must be signed INT8");
+    require(int8_value(quant.output_zero), "output zero point must be signed INT8");
+    require(quant.multiplier >= 0, "requantization multiplier must be in 0..2147483647");
+    const auto range = shift_range(quant.rescale);
+    if (quant.shift < range.low || quant.shift > range.high)
+        fail("requantization shift must be in " + shift_rule(quant.rescale));
+    require(quant.rescale == RescaleMode::Native || quant.rounding == Rounding::HalfAwayFromZero,
+            "rounding even applies to native rescale only; tosa-single and tosa-double fix "
+            "their own rounding");
     for (const auto value : quant.weight_zero_points)
-        require(value >= -128 && value <= 127,
-                "per-channel weight zero points must be signed INT8");
+        require(int8_value(value), "per-channel weight zero points must be signed INT8");
     for (const auto value : quant.multipliers)
-        require(value <= static_cast<std::uint32_t>(
-                    std::numeric_limits<std::int32_t>::max()),
-                "per-channel multipliers must be at most INT32_MAX");
+        require(value >= 0, "per-channel multipliers must be in 0..2147483647");
     for (const auto value : quant.shifts)
-        require(value <= 31, "per-channel shifts must be in 0..31");
+        if (value < range.low || value > range.high)
+            fail("per-channel shifts must be in " + shift_rule(quant.rescale));
 }
 
 void validate_quant_channels(const Requant& quant, std::uint64_t channels) {
@@ -191,33 +210,84 @@ std::uint64_t compute_cycles(const Config& config, std::uint64_t rows,
     return total;
 }
 
-std::int8_t requantize_unchecked(std::int32_t accumulator, const Requant& quant,
-                       std::uint64_t channel) {
-    if ((!quant.multipliers.empty() && channel >= quant.multipliers.size()) ||
-        (!quant.shifts.empty() && channel >= quant.shifts.size()))
-        throw std::out_of_range("requantization channel is outside parameter vectors");
-    const auto index = static_cast<std::size_t>(channel);
-    const auto multiplier = quant.multipliers.empty() ? quant.multiplier :
-        quant.multipliers.at(index);
-    const auto shift = quant.shifts.empty() ? quant.shift : quant.shifts.at(index);
+// C++17 leaves >> of a negative value implementation-defined; TOSA specifies
+// an arithmetic shift, which is floor division by 2^shift.
+std::int64_t floor_shift(std::int64_t value, std::int32_t shift) {
+    return value >= 0 ? value >> shift : -((-(value + 1)) >> shift) - 1;
+}
+
+// Requantization arithmetic. The TOSA modes are apply_scale_32 from TOSA 1.0.2
+// RESCALE (scale32, int32 input, int8 output). With tosa.shift = 31 - tfl.shift
+// and the same Q31 multiplier they are bit-identical to:
+//   tosa-single: TFLite MultiplyByQuantizedMultiplier built with
+//                TFLITE_SINGLE_ROUNDING, and CMSIS-NN arm_nn_requantize built
+//                with CMSIS_NN_USE_SINGLE_ROUNDING (ties toward +infinity);
+//   tosa-double: the TFLite default, gemmlowp SaturatingRoundingDoublingHighMul
+//                then RoundingDivideByPOT, and the CMSIS-NN default (ties up at
+//                bit 31, then away from zero at the final shift).
+// RESCALE.tosac at tag v1.0.2 sign-extends `value` from itself; main reads
+// in_value. The int32 accumulator here is the in_value of that corrected form,
+// with input_zp = 0. Native rounds the magnitude of acc * multiplier, ties
+// away from zero or to even; it matches neither TOSA mode on negative ties.
+std::int32_t scale32(std::int32_t value, std::int32_t multiplier, std::int32_t shift,
+                     bool double_round) {
+    const auto half = INT64_C(1) << (shift - 1);
+    if (value < -half || value >= half)
+        throw std::overflow_error("accumulator " + std::to_string(value) + " is outside [-" +
+                                  std::to_string(half) + ", " + std::to_string(half) +
+                                  "), the apply_scale_32 input range for shift " +
+                                  std::to_string(shift));
+    auto round = half;
+    if (double_round && shift > 31) round += value >= 0 ? INT64_C(1) << 30 : -(INT64_C(1) << 30);
+    // |value| <= 2^31 and multiplier < 2^31, so the sum stays below 2^63, and
+    // the input range keeps the result below 2^30 in magnitude.
+    return static_cast<std::int32_t>(
+        floor_shift(static_cast<std::int64_t>(value) * multiplier + round, shift));
+}
+
+std::int64_t native_scale(std::int32_t accumulator, std::int32_t multiplier,
+                          std::int32_t shift, Rounding rounding) {
     // INT32 * at most INT32_MAX fits in INT64, including INT32_MIN.
     const auto product = static_cast<std::int64_t>(accumulator) * multiplier;
     const auto magnitude = static_cast<std::uint64_t>(product < 0 ? -product : product);
     auto rounded_magnitude = magnitude;
     if (shift != 0) {
-        const auto half = UINT64_C(1) << (shift - 1);
-        if (quant.rounding == Rounding::HalfToEven) {
-            const auto quotient = magnitude >> shift;
-            const auto remainder = magnitude & ((UINT64_C(1) << shift) - 1);
+        const auto bits = static_cast<unsigned>(shift);
+        const auto half = UINT64_C(1) << (bits - 1);
+        if (rounding == Rounding::HalfToEven) {
+            const auto quotient = magnitude >> bits;
+            const auto remainder = magnitude & ((UINT64_C(1) << bits) - 1);
             const bool increment = remainder > half ||
                 (remainder == half && (quotient & UINT64_C(1)) != 0);
             rounded_magnitude = quotient + static_cast<std::uint64_t>(increment);
         } else {
-            rounded_magnitude = (magnitude + half) >> shift;
+            rounded_magnitude = (magnitude + half) >> bits;
         }
     }
-    auto scaled = product < 0 ? -static_cast<std::int64_t>(rounded_magnitude) :
-                               static_cast<std::int64_t>(rounded_magnitude);
+    return product < 0 ? -static_cast<std::int64_t>(rounded_magnitude) :
+                         static_cast<std::int64_t>(rounded_magnitude);
+}
+
+std::int8_t requantize_unchecked(std::int32_t accumulator, const Requant& quant,
+                                 std::uint64_t channel) {
+    if ((!quant.multipliers.empty() && channel >= quant.multipliers.size()) ||
+        (!quant.shifts.empty() && channel >= quant.shifts.size()))
+        throw std::out_of_range("requantization channel is outside parameter vectors");
+    const auto index = static_cast<std::size_t>(channel);
+    const auto multiplier = quant.multipliers.empty() ? quant.multiplier : quant.multipliers[index];
+    const auto shift = quant.shifts.empty() ? quant.shift : quant.shifts[index];
+    std::int64_t scaled = 0;
+    switch (quant.rescale) {
+    case RescaleMode::Native:
+        scaled = native_scale(accumulator, multiplier, shift, quant.rounding);
+        break;
+    case RescaleMode::TosaSingle:
+        scaled = scale32(accumulator, multiplier, shift, false);
+        break;
+    case RescaleMode::TosaDouble:
+        scaled = scale32(accumulator, multiplier, shift, true);
+        break;
+    }
     scaled += quant.output_zero;
     if (quant.relu) scaled = std::max(scaled, static_cast<std::int64_t>(quant.output_zero));
     return static_cast<std::int8_t>(std::clamp<std::int64_t>(scaled, -128, 127));
@@ -406,6 +476,13 @@ std::vector<Tile> make_tiles(const Config& config) {
         }
     }
     return tiles;
+}
+
+std::int32_t apply_scale_32(std::int32_t value, std::int32_t multiplier, std::int32_t shift,
+                            bool double_round) {
+    require(multiplier >= 0, "apply_scale_32 multiplier must be nonnegative");
+    require(shift >= 2 && shift <= 62, "apply_scale_32 shift must be in 2..62");
+    return scale32(value, multiplier, shift, double_round);
 }
 
 std::int8_t requantize(std::int32_t accumulator, const Requant& quant) {
