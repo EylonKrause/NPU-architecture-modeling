@@ -50,7 +50,14 @@ if(NPU_FETCH_SYSTEMC)
     URL "${NPU_SYSTEMC_URL}"
     URL_HASH SHA256=${NPU_SYSTEMC_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+  # GNUInstallDirs has set CMAKE_INSTALL_DOCDIR to this project's directory, and SystemC's
+  # cache default cannot override a normal variable: without this, its README, LICENSE and
+  # NOTICE install as this project's documentation.
+  set(_npu_docdir "${CMAKE_INSTALL_DOCDIR}")
+  set(NPU_SYSTEMC_DOCDIR "${CMAKE_INSTALL_DATAROOTDIR}/doc/systemc")
+  set(CMAKE_INSTALL_DOCDIR "${NPU_SYSTEMC_DOCDIR}")
   FetchContent_MakeAvailable(systemc)
+  set(CMAKE_INSTALL_DOCDIR "${_npu_docdir}")
   npu_sanitize_systemc(systemc)
   if(MSVC)
     set(NPU_SYSTEMC_SOURCE_DIR "${systemc_SOURCE_DIR}")
@@ -112,6 +119,16 @@ if(BUILD_TESTING)
   npu_add_python_test(tools.autotune
     SCRIPT tests/autotune_tests.py BINARY npu-sim)
 
+  set(_npu_install_args
+    --cmake "${CMAKE_COMMAND}" --build-dir "${PROJECT_BINARY_DIR}" --config "$<CONFIG>"
+    --bindir "${CMAKE_INSTALL_BINDIR}" --docdir "${CMAKE_INSTALL_DOCDIR}"
+    --tools $<TARGET_FILE_NAME:npu-sim> $<TARGET_FILE_NAME:npu-tlm-demo>
+            $<TARGET_FILE_NAME:npu-transformer-demo> $<TARGET_FILE_NAME:npu-mobile-demo>)
+  if(NPU_FETCH_SYSTEMC)
+    list(APPEND _npu_install_args --systemc-docdir "${NPU_SYSTEMC_DOCDIR}")
+  endif()
+  npu_add_python_test(build.install
+    SCRIPT tests/install_tests.py ARGS ${_npu_install_args})
   npu_add_python_test(ci.systemc-cache
     SCRIPT tests/ci_cache_tests.py TIMEOUT 30)
   if("undefined" IN_LIST NPU_SANITIZERS)

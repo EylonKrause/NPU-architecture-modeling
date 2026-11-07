@@ -76,11 +76,13 @@ function(npu_link_systemc target)
 endfunction()
 
 # npu_add_tool(<name> <source>...): a SystemC executable linked with npu_core and installed
-# to ${CMAKE_INSTALL_BINDIR}.
+# to ${CMAKE_INSTALL_BINDIR} as install component `npu`. A fetched SystemC installs its
+# headers, library and CMake package as components lib and dev and its documentation as doc,
+# so `cmake --install <build> --component npu` installs the tools alone.
 function(npu_add_tool name)
   add_executable(${name} ${ARGN})
   target_link_libraries(${name} PRIVATE npu_core)
   npu_project_target(${name})
   npu_link_systemc(${name})
-  install(TARGETS ${name} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}")
+  install(TARGETS ${name} RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}" COMPONENT npu)
 endfunction()
