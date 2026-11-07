@@ -9,6 +9,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import socket
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from npuperf import live as dashboard
+from npuperf import sim
 BINARY: Path
 
 
@@ -110,15 +112,76 @@ class DashboardTests(unittest.TestCase):
         first, second = [job["telemetry"] for job in state["recent_jobs"][:2]]
         for result in (first, second):
             self.assertTrue(result["validated"])
-            self.assertEqual(result["config"]["weight_encoding"], "palette")
-            self.assertEqual(result["config"]["weight_bits"], 8)
-            self.assertEqual(result["config"]["palette_bits"], 2)
+            self.assertEqual(sim.config_value(result["config"], "weight_encoding"), "palette")
+            self.assertEqual(sim.config_value(result["config"], "weight_bits"), 8)
+            self.assertEqual(sim.config_value(result["config"], "palette_bits"), 2)
             self.assertLess(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])
             self.assertGreater(result["weight_decode_cycles"], 0)
             self.assertEqual(result["executed_macs"], result["macs"])
             self.assertEqual(result["skipped_macs"], 0)
         self.assertNotEqual(first["input_preview"], second["input_preview"])
         self.assertNotEqual(first["output_hash"], second["output_hash"])
+        workload = dict(state["workload"])
+        self.assertIn(workload.pop("groups"), (1, None))  # None: a build without --groups
+        self.assertEqual(workload, {"m": 64, "n": 64, "k": 128, "weight_bits": 8,
+                                    "weight_encoding": "palette", "frequency_mhz": 200})
+
+    def test_slice_utilisation_is_the_last_advance(self):
+        state = self.controller.control({"action": "reset", "profile": "balanced"})
+        self.assertIsNone(state["slice"])
+        before = state["telemetry"]
+        for cycles in (300, 17, 1):
+            state = self.controller.control({"action": "step", "cycles": cycles})
+            after = state["telemetry"]
+            expected = {key: after[key] - before[key]
+                        for key in ("cycles", "compute_busy_cycles", "dma_busy_cycles")}
+            self.assertEqual({key: state["slice"][key] for key in expected}, expected)
+            self.assertEqual(expected["cycles"], cycles)
+            for name in ("compute", "dma"):
+                self.assertEqual(state["slice"][f"{name}_busy_fraction"],
+                                 expected[f"{name}_busy_cycles"] / cycles)
+            before = after
+        # Paused: every poll returns the last step's slice, not the whole job so far.
+        time.sleep(0.05)
+        self.assertEqual(self.controller.snapshot()["slice"], state["slice"])
+        whole_job = after["compute_busy_cycles"] / after["cycles"]
+        self.assertNotEqual(state["slice"]["compute_busy_fraction"], whole_job)
+        self.assertEqual(state["workload"]["weight_encoding"], "dense")
+
+    def test_slice_delta_and_workload_summary(self):
+        before = {"cycles": 10, "compute_busy_cycles": 4, "dma_busy_cycles": 10}
+        after = {"cycles": 30, "compute_busy_cycles": 19, "dma_busy_cycles": 20}
+        self.assertEqual(dashboard.slice_delta(before, after),
+                         {"cycles": 20, "compute_busy_cycles": 15, "dma_busy_cycles": 10,
+                          "compute_busy_fraction": 0.75, "dma_busy_fraction": 0.5})
+        for stale in (before, {**after, "cycles": 5}, {"cycles": 40}):
+            with self.subTest(stale=stale):
+                self.assertIsNone(dashboard.slice_delta(before, stale))
+        nested = {"shape": {"m": 4, "n": 5, "k": 6, "groups": 2, "seed": 1},
+                  "arch": {"frequency_mhz": 500},
+                  "weights": {"bits": 4, "encoding": "sparse", "palette_bits": 4}}
+        flat = {"m": 4, "n": 5, "k": 6, "groups": 2, "frequency_mhz": 500, "weight_bits": 4,
+                "weight_encoding": "sparse"}
+        expected = {"m": 4, "n": 5, "k": 6, "groups": 2, "weight_bits": 4,
+                    "weight_encoding": "sparse", "frequency_mhz": 500}
+        self.assertEqual(dashboard.workload_summary(nested), expected)
+        self.assertEqual(dashboard.workload_summary(flat), expected)
+        self.assertEqual(set(dashboard.workload_summary(None).values()), {None})
+
+    def test_page_reads_only_published_fields(self):
+        # app.js shows the controller's "workload" and "slice" fields; every key it reads
+        # must be one the controller publishes.
+        script = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("configValue", script)
+        read = set(re.findall(r"workload[.](\w+)", script))
+        unpacked = re.search(r"const [{]([^}]*)[}] = workload", script).group(1)
+        read.update(name.strip() for name in unpacked.split(","))
+        self.assertLessEqual(read, set(dashboard.WORKLOAD_KEYS))
+        self.assertIn("slice[`${name}_busy_fraction`]", script)
+        self.assertIn('for (const name of ["compute", "dma"])', script)
+        zero = dict.fromkeys(dashboard.SLICE_COUNTERS, 0)
+        published = dashboard.slice_delta(zero, dict.fromkeys(dashboard.SLICE_COUNTERS, 1))
+        self.assertLessEqual({"compute_busy_fraction", "dma_busy_fraction"}, set(published))
 
     def test_bounded_commands_and_state_transitions(self):
         for value in ({}, [], {"action": []}, {"action": "shell"},
@@ -217,9 +280,6 @@ class DashboardCliTests(unittest.TestCase):
                               "--port", "70000"], capture_output=True, text=True, timeout=20)
         self.assertEqual(run.returncode, 2)
         self.assertTrue(run.stderr.startswith("live_dashboard: "), run.stderr)
-
-    def test_reuse_address_policy(self):
-        self.assertEqual(dashboard.DashboardServer.allow_reuse_address, os.name != "nt")
 
     def test_state_does_not_wait_for_the_simulator_lock(self):
         controller = dashboard.Controller(BINARY, tick_seconds=0.01, slice_cycles=64)

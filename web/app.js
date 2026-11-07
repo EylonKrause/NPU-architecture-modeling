@@ -1,12 +1,12 @@
 "use strict";
 // Binds the controller state (npuperf/live.py) and the npu-sim live snapshot
-// (schema_version 1, src/main.cpp snapshot_json) to the page.
+// (schema_version 1, src/main.cpp snapshot_json) to the page. The controller resolves the
+// config (flat or option-table) into "workload" and the last advance into "slice".
 
 const element = id => document.getElementById(id);
 const format = value => typeof value === "number" ? value.toLocaleString("en-US") : "—";
 let state = null;
 let busy = false;
-let previous = null;  // last telemetry, for per-slice utilisation
 
 function bytes(value) {
   if (typeof value !== "number") return "—";
@@ -20,46 +20,31 @@ function message(text, error = false) {
   element("message").classList.toggle("error", error);
 }
 
-// Config value by name: a flat key or a leaf of a nested config object.
-function configValue(config, name) {
-  if (!config || typeof config !== "object") return undefined;
-  if (name in config && typeof config[name] !== "object") return config[name];
-  for (const value of Object.values(config)) {
-    const found = configValue(value, name);
-    if (found !== undefined) return found;
-  }
-  return undefined;
-}
-
-// Busy fraction over the last slice; falls back to the whole job at a job boundary.
-function sliceFraction(t, key) {
-  if (previous && t.cycles > previous.cycles && t[key] >= previous[key])
-    return (t[key] - previous[key]) / (t.cycles - previous.cycles);
-  return t.cycles ? t[key] / t.cycles : 0;
-}
-
-function renderTelemetry(t) {
-  const config = t.config || {};
+function renderTelemetry(t, workload, slice) {
   element("cycles").textContent = format(t.cycles);
   element("macs").textContent = format(t.macs);
   const traffic = typeof t.read_bytes === "number" && typeof t.write_bytes === "number";
   element("traffic").textContent = traffic ? bytes(t.read_bytes + t.write_bytes) : "—";
   element("traffic-detail").textContent = `${bytes(t.read_bytes)} read / ${bytes(t.write_bytes)} write`;
-  const m = configValue(config, "m"), n = configValue(config, "n"), k = configValue(config, "k");
-  const bits = configValue(config, "weight_bits"), encoding = configValue(config, "weight_encoding");
-  element("workload-shape").textContent = m
-    ? `${m} × ${n} × ${k} · INT${bits || 8} weights · ${encoding || "dense"}` : "—";
+  const {m, n, k, groups} = workload;
+  const bits = workload.weight_bits, encoding = workload.weight_encoding;
+  const shape = `${m} × ${n} × ${k}` + (groups > 1 ? ` · ${groups} groups` : "");
+  element("workload-shape").textContent = m && bits && encoding
+    ? `${shape} · INT${bits} weights · ${encoding}` : "—";
   element("compression-detail").textContent = encoding && encoding !== "dense"
     ? `${encoding} · ${bytes(t.encoded_weight_storage_bytes)} encoded / ` +
       `${bytes(t.dense_weight_storage_bytes)} dense weights · ` +
       `${format(t.weight_decode_cycles)} decode cycles · ${format(t.skipped_macs)} MACs skipped`
     : "Dense weights";
   element("target-time").textContent = typeof t.modeled_latency_ns === "number"
-    ? `${format(Math.round(t.modeled_latency_ns))} ns at ${format(configValue(config, "frequency_mhz"))} MHz`
+    ? `${format(Math.round(t.modeled_latency_ns))} ns at ${format(workload.frequency_mhz)} MHz`
     : "—";
-  for (const [name, key] of [["compute", "compute_busy_cycles"], ["dma", "dma_busy_cycles"]]) {
-    const percent = Math.min(100, 100 * sliceFraction(t, key));
-    element(`${name}-util`).textContent = t.cycles ? `${percent.toFixed(1)}%` : "—";
+  // Busy fraction over the last advance (a scheduler tick or a Step), so a paused page
+  // keeps showing that slice rather than the whole job so far.
+  for (const name of ["compute", "dma"]) {
+    const fraction = slice ? slice[`${name}_busy_fraction`] : undefined;
+    const percent = typeof fraction === "number" ? Math.min(100, 100 * fraction) : 0;
+    element(`${name}-util`).textContent = typeof fraction === "number" ? `${percent.toFixed(1)}%` : "—";
     element(`${name}-bar`).value = percent;
   }
   const active = Array.isArray(t.active_stages) ? t.active_stages : [];
@@ -126,7 +111,7 @@ function render(value) {
   element("status").textContent = value.state[0].toUpperCase() + value.state.slice(1);
   element("status-dot").className = value.state;
   const schemaOk = t.schema_version === undefined || t.schema_version === 1;
-  if (schemaOk) renderTelemetry(t);
+  if (schemaOk) renderTelemetry(t, value.workload || {}, value.slice);
   renderHistory(value);
   element("jobs").textContent = format(value.jobs_completed);
   const slice = value.slice_cycles || 256;
@@ -145,7 +130,6 @@ function render(value) {
   else if (value.state === "paused") message(`Paused at cycle ${format(t.cycles)}`);
   else if (value.state === "stopped") message("Stopped");
   else message("Idle");
-  previous = typeof t.cycles === "number" ? t : null;
 }
 
 async function control(action) {

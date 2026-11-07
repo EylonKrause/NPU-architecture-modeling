@@ -198,8 +198,9 @@ class LauncherTests(unittest.TestCase):
                 self.assertFalse(build.exists(), "A busy port should fail before configuring a build.")
 
     def test_port_is_reusable_right_after_a_restart(self):
-        # A browser keep-alive connection leaves the old socket in TIME_WAIT; the next
-        # launch must still bind (POSIX SO_REUSEADDR, the same option the server uses).
+        # The server closes the connection first ("Connection: close"), so its side of the
+        # connection sits in TIME_WAIT on the dashboard port. On POSIX the next bind
+        # succeeds only with SO_REUSEADDR, the option DashboardServer sets.
         sys.path.insert(0, str(ROOT))
         from npuperf import live
         first = live.DashboardServer(("127.0.0.1", 0))
@@ -208,8 +209,10 @@ class LauncherTests(unittest.TestCase):
         thread.start()
         client = socket.create_connection(("127.0.0.1", port), timeout=3)
         try:
-            client.sendall(b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n\r\n" % port)
-            client.recv(4096)
+            client.sendall(b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
+                           b"Connection: close\r\n\r\n" % port)
+            while client.recv(4096):  # read to EOF: the server has closed its end
+                pass
         finally:
             first.shutdown()
             first.server_close()

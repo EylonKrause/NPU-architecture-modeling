@@ -54,6 +54,28 @@ PROFILES = {
                                        "decode cycles charged."},
 }
 MAX_STEP = 10000
+SLICE_COUNTERS = ("cycles", "compute_busy_cycles", "dma_busy_cycles")
+WORKLOAD_KEYS = ("m", "n", "k", "groups", "weight_bits", "weight_encoding", "frequency_mhz")
+
+
+def slice_delta(before: dict, after: dict) -> dict | None:
+    """Counter increments from ``before`` to ``after`` (two snapshots of one job), with busy
+    fractions over that slice; None when they do not span at least one cycle."""
+    try:
+        delta = {key: after[key] - before[key] for key in SLICE_COUNTERS}
+    except (KeyError, TypeError):
+        return None
+    if delta["cycles"] <= 0 or min(delta.values()) < 0:
+        return None
+    for key in ("compute_busy_cycles", "dma_busy_cycles"):
+        delta[key.replace("_cycles", "_fraction")] = delta[key] / delta["cycles"]
+    return delta
+
+
+def workload_summary(config: object) -> dict:
+    """The shape and weight format the page shows, from a flat or option-table config."""
+    config = config if isinstance(config, dict) else {}
+    return {key: sim.config_value(config, key, None) for key in WORKLOAD_KEYS}
 
 
 def profile_bound(name: str) -> str | None:
@@ -79,6 +101,7 @@ class Controller:
         self.state = "idle"
         self.profile = "balanced"
         self.telemetry: dict = {}
+        self.slice: dict | None = None  # counters over the last advance of this job
         self.history: deque = deque(maxlen=8)
         self.jobs_completed = 0
         self.total_cycles = 0
@@ -100,6 +123,8 @@ class Controller:
                 "profile": self.profile, "slice_cycles": self.slice_cycles,
                 "jobs_completed": self.jobs_completed, "completed_job_cycles": self.total_cycles,
                 "completed_job_macs": self.total_macs, "telemetry": self.telemetry,
+                "slice": self.slice,
+                "workload": workload_summary(self.telemetry.get("config")),
                 "recent_jobs": list(self.history), "error": self.error}
         with self.view_lock:
             self._published = view
@@ -124,6 +149,7 @@ class Controller:
                 flags += ["--input", str(path)]
             self.session = sim.LiveSession(self.binary, [*flags, "--seed", str(seed)])
             self.telemetry = self.session.receive()  # first snapshot: all files read
+            self.slice = None
         finally:
             if fixture is not None:
                 fixture.cleanup()
@@ -133,6 +159,7 @@ class Controller:
         if self.session is None:
             raise LiveError("Start a workload before advancing the simulator.")
         value = self.session.advance(cycles)
+        self.slice = slice_delta(self.telemetry, value)
         self.telemetry = value
         if value.get("completed", False):
             if value.get("validated") is not True:
