@@ -72,16 +72,16 @@
 <circle cx="461.61" cy="426.34" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="520.57" cy="426.34" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="562.4" cy="426.34" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
-<path d="M58.44,426.34 L159.23,365.76 L260.02,306.02 L360.82,286.02 L419.78,287.35 L461.61,274.11 L520.57,274.11 L562.4,274.11" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<path d="M58.44,426.34 L159.23,365.76 L260.02,306.02 L360.82,297.74 L419.78,278.92 L461.61,278.92 L520.57,274.11 L562.4,274.11" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <rect x="54.84" y="422.74" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="155.63" y="362.16" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="256.42" y="302.42" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<rect x="357.22" y="282.42" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<rect x="416.18" y="283.75" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<rect x="458.01" y="270.51" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="357.22" y="294.14" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="416.18" y="275.32" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="458.01" y="275.32" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="516.97" y="270.51" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="558.8" y="270.51" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<path d="M58.44,426.34 L159.23,365.76 L260.02,305.64 L360.82,246.42 L419.78,214.53 L461.61,187.79 L520.57,157.34 L562.4,137.53" fill="none" stroke="#eda100" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 4"/>
+<path d="M58.44,426.34 L159.23,365.76 L260.02,305.64 L360.82,246.42 L419.78,214.53 L461.61,187.79 L520.57,157.34 L562.4,136.06" fill="none" stroke="#eda100" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 4"/>
 <polygon points="58.44,421.34 63.44,426.34 58.44,431.34 53.44,426.34" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="159.23,360.76 164.23,365.76 159.23,370.76 154.23,365.76" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="260.02,300.64 265.02,305.64 260.02,310.64 255.02,305.64" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
@@ -89,7 +89,7 @@
 <polygon points="419.78,209.53 424.78,214.53 419.78,219.53 414.78,214.53" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="461.61,182.79 466.61,187.79 461.61,192.79 456.61,187.79" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="520.57,152.34 525.57,157.34 520.57,162.34 515.57,157.34" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
-<polygon points="562.4,132.53 567.4,137.53 562.4,142.53 557.4,137.53" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
+<polygon points="562.4,131.06 567.4,136.06 562.4,141.06 557.4,136.06" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 </g>
 <text x="556.4" y="257.49" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 100 B/cycle: 6.4</text>
 <text x="556.4" y="90.34" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 667 B/cycle: 42.4</text>
