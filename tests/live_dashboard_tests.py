@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Exercise the dashboard against the real compiled SystemC binary."""
+"""Exercise the dashboard against the compiled npu-sim binary."""
 from __future__ import annotations
 
 import argparse
@@ -171,19 +171,34 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(set(dashboard.workload_summary(None).values()), {None})
 
     def test_page_reads_only_published_fields(self):
-        # app.js shows the controller's "workload" and "slice" fields; every key it reads
-        # must be one the controller publishes.
+        # Every controller field app.js reads must be one the controller publishes.
         script = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
         self.assertNotIn("configValue", script)
-        read = set(re.findall(r"workload[.](\w+)", script))
-        unpacked = re.search(r"const [{]([^}]*)[}] = workload", script).group(1)
-        read.update(name.strip() for name in unpacked.split(","))
+        read = set(re.findall(r"\bworkload[.](\w+)", script))
+        for unpacked in re.findall(r"const [{]([^}]*)[}] = workload", script):
+            read.update(name.strip() for name in unpacked.split(","))
+        self.assertTrue(read)
         self.assertLessEqual(read, set(dashboard.WORKLOAD_KEYS))
-        self.assertIn("slice[`${name}_busy_fraction`]", script)
-        self.assertIn('for (const name of ["compute", "dma"])', script)
-        zero = dict.fromkeys(dashboard.SLICE_COUNTERS, 0)
-        published = dashboard.slice_delta(zero, dict.fromkeys(dashboard.SLICE_COUNTERS, 1))
-        self.assertLessEqual({"compute_busy_fraction", "dma_busy_fraction"}, set(published))
+        machine = set(re.findall(r"\bmachine[.](\w+)", script))
+        self.assertIn("macs_per_cycle", machine)
+        self.assertLessEqual(machine, set(dashboard.MACHINE_KEYS))
+        analysis = set(re.findall(r"\banalysis[.](\w+)", script))
+        self.assertIn("resource_bound_cycles", analysis)
+        self.assertLessEqual(analysis, set(dashboard.ANALYSIS_KEYS))
+
+        self.controller.control({"action": "reset", "profile": "balanced"})
+        state = self.controller.control({"action": "step", "cycles": 300})
+        slice_keys = set(state["slices"][-1])
+        series = set(re.findall(r'key: "(\w+)", className', script))
+        self.assertEqual(series, {"compute_busy_fraction", "dma_read_busy_fraction",
+                                  "dma_write_busy_fraction"})
+        self.assertLessEqual(series | set(re.findall(r"\bslice[.](\w+)", script)), slice_keys)
+        self.assertEqual(set(re.findall(r"\btransition[.](\w+)", script)), {"job", "cycle"})
+        self.assertIn('const STAGES = ["load", "compute", "store"];', script)
+        self.assertLessEqual({"job", "cycle", "load", "compute", "store"},
+                             set(state["timeline"]["transitions"][-1]))
+        for key in ("slices", "timeline", "machine", "max_step"):
+            self.assertIn(f"value.{key}", script)
 
     def test_machine_slices_and_timeline(self):
         state = self.controller.control({"action": "reset", "profile": "balanced"})
@@ -318,6 +333,21 @@ class DashboardTests(unittest.TestCase):
                 self.assertGreater(len(content), 0)
                 self.assertNotIn("Access-Control-Allow-Origin", headers)
                 self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+                if not path.startswith("/api/"):
+                    # No CDNs, fonts or other hosts: the page works offline. The SVG
+                    # namespace is an identifier, not a fetch.
+                    local = content.replace(b"http://www.w3.org/2000/svg", b"")
+                    self.assertIsNone(re.search(rb"https?://", local), path)
+            # The profile list comes from /api/profiles, not from options in the page.
+            profiles = json.loads(request("GET", "/api/profiles")[2])
+            self.assertEqual(list(profiles), list(dashboard.PROFILES))
+            for name, info in profiles.items():
+                self.assertEqual(set(info), {"label", "description", "bound"}, name)
+                self.assertEqual(info["bound"], dashboard.profile_bound(name))
+            page = request("GET", "/")[2].decode()
+            select = re.search(r'<select id="profile"[^>]*>(.*?)</select>', page, re.S).group(1)
+            self.assertEqual(select.strip(), "")
+            self.assertIn('fetch("/api/profiles"', request("GET", "/app.js")[2].decode())
             idle = json.loads(request("GET", "/api/state")[2])
             self.assertLessEqual({"machine", "slices", "timeline", "max_step"}, set(idle))
             self.assertEqual(request("GET", "/../../etc/passwd")[0], 404)
