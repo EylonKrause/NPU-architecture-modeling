@@ -73,9 +73,11 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
     roof = [(x_lo, bw * x_lo), (ridge, peak), (x_hi, peak)]
     fig.line([x for x, _ in roof], [y for _, y in roof], color=svg.INK, width=2)
     fig.vline(ridge, color=svg.INK_MUTED, dash="2 3", width=1)
-    fig.annotate(ridge, y_lo, f"ridge {_fmt(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED)
-    fig.annotate(x_hi, peak, f"peak {_fmt(peak)} MAC/cycle", dx=-6, dy=-7, anchor="end",
-                 color=svg.INK)
+    fig.annotate(ridge, y_lo, f"ridge {_fmt(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED,
+                 inside=True)
+    # Left of the ridge and above the peak lies above the roof, where no point can be.
+    fig.annotate(ridge, peak, f"peak {_fmt(peak)} MAC/cycle", dx=-8, dy=-9, anchor="end",
+                 color=svg.INK, inside=True)
     fig.annotate_along((x_lo, bw * x_lo), (ridge, peak), f"{_fmt(bw)} B/cycle",
                        at=0.3, offset=-8, color=svg.INK)
     if effective_bw and effective_bw < bw * 0.98:

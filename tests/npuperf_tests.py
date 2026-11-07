@@ -70,6 +70,19 @@ class SvgTests(unittest.TestCase):
             self.assertRegex(value, r"^-?\d+(\.\d{1,2})?$")
         self.assertNotRegex(text, r'="-?[0-9.]+[eE][+-]?[0-9]')
 
+    def test_inside_annotation_mirrors_at_the_plot_side(self):
+        def anchors(**options) -> list[str | None]:
+            fig = svg.Figure(x_range=(0, 1), y_range=(0, 1), legend="none")
+            fig.annotate(0.97, 0.5, "a label wider than the room left", dx=5, **options)
+            fig.annotate(0.03, 0.2, "another label wider than the room", dx=-5, anchor="end",
+                         **options)
+            root = ET.fromstring(fig.to_svg())
+            texts = [t for t in root.iter("{http://www.w3.org/2000/svg}text")
+                     if "label wider" in (t.text or "")]
+            return [t.get("text-anchor") for t in texts]
+        self.assertEqual(anchors(), [None, "end"])
+        self.assertEqual(anchors(inside=True), ["end", None])
+
     def test_log_axis_has_decade_ticks_and_minor_ticks(self):
         axis = svg.Axis("log")
         axis.fit([0.15, 70])
