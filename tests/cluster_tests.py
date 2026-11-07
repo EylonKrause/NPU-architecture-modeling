@@ -528,6 +528,58 @@ class Cluster(unittest.TestCase):
                     if key not in {"config", "simulation_wall_seconds"}:
                         self.assertEqual(auto[key], chosen[key], key)
 
+    def test_compressed_predictions_bound_the_makespan(self):
+        # Sparse panels run only their nonzero weights through the array and
+        # palette panels wait for their decoder, so a split's predicted bound
+        # times the encoded panels and stays at or below the makespan it
+        # predicts. One nonzero weight in each sparse block of 8 leaves an
+        # eighth of the dense MACs.
+        def tensors(directory: str, m: int, n: int, k: int, nonzero) -> Path:
+            path = Path(directory) / f"{m}x{n}x{k}.npu"
+            activations = " ".join(str(index * 7 % 5 - 2) for index in range(m * k))
+            weights = " ".join("1" if nonzero(index // n, index % n) else "0"
+                               for index in range(k * n))
+            path.write_text(f"NPU1 {m} {n} {k}\n{activations}\n{weights}\n{' '.join(['0'] * n)}\n")
+            return path
+
+        encodings = [["--weight-encoding", "sparse", "--weight-decode-values-per-cycle", 1000000],
+                     ["--weight-encoding", "sparse", "--weight-decode-values-per-cycle", 4],
+                     ["--weight-encoding", "palette", "--palette-bits", 2,
+                      "--weight-decode-values-per-cycle", 8]]
+        common = ["--weight-zero", 0, "--input-zero", 0, "--memory-model", "axi",
+                  "--sram-bytes", 1 << 24, "--pipeline-cycles", 0]
+        with tempfile.TemporaryDirectory() as directory:
+            cases = [
+                (["--input", tensors(directory, 32, 48, 256, lambda _, col: col % 8 == 0),
+                  "--tile-m", 16, "--tile-n", 16, "--macs-per-cycle", 64,
+                  "--weight-cache-bytes", 16384, "--dram-bytes-per-cycle", 16, "--cores", 2]),
+                (["--input", tensors(directory, 64, 64, 64, lambda row, col: row == col == 0),
+                  "--cores", 1]),
+            ]
+            runs = {}
+            for case, arguments in enumerate(cases):
+                for which, encoding in enumerate(encodings):
+                    for partition in ("m", "n", "auto"):
+                        runs[case, which, partition], _ = run(
+                            common + arguments + encoding + ["--partition", partition])
+                    with self.subTest(case=case, encoding=encoding):
+                        predicted = runs[case, which, "auto"]["cluster"]["predicted"]
+                        for partition in ("m", "n"):
+                            result = runs[case, which, partition]
+                            self.assertIs(result["numerical_match"], True)
+                            self.assertEqual(result["cluster"]["predicted"], predicted)
+                            self.assertLessEqual(predicted[partition]["bound_cycles"],
+                                                 result["cycles"])
+                            self.assertGreaterEqual(predicted[partition]["bound_cycles"],
+                                                    max(core["compute_busy_cycles"]
+                                                        for core in result["cores"]))
+            # With a free decoder both splits are memory-bound; n reads each
+            # weight panel on one core where m reads every panel on both, so n
+            # finishes first and auto takes it.
+            self.assertLess(runs[0, 0, "n"]["cycles"], runs[0, 0, "m"]["cycles"])
+            self.assertEqual(runs[0, 0, "auto"]["cluster"]["partition"], "n")
+            self.assertEqual(runs[0, 0, "auto"]["cycles"], runs[0, 0, "n"]["cycles"])
+
     def test_waveforms_carry_one_scope_per_core(self):
         c = dict(BASE, m=12, n=10, k=20, tile_m=3, tile_n=4, cores=3, partition="m")
         with tempfile.TemporaryDirectory() as directory:

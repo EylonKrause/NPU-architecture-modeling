@@ -123,21 +123,29 @@ std::uint64_t tile_unit(const Config& config, const ClusterPlan& plan, const Til
 // Each core's tiles under `plan`, in make_tiles order.
 std::vector<std::vector<Tile>> make_core_tiles(const Config& config, const ClusterPlan& plan);
 
-// Weight bytes of one column panel of a group over all its reduction panels,
-// split by whether each panel fits the weight cache on its own. With no cache
-// every panel is uncacheable.
-struct ColumnWeights {
+// One column panel of a group over all its reduction panels: its weight bytes,
+// split by whether each panel fits the weight cache on its own (with no cache
+// every panel is uncacheable), and the compute cycles of one of its tiles with
+// tile_m rows and with the M % tile_m edge rows. A row extent the shape lacks
+// costs 0.
+struct ColumnCost {
     std::uint64_t cacheable = 0, uncacheable = 0;
+    std::uint64_t full_rows_cycles = 0, edge_rows_cycles = 0;
 };
-using ColumnWeightBytes =
-    std::function<ColumnWeights(std::uint64_t group, std::uint64_t column_panel)>;
-ColumnWeightBytes dense_column_weights(const Config& config);
+using ColumnCosts = std::function<ColumnCost(std::uint64_t group, std::uint64_t column_panel)>;
+// Dense panels, in closed form.
+ColumnCosts dense_column_costs(const Config& config);
+// The encoded panels' own buffer sizes and compute cycles, as the loader reads
+// and the MAC array runs them; `panels` must outlive the result.
+ColumnCosts encoded_column_costs(const Config& config,
+                                 const std::vector<EncodedWeightPanel>& panels);
 
 // Closed-form prediction of a plan. A core's LRU weight cache sees, per group,
 // the core's column panels as one cycle repeated once per row tile it runs, so
 // after the first pass the cacheable panels all hit when their bytes fit the
 // cache together and all miss otherwise; read bytes are exact for that reason.
-// Compute cycles time palette and sparse panels at the decode bound.
+// Compute cycles add the column costs, so they equal each core's compute busy
+// cycles.
 struct CoreEstimate {
     std::uint64_t tiles = 0, macs = 0, compute_cycles = 0;
     std::uint64_t read_bytes = 0, weight_bytes = 0, write_bytes = 0;
@@ -152,7 +160,7 @@ struct ClusterEstimate {
     std::uint64_t bound_cycles = 0;
 };
 ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
-                                 const ColumnWeightBytes& weights);
+                                 const ColumnCosts& costs);
 // Partition::Auto between the m and n estimates: the smaller bound, then
 // fewer read plus write bytes, then N.
 Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n);

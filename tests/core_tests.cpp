@@ -1058,8 +1058,10 @@ void check_memory_map() {
 }
 
 // Replays one core's weight-cache lookups in load order, as the loader makes
-// them: an LRU over (channel panel, block) keys holding whole panels.
-std::uint64_t replay_weight_reads(const npu::Config& c, const std::vector<npu::Tile>& tiles) {
+// them: an LRU over (channel panel, block) keys holding whole panels, dense or
+// the encoded buffers in `panels`.
+std::uint64_t replay_weight_reads(const npu::Config& c, const std::vector<npu::Tile>& tiles,
+                                  const std::vector<npu::EncodedWeightPanel>& panels) {
     struct Line { std::uint64_t key, bytes; };
     std::vector<Line> lru;  // Most recent first.
     std::uint64_t cached = 0, reads = 0;
@@ -1067,7 +1069,9 @@ std::uint64_t replay_weight_reads(const npu::Config& c, const std::vector<npu::T
     const auto blocks = npu::reduction_blocks(c);
     for (const auto& tile : tiles) {
         for (std::uint64_t block = 0; block < blocks; ++block) {
-            const auto bytes = (npu::panel_k(c, block) * tile.cols * c.weights.bits + 7) / 8;
+            const auto bytes = panels.empty() ?
+                (npu::panel_k(c, block) * tile.cols * c.weights.bits + 7) / 8 :
+                npu::weight_panel(c, panels, tile, block).buffer.size();
             const auto key = (tile.group * c.shape.n + tile.col) * blocks + block;
             const auto hit = std::find_if(lru.begin(), lru.end(),
                                           [key](const Line& line) { return line.key == key; });
@@ -1129,7 +1133,8 @@ void check_cluster_plan() {
     rejects_with([&] { npu::cluster_plan(c, npu::Partition::Auto); }, "splits by m or n");
 
     // The closed-form estimate against a replay of every core's tiles: exact
-    // read, weight and write bytes, MACs and compute cycles per core.
+    // read, weight and write bytes, MACs and compute cycles per core, dense or
+    // timed from the encoded panels.
     std::uint64_t state = 99;
     const auto draw = [&state](std::uint64_t low, std::uint64_t high) {
         state = state * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -1147,11 +1152,29 @@ void check_cluster_plan() {
         r.weights.bits = draw(0, 1) ? 4 : 8;
         r.arch.compute.macs_per_cycle = draw(1, 64);
         r.arch.sram_bytes = 1ULL << 26;
+        const auto encoding = draw(0, 2);
+        r.weights.encoding = encoding == 0 ? npu::WeightEncoding::Dense :
+                             encoding == 1 ? npu::WeightEncoding::Palette :
+                                             npu::WeightEncoding::Sparse;
+        r.weights.palette_bits = 8;
+        r.weights.sparse_block = draw(1, 8);
+        r.arch.compute.weight_decode_values_per_cycle = draw(1, 64);
         npu::validate(r);
+        std::vector<npu::EncodedWeightPanel> panels;
+        if (r.weights.encoding != npu::WeightEncoding::Dense) {
+            auto problem = npu::make_problem(r);
+            // Sparse rounds zero three weights in four so whole blocks drop.
+            if (r.weights.encoding == npu::WeightEncoding::Sparse)
+                for (auto& weight : problem.weights)
+                    if (draw(0, 3)) weight = static_cast<std::int8_t>(r.quant.weight_zero);
+            panels = npu::encode_weights(r, problem);
+        }
+        const auto costs = panels.empty() ? npu::dense_column_costs(r) :
+                                            npu::encoded_column_costs(r, panels);
         const auto tiles = npu::make_tiles(r);
         for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
             const auto plan = npu::cluster_plan(r, partition);
-            const auto estimate = npu::estimate_cluster(r, plan, npu::dense_column_weights(r));
+            const auto estimate = npu::estimate_cluster(r, plan, costs);
             std::vector<std::vector<npu::Tile>> assigned(plan.cores);
             for (const auto& tile : tiles)
                 assigned[plan.unit_core(npu::tile_unit(r, plan, tile))].push_back(tile);
@@ -1164,9 +1187,13 @@ void check_cluster_plan() {
                     params += tile.cols * npu::param_record_bytes(r);
                     writes += npu::tile_write_bytes(tile);
                     macs += tile.rows * tile.cols * r.shape.k;
-                    cycles += npu::tile_compute_cycles(r, tile);
+                    if (panels.empty()) cycles += npu::tile_compute_cycles(r, tile);
+                    for (std::uint64_t block = 0; !panels.empty() &&
+                                                  block < npu::reduction_blocks(r); ++block)
+                        cycles += npu::encoded_panel_compute_cycles(
+                            r, tile, block, npu::weight_panel(r, panels, tile, block));
                 }
-                const auto weights = replay_weight_reads(r, assigned[core]);
+                const auto weights = replay_weight_reads(r, assigned[core], panels);
                 const auto label = " (round " + std::to_string(round) + ", core " +
                                    std::to_string(core) + ")";
                 require(e.tiles == assigned[core].size(), "tiles per core" + label);

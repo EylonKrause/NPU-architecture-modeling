@@ -494,13 +494,16 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
         dense_storage_bytes_ = checked_add(dense_storage_bytes_,
             packed_weight_bytes(config, panel.k, panel.cols));
     }
-    const auto blocks = reduction_blocks(config);
     const auto column_panels = ceil_div(config.shape.n, config.mapping.tile_n);
-    ColumnWeightBytes column_weights = dense_column_weights(config);
-    if (config.weights.encoding == WeightEncoding::Dense) {
+    const bool dense = config.weights.encoding == WeightEncoding::Dense;
+    // Both splits are predicted from the panels the loader reads and the
+    // array computes.
+    const auto column_costs = dense ? dense_column_costs(config) :
+                                      encoded_column_costs(config, encoded_weights_);
+    if (dense) {
         // Every group stores the same column panels.
         for (std::uint64_t col = 0; col < column_panels; ++col) {
-            const auto column = column_weights(0, col);
+            const auto column = column_costs(0, col);
             dense_storage_bytes_ = checked_add(dense_storage_bytes_, checked_mul(
                 config.shape.groups, checked_add(column.cacheable, column.uncacheable)));
         }
@@ -513,28 +516,12 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
         output_.quantized.resize(size);
     }
 
-    // Predict both splits from the panel sizes the loader will read, and
-    // resolve auto between them.
-    if (config.weights.encoding != WeightEncoding::Dense) {
-        column_weights = [this, column_panels, blocks](std::uint64_t group, std::uint64_t col) {
-            const auto cache = config_.arch.weight_cache_bytes;
-            ColumnWeights result;
-            for (std::uint64_t block = 0; block < blocks; ++block) {
-                const auto bytes = static_cast<std::uint64_t>(encoded_weights_.at(
-                    static_cast<std::size_t>((group * column_panels + col) * blocks + block))
-                    .buffer.size());
-                auto& total = cache && bytes <= cache ? result.cacheable : result.uncacheable;
-                total = checked_add(total, bytes);
-            }
-            return result;
-        };
-    }
     const auto by_rows = cluster_plan(config, Partition::M);
     const auto by_columns = cluster_plan(config, Partition::N);
-    estimates_[1] = estimate_cluster(config, by_columns, column_weights);
+    estimates_[1] = estimate_cluster(config, by_columns, column_costs);
     // With whole groups per core both splits are the same.
     estimates_[0] = by_rows.split == ClusterSplit::Groups ? estimates_[1] :
-                    estimate_cluster(config, by_rows, column_weights);
+                    estimate_cluster(config, by_rows, column_costs);
     auto partition = config.mapping.partition;
     if (partition == Partition::Auto) partition = auto_partition(estimates_[0], estimates_[1]);
     plan_ = partition == Partition::M ? by_rows : by_columns;
