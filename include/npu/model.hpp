@@ -1,9 +1,10 @@
 #pragma once
 
 #include "npu/core.hpp"
+#include "npu/memory.hpp"
 #include <systemc>
-#include <deque>
 #include <list>
+#include <memory>
 #include <ostream>
 #include <unordered_map>
 
@@ -33,25 +34,34 @@ struct Statistics {
 // A point-in-time view of the running SystemC model. Resource identifiers are
 // meaningful only while their corresponding busy flag is set. Traffic/MAC
 // counters commit at operation completion; busy-cycle counters include the
-// elapsed portion of an operation currently in flight.
+// elapsed portion of an operation currently in flight. dma_busy is set while
+// either memory channel has a request in flight and dma_write while the write
+// channel has; dma_read gives the direction of dma_tile_id, the read when both
+// are busy. The serial model runs one request at a time.
 struct LiveSnapshot {
     std::uint64_t cycles = 0;
     bool completed = false, dma_busy = false, compute_busy = false, dma_read = false;
+    bool dma_write = false;
     std::uint64_t inflight_tiles = 0, loaded_tiles = 0, computed_tiles = 0;
     std::uint64_t read_queue_depth = 0, write_queue_depth = 0;
     std::uint64_t dma_tile_id = 0, dma_block_id = 0;
     std::uint64_t compute_tile_id = 0, compute_block_id = 0;
     Statistics statistics;
+    MemoryView memory;
 };
 
-// All state is owned by this module or immutable references whose owners outlive
-// sc_start(). Request pointers never outlive their blocking caller's stack frame.
+// All state is owned by this module or immutable references whose owners
+// outlive sc_start(). Each issuing thread owns its memory request as a member,
+// so a simulation stopped while a transfer is in flight releases it with the
+// module.
 class Accelerator final : public sc_core::sc_module {
 public:
     Accelerator(sc_core::sc_module_name name, const Config& config,
                 const Problem& problem);
     const Output& output() const { return output_; }
-    const Statistics& statistics() const { return stats_; }
+    // Memory traffic and DMA counters come from the memory module.
+    Statistics statistics() const;
+    MemoryView memory() const { return memory_->view(); }
     // Completed load, compute and store intervals, recorded only when
     // sim.trace_path is set. Not named trace(), which would hide
     // sc_object::trace(sc_trace_file*).
@@ -62,18 +72,11 @@ public:
     void trace_signals(sc_core::sc_trace_file* file) const;
 
 private:
-    struct Request {
-        Tile tile;
-        std::uint64_t bytes;
-        std::uint64_t block;
-        sc_core::sc_event done;
-        Request(const Tile& t, std::uint64_t b, std::uint64_t panel)
-            : tile(t), bytes(b), block(panel) {}
-    };
-
     const Config& config_;
     const Problem& problem_;
     std::vector<EncodedWeightPanel> encoded_weights_;
+    // Offset of each encoded panel from weight_base, in encoded_weights_ order.
+    std::vector<std::uint64_t> weight_offsets_;
     std::vector<Tile> tiles_;
     bool record_spans_;
     std::uint64_t panel_buffers_;
@@ -84,27 +87,27 @@ private:
     sc_core::sc_fifo<std::uint64_t> free_slots_;
     sc_core::sc_fifo<std::uint64_t> loaded_;
     sc_core::sc_fifo<std::uint64_t> computed_;
-    std::deque<Request*> reads_, writes_;
-    sc_core::sc_event dma_ready_;
     sc_core::sc_event panel_consumed_;
     struct WeightLine { std::uint64_t key, bytes; };
     std::list<WeightLine> weight_lru_;
     std::unordered_map<std::uint64_t, std::list<WeightLine>::iterator> weight_lines_;
     std::uint64_t cached_bytes_ = 0;
     std::uint64_t inflight_ = 0;
-    bool prefer_read_ = true, completed_ = false;
-    bool dma_busy_ = false, compute_busy_ = false, dma_read_ = false;
-    std::uint64_t dma_start_ = 0, dma_duration_ = 0;
+    bool completed_ = false, compute_busy_ = false;
     std::uint64_t compute_start_ = 0, compute_duration_ = 0;
-    std::uint64_t dma_tile_id_ = 0, dma_block_id_ = 0;
     std::uint64_t compute_tile_id_ = 0, compute_block_id_ = 0;
     sc_core::sc_event state_changed_;
+    // Created after the stage threads, where the DMA thread was, so process
+    // creation order is unchanged.
+    std::unique_ptr<MemoryPort> memory_;
+    MemRequest load_request_, store_request_;
     // A single passive SC_METHOD owns every signal write. The scheduling
     // threads retain plain state, so simultaneous resource updates are safe.
     sc_core::sc_signal<bool> done_signal_{"done"};
     sc_core::sc_signal<bool> dma_busy_signal_{"dma_busy"};
     sc_core::sc_signal<bool> compute_busy_signal_{"compute_busy"};
     sc_core::sc_signal<bool> dma_read_signal_{"dma_read"};
+    sc_core::sc_signal<bool> dma_write_signal_{"dma_write"};
     using CounterSignal = sc_core::sc_signal<sc_dt::sc_uint<64>>;
     CounterSignal cycles_signal_{"cycles"};
     CounterSignal inflight_signal_{"inflight_tiles"};
@@ -132,7 +135,6 @@ private:
     void load();
     void compute();
     void store();
-    void dma();
     void transfer(const Tile& tile, bool read, std::uint64_t block = 0);
     bool weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes);
     void advance(std::uint64_t cycles);

@@ -45,7 +45,7 @@ configure_file(cmake/version.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/npu/ve
 
 add_library(npu_core src/core.cpp src/json.cpp src/options.cpp)
 target_include_directories(npu_core PUBLIC include ${CMAKE_CURRENT_BINARY_DIR}/generated)
-add_executable(npu-sim src/main.cpp src/model.cpp)
+add_executable(npu-sim src/main.cpp src/model.cpp src/memory.cpp)
 target_link_libraries(npu-sim PRIVATE npu_core SystemC::systemc)
 target_include_directories(npu-sim SYSTEM PRIVATE
   $<TARGET_PROPERTY:SystemC::systemc,INTERFACE_INCLUDE_DIRECTORIES>)

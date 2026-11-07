@@ -24,7 +24,10 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
       loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots * panel_buffers_)),
       computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)) {
     validate(config);
+    weight_offsets_.reserve(encoded_weights_.size());
     for (const auto& panel : encoded_weights_) {
+        // Packed back to back in load order, as encode_weights lists them.
+        weight_offsets_.push_back(stats_.encoded_weight_storage_bytes);
         stats_.encoded_weight_storage_bytes =
             checked_add(stats_.encoded_weight_storage_bytes, panel.buffer.size());
         stats_.dense_weight_storage_bytes = checked_add(stats_.dense_weight_storage_bytes,
@@ -54,33 +57,56 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
     SC_THREAD(load);
     SC_THREAD(compute);
     SC_THREAD(store);
-    SC_THREAD(dma);
+    memory_ = make_memory(config, state_changed_);
+    load_request_.direction = MemDirection::Read;
+    store_request_.direction = MemDirection::Write;
     SC_METHOD(observe);
     sensitive << state_changed_;
 }
 
 std::uint64_t Accelerator::now() { return sc_core::sc_time_stamp().value(); }
 
+namespace {
+
+void merge_memory(Statistics& stats, const MemoryView& memory) {
+    stats.read_bytes = memory.read.statistics.payload_bytes;
+    stats.write_bytes = memory.write.statistics.payload_bytes;
+    stats.dma_requests = checked_add(memory.read.statistics.requests,
+                                     memory.write.statistics.requests);
+    stats.dma_bursts = checked_add(memory.read.statistics.bursts, memory.write.statistics.bursts);
+    stats.dma_busy_cycles = memory.busy_cycles;
+}
+
+}  // namespace
+
+Statistics Accelerator::statistics() const {
+    auto stats = stats_;
+    merge_memory(stats, memory_->view());
+    return stats;
+}
+
 LiveSnapshot Accelerator::snapshot() const {
     LiveSnapshot view;
+    view.memory = memory_->view();
+    const auto& memory = view.memory;
     view.cycles = completed_ ? stats_.cycles : now();
     view.completed = completed_;
-    view.dma_busy = dma_busy_;
+    view.dma_busy = memory.read.active || memory.write.active;
     view.compute_busy = compute_busy_;
-    view.dma_read = dma_read_;
+    view.dma_read = memory.reading;
+    view.dma_write = memory.write.active;
     view.inflight_tiles = inflight_;
     view.loaded_tiles = static_cast<std::uint64_t>(loaded_.num_available());
     view.computed_tiles = static_cast<std::uint64_t>(computed_.num_available());
-    view.read_queue_depth = static_cast<std::uint64_t>(reads_.size());
-    view.write_queue_depth = static_cast<std::uint64_t>(writes_.size());
-    view.dma_tile_id = dma_tile_id_;
-    view.dma_block_id = dma_block_id_;
+    view.read_queue_depth = memory.read.queued;
+    view.write_queue_depth = memory.write.queued;
+    view.dma_tile_id = memory.tile_id;
+    view.dma_block_id = memory.block_id;
     view.compute_tile_id = compute_tile_id_;
     view.compute_block_id = compute_block_id_;
     view.statistics = stats_;
+    merge_memory(view.statistics, memory);
     view.statistics.cycles = view.cycles;
-    if (dma_busy_) view.statistics.dma_busy_cycles = checked_add(
-        stats_.dma_busy_cycles, std::min(now() - dma_start_, dma_duration_));
     if (compute_busy_) view.statistics.compute_busy_cycles = checked_add(
         stats_.compute_busy_cycles, std::min(now() - compute_start_, compute_duration_));
     return view;
@@ -95,8 +121,8 @@ void Accelerator::observe() {
         view.computed_tiles > config_.mapping.buffer_slots ||
         cached_bytes_ > config_.arch.weight_cache_bytes ||
         ((view.dma_busy || view.compute_busy) && view.inflight_tiles == 0) ||
-        (view.completed && (view.inflight_tiles != 0 || view.dma_busy ||
-                            view.compute_busy || !reads_.empty() || !writes_.empty()))) {
+        (view.completed && (view.inflight_tiles != 0 || view.dma_busy || view.compute_busy ||
+                            view.read_queue_depth != 0 || view.write_queue_depth != 0))) {
         SC_REPORT_FATAL("NPU/invariant", "accelerator resource ownership invariant violated");
     }
     cycles_signal_.write(view.cycles);
@@ -104,6 +130,7 @@ void Accelerator::observe() {
     dma_busy_signal_.write(view.dma_busy);
     compute_busy_signal_.write(view.compute_busy);
     dma_read_signal_.write(view.dma_read);
+    dma_write_signal_.write(view.dma_write);
     inflight_signal_.write(view.inflight_tiles);
     loaded_signal_.write(view.loaded_tiles);
     computed_signal_.write(view.computed_tiles);
@@ -133,6 +160,7 @@ void Accelerator::trace_signals(sc_core::sc_trace_file* file) const {
     NPU_TRACE(dma_busy_signal_, "dma_busy");
     NPU_TRACE(compute_busy_signal_, "compute_busy");
     NPU_TRACE(dma_read_signal_, "dma_read");
+    NPU_TRACE(dma_write_signal_, "dma_write");
     NPU_TRACE(cycles_signal_, "cycles");
     NPU_TRACE(inflight_signal_, "inflight_tiles");
     NPU_TRACE(loaded_signal_, "loaded_tiles");
@@ -194,33 +222,29 @@ bool Accelerator::weight_cached(const Tile& tile, std::uint64_t block, std::uint
 }
 
 void Accelerator::transfer(const Tile& tile, bool read, std::uint64_t block) {
-    auto bytes = read ? panel_read_bytes(config_, tile, block) : tile_write_bytes(tile);
+    auto& request = read ? load_request_ : store_request_;
     std::uint64_t weight_bytes = 0;
     if (read) {
-        const auto& format = config_.weights;
-        const auto weights = packed_weight_bytes(config_, panel_k(config_, block), tile.cols);
-        const auto encoded_bytes = format.encoding == WeightEncoding::Dense ? weights :
-            static_cast<std::uint64_t>(
-                weight_panel(config_, encoded_weights_, tile, block).buffer.size());
-        if (format.encoding != WeightEncoding::Dense) {
-            // panel_read_bytes uses a conservative encoded SRAM/traffic bound.
-            // Replace that bound with the serialized panel byte count.
-            const auto elements = checked_mul(panel_k(config_, block), tile.cols);
-            const auto bound = format.encoding == WeightEncoding::Palette ?
-                checked_add(checked_add(4, std::min(elements, UINT64_C(1) << format.palette_bits)),
-                            ceil_div(checked_mul(elements, format.palette_bits), 8)) :
-                checked_add(checked_add(4, ceil_div(ceil_div(elements, format.sparse_block), 8)),
-                            weights);
-            bytes = checked_add(bytes - bound, encoded_bytes);
+        std::uint64_t encoded_bytes = 0, offset = 0;
+        if (config_.weights.encoding == WeightEncoding::Dense) {
+            encoded_bytes = packed_weight_bytes(config_, panel_k(config_, block), tile.cols);
+            offset = dense_weight_offset(config_, tile, block);
+        } else {
+            const auto& panel = weight_panel(config_, encoded_weights_, tile, block);
+            encoded_bytes = static_cast<std::uint64_t>(panel.buffer.size());
+            offset = weight_offsets_.at(static_cast<std::size_t>(&panel - encoded_weights_.data()));
         }
-        if (weight_cached(tile, block, encoded_bytes)) bytes -= encoded_bytes;
-        else weight_bytes = encoded_bytes;
+        if (!weight_cached(tile, block, encoded_bytes)) weight_bytes = encoded_bytes;
+        panel_read_runs(config_, tile, block, offset, weight_bytes, request.runs);
+    } else {
+        tile_store_runs(config_, tile, request.runs);
     }
-    Request request(tile, bytes, block);
-    (read ? reads_ : writes_).push_back(&request);
-    changed();
-    dma_ready_.notify(sc_core::SC_ZERO_TIME);
-    wait(request.done);
+    request.tile_id = tile.id;
+    request.block_id = block;
+    memory_->transport(request);
+    if (record_spans_)
+        spans_.push_back({read ? "load" : "store", tile.id, request.start, request.completion,
+                          request.bytes, block});
     stats_.weight_read_bytes = checked_add(stats_.weight_read_bytes, weight_bytes);
 }
 
@@ -318,45 +342,6 @@ void Accelerator::store() {
     changed();
     // No free-running clock and no sc_stop: sc_start returns when every process
     // finishes or blocks with no pending event. Final JSON stays on stdout.
-}
-
-void Accelerator::dma() {
-    while (true) {
-        if (reads_.empty() && writes_.empty()) wait(dma_ready_);
-        // Coalesce simultaneous requests. Delta cycles cost no architecture time.
-        wait(sc_core::SC_ZERO_TIME);
-        wait(sc_core::SC_ZERO_TIME);
-        if (reads_.empty() && writes_.empty()) continue;
-        const bool read = !reads_.empty() && (writes_.empty() || prefer_read_);
-        auto& queue = read ? reads_ : writes_;
-        Request* request = queue.front();
-        queue.pop_front();
-        const auto start = now();
-        const auto duration = dma_transfer_cycles(config_, request->bytes);
-        dma_start_ = start;
-        dma_duration_ = duration;
-        dma_tile_id_ = request->tile.id;
-        dma_block_id_ = request->block;
-        dma_read_ = read;
-        dma_busy_ = true;
-        changed();
-        advance(duration);
-        if (record_spans_)
-            spans_.push_back({read ? "load" : "store", request->tile.id, start, now(),
-                              request->bytes, request->block});
-        ++stats_.dma_requests;
-        const auto burst = config_.arch.memory.burst_bytes;
-        stats_.dma_bursts = checked_add(stats_.dma_bursts,
-                                        burst ? ceil_div(request->bytes, burst) : 1);
-        stats_.dma_busy_cycles = checked_add(stats_.dma_busy_cycles, duration);
-        auto& traffic = read ? stats_.read_bytes : stats_.write_bytes;
-        traffic = checked_add(traffic, request->bytes);
-        dma_busy_ = false;
-        changed();
-        prefer_read_ = !read;
-        request->done.notify(sc_core::SC_ZERO_TIME);
-        // Do not inspect request again: requester owns its lifetime.
-    }
 }
 
 void write_trace(std::ostream& stream, const std::vector<Span>& spans) {
