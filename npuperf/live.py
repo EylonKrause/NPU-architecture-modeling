@@ -55,7 +55,26 @@ PROFILES = {
 }
 MAX_STEP = 10000
 SLICE_COUNTERS = ("cycles", "compute_busy_cycles", "dma_busy_cycles")
+# Counters a slice also carries when both snapshots have them.
+SLICE_RATES = ("executed_macs", "read_bytes", "write_bytes")
+SLICE_HISTORY = 200
+# Every advance is split into sub-advances of at least this many cycles (at most
+# TIMELINE_SUBSTEPS of them) so the pipeline timeline sees stage changes inside a slice.
+TIMELINE_STRIDE = 8
+TIMELINE_SUBSTEPS = 64
+TIMELINE_TRANSITIONS = 512
+STAGE_KEYS = ("dma_busy", "dma_read", "dma_tile_id", "compute_busy", "compute_tile_id")
 WORKLOAD_KEYS = ("m", "n", "k", "groups", "weight_bits", "weight_encoding", "frequency_mhz")
+MACHINE_KEYS = ("source", "macs_per_cycle", "bytes_per_cycle", "ridge", "memory_model",
+                "memory_latency", "pipeline_cycles", "buffer_slots", "cores", "tile_m", "tile_n",
+                "tile_k", "frequency_mhz", "analysis")
+ANALYSIS_KEYS = ("bound", "resource_bound_cycles", "lower_bound_cycles", "estimate_cycles",
+                 "compute_busy_cycles", "memory_cycles", "dram_bytes", "arithmetic_intensity",
+                 "effective_bytes_per_cycle")
+
+
+def _count(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
 
 
 def slice_delta(before: dict, after: dict) -> dict | None:
@@ -69,7 +88,85 @@ def slice_delta(before: dict, after: dict) -> dict | None:
         return None
     for key in ("compute_busy_cycles", "dma_busy_cycles"):
         delta[key.replace("_cycles", "_fraction")] = delta[key] / delta["cycles"]
+    for key in SLICE_RATES:
+        new, old = after.get(key), before.get(key)
+        if _count(new) and _count(old) and new >= old:
+            delta[key] = new - old
     return delta
+
+
+def stages(snapshot: dict) -> dict | None:
+    """Tile id in each pipeline stage (None when the stage is idle), or None when the
+    snapshot lacks the stage fields. One DMA engine serves loads and stores."""
+    if any(key not in snapshot for key in STAGE_KEYS):
+        return None
+    dma = snapshot["dma_tile_id"] if snapshot["dma_busy"] else None
+    return {"load": dma if snapshot["dma_read"] else None,
+            "compute": snapshot["compute_tile_id"] if snapshot["compute_busy"] else None,
+            "store": None if snapshot["dma_read"] else dma}
+
+
+def dma_split(before: dict, after: dict, split: list[int]) -> None:
+    """Add the DMA busy cycles between two sub-advance snapshots to ``split`` as [load,
+    store]. The snapshot gives the DMA direction only at its own instant: an interval that
+    starts and ends in one direction (or idle) goes to that direction, one that changes
+    direction is shared equally. The error is at most one sub-advance per direction change."""
+    try:
+        busy = after["dma_busy_cycles"] - before["dma_busy_cycles"]
+        ends = [("load" if s["dma_read"] else "store") if s["dma_busy"] else None
+                for s in (before, after)]
+    except (KeyError, TypeError):
+        return
+    known = {end for end in ends if end is not None}
+    if len(known) == 1:
+        split[0 if known == {"load"} else 1] += busy
+    else:
+        split[0] += busy // 2
+        split[1] += busy - busy // 2
+
+
+def machine_summary(profile: str, telemetry: dict) -> dict:
+    """Peak rates, ridge point and analytic bound of the running design.
+
+    A snapshot that echoes the complete config is read directly; an older one (shape and
+    weight format only) is completed from the profile's flags."""
+    config = telemetry.get("config")
+    try:
+        design = analytic.Design.from_result(telemetry)
+        source = "snapshot"
+    except (KeyError, TypeError, ValueError, AttributeError):
+        flags = sim.from_flags(PROFILE_ARGS[profile])
+        if isinstance(config, dict):
+            for key in analytic.Design.__dataclass_fields__:
+                value = sim.config_value(config, key, None)
+                if value is not None and not isinstance(value, (dict, list)):
+                    flags[key] = value
+        design = analytic.Design.from_flags(flags)
+        source = "profile"
+    bandwidth = design.bandwidth
+    summary = {"source": source, "macs_per_cycle": design.peak_macs_per_cycle,
+               "bytes_per_cycle": bandwidth,
+               "ridge": design.ridge if bandwidth > 0 else None,
+               "memory_model": design.memory_model, "memory_latency": design.memory_latency,
+               "pipeline_cycles": design.pipeline_cycles, "buffer_slots": design.buffer_slots,
+               "cores": design.cores, "tile_m": design.tile_m, "tile_n": design.tile_n,
+               "tile_k": design.tile_k, "frequency_mhz": design.frequency_mhz,
+               "analysis": None}
+    try:
+        result = analytic.analyze(design)
+    except (ValueError, TypeError, ArithmeticError):
+        return summary  # palette or sparse weights, weight cache: no analytic bound
+    summary["analysis"] = {
+        "bound": result.bound, "resource_bound_cycles": result.resource_bound_cycles,
+        "lower_bound_cycles": result.lower_bound_cycles,
+        "estimate_cycles": result.estimate_cycles,
+        "compute_busy_cycles": result.compute_busy_cycles,
+        "memory_cycles": result.memory_cycles, "dram_bytes": result.dram_bytes,
+        "arithmetic_intensity": result.arithmetic_intensity,
+        # Payload over memory-busy cycles: the bandwidth roof once request latency is paid.
+        "effective_bytes_per_cycle": (result.dram_bytes / result.memory_cycles
+                                      if result.memory_cycles else None)}
+    return summary
 
 
 def workload_summary(config: object) -> dict:
@@ -102,6 +199,9 @@ class Controller:
         self.profile = "balanced"
         self.telemetry: dict = {}
         self.slice: dict | None = None  # counters over the last advance of this job
+        self.slices: deque = deque(maxlen=SLICE_HISTORY)  # recent advances, oldest first
+        self.transitions: deque = deque(maxlen=TIMELINE_TRANSITIONS)  # stage changes
+        self.machine: dict | None = None
         self.history: deque = deque(maxlen=8)
         self.jobs_completed = 0
         self.total_cycles = 0
@@ -123,7 +223,10 @@ class Controller:
                 "profile": self.profile, "slice_cycles": self.slice_cycles,
                 "jobs_completed": self.jobs_completed, "completed_job_cycles": self.total_cycles,
                 "completed_job_macs": self.total_macs, "telemetry": self.telemetry,
-                "slice": self.slice,
+                "slice": self.slice, "slices": list(self.slices),
+                "timeline": {"stride_cycles": TIMELINE_STRIDE,
+                             "transitions": list(self.transitions)},
+                "max_step": MAX_STEP, "machine": self.machine,
                 "workload": workload_summary(self.telemetry.get("config")),
                 "recent_jobs": list(self.history), "error": self.error}
         with self.view_lock:
@@ -150,16 +253,43 @@ class Controller:
             self.session = sim.LiveSession(self.binary, [*flags, "--seed", str(seed)])
             self.telemetry = self.session.receive()  # first snapshot: all files read
             self.slice = None
+            self.machine = machine_summary(self.profile, self.telemetry)
+            self._record_stages(self.telemetry)
         finally:
             if fixture is not None:
                 fixture.cleanup()
         self.started_at = time.monotonic()
 
+    def _record_stages(self, snapshot: dict) -> None:
+        current = stages(snapshot)
+        if current is None:
+            return
+        job = self.jobs_completed + 1
+        last = self.transitions[-1] if self.transitions else None
+        if last is None or last["job"] != job or any(last[k] != v for k, v in current.items()):
+            self.transitions.append({"job": job, "cycle": snapshot.get("cycles"), **current})
+
     def _advance(self, cycles: int) -> None:
         if self.session is None:
             raise LiveError("Start a workload before advancing the simulator.")
-        value = self.session.advance(cycles)
-        self.slice = slice_delta(self.telemetry, value)
+        start = value = self.telemetry
+        stride = max(TIMELINE_STRIDE, -(-cycles // TIMELINE_SUBSTEPS))
+        remaining = cycles
+        split = [0, 0]  # DMA busy cycles attributed to loads and to stores
+        while remaining > 0 and not value.get("completed", False):
+            step = min(stride, remaining)
+            before, value = value, self.session.advance(step)
+            remaining -= step
+            self._record_stages(value)
+            dma_split(before, value, split)
+        self.slice = slice_delta(start, value)
+        if self.slice is not None:
+            if stages(start) is not None and split[0] + split[1] == self.slice["dma_busy_cycles"]:
+                for name, busy in zip(("dma_read", "dma_write"), split):
+                    self.slice[f"{name}_busy_cycles"] = busy
+                    self.slice[f"{name}_busy_fraction"] = busy / self.slice["cycles"]
+            self.slices.append({"job": self.jobs_completed + 1, "end_cycle": value["cycles"],
+                                **self.slice})
         self.telemetry = value
         if value.get("completed", False):
             if value.get("validated") is not True:
@@ -221,6 +351,8 @@ class Controller:
                     self.error = ""
                     self.jobs_completed = self.total_cycles = self.total_macs = 0
                     self.history.clear()
+                    self.slices.clear()
+                    self.transitions.clear()
                     self._launch()
                     self.state = "running" if action == "start" else "paused"
                 elif action == "stop":
