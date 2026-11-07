@@ -179,4 +179,6 @@ if(BUILD_TESTING)
     npu_add_python_test(onnx.ort-differential
       SCRIPT tests/onnx_import_tests.py BINARY npu-sim TIMEOUT 180)
   endif()
+  npu_add_python_test(tools.npuperf
+    SCRIPT tests/npuperf_tests.py BINARY npu-sim TIMEOUT 300)
 endif()

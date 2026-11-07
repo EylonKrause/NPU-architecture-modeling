@@ -28,7 +28,7 @@
       <div id="stage-compute" class="stage"><span class="stage-index">02</span><h3>MAC array</h3><p>Decode + accumulate + requantize</p><b id="compute-count">—</b></div><span class="arrow">→</span>
       <div id="stage-store" class="stage"><span class="stage-index">03</span><h3>DMA store</h3><p>Quantized output</p><b id="store-count">—</b></div>
     </div>
-    <div class="utilization"><label>Compute busy fraction <span id="compute-util">—</span><progress id="compute-bar" max="100" value="0"></progress></label><label>DMA busy fraction <span id="dma-util">—</span><progress id="dma-bar" max="100" value="0"></progress></label></div>
+    <div class="utilization"><label>Compute busy, last slice <span id="compute-util">—</span><progress id="compute-bar" max="100" value="0"></progress></label><label>DMA busy, last slice <span id="dma-util">—</span><progress id="dma-bar" max="100" value="0"></progress></label></div>
     <p id="compression-detail">Dense weights · no decompression overhead</p>
     <div class="tiles-heading"><h3>Output tiles</h3><span id="tiles-label">Waiting for the model</span></div><div id="tiles" class="tiles" aria-label="Actual output-tile completion"></div>
     <div class="tensor-preview"><div><h3>Input activation preview</h3><code id="input-preview">Waiting for an inference</code></div><div><h3>Latest validated output preview</h3><code id="output-preview">Output is shown only after full numerical validation</code></div></div>

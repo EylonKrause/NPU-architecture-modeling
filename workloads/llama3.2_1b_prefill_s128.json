@@ -1,0 +1,288 @@
+{
+ "schema_version": 1,
+ "conventions": {
+  "batch": 1,
+  "layout": "NHWC",
+  "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately; BN folded",
+  "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
+  "repeat": "number of identical instances of the layer in the network",
+  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention per KV head with sharing query heads stacked along M"
+ },
+ "name": "llama3.2_1b_prefill_s128",
+ "source": [
+  "https://huggingface.co/unsloth/Llama-3.2-1B/raw/main/config.json (ungated mirror of meta-llama/Llama-3.2-1B config.json)",
+  "https://huggingface.co/meta-llama/Llama-3.2-1B"
+ ],
+ "notes": "config.json: hidden_size 2048, intermediate_size 8192, num_attention_heads 32, num_key_value_heads 8, head_dim 64, num_hidden_layers 16, vocab_size 128256, tie_word_embeddings true, no attention/MLP bias, SiLU-gated MLP, RMSNorm, RoPE (llama3 scaling, theta 5e5). Prefill of a 128-token prompt, batch 1: every projection has M=128. Attention matmuls (b_operand=activations) read the KV cache, not weights. repeat = 16 layers (x32 heads for attention matmuls). The INT8 KV cache for this context is in totals.",
+ "layers": [
+  {
+   "name": "q_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 2048,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 536870912,
+   "weight_bytes_int8": 4194304,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 2048,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   }
+  },
+  {
+   "name": "k_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 512,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 134217728,
+   "weight_bytes_int8": 1048576,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 512,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   },
+   "note": "GQA: 8 KV heads x 64 = 512"
+  },
+  {
+   "name": "v_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 512,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 134217728,
+   "weight_bytes_int8": 1048576,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 512,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   },
+   "note": "GQA: 8 KV heads x 64 = 512"
+  },
+  {
+   "name": "attn_scores_QKt",
+   "op": "matmul",
+   "M": 128,
+   "N": 128,
+   "K": 64,
+   "repeat": 512,
+   "macs": 1048576,
+   "weight_bytes_int8": 0,
+   "bias_bytes_int32": 0,
+   "b_operand": "activations",
+   "lowered": {
+    "M": 512,
+    "N": 128,
+    "K": 64,
+    "G": 8,
+    "calls": 16
+   },
+   "note": "per query head; 4 query heads share each KV head. Causal mask: only 8256 of 16384 score entries are live (50.4%)."
+  },
+  {
+   "name": "attn_context_PV",
+   "op": "matmul",
+   "M": 128,
+   "N": 64,
+   "K": 128,
+   "repeat": 512,
+   "macs": 1048576,
+   "weight_bytes_int8": 0,
+   "bias_bytes_int32": 0,
+   "b_operand": "activations",
+   "lowered": {
+    "M": 512,
+    "N": 64,
+    "K": 128,
+    "G": 8,
+    "calls": 16
+   },
+   "note": "per query head; 4 query heads share each KV head"
+  },
+  {
+   "name": "o_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 2048,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 536870912,
+   "weight_bytes_int8": 4194304,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 2048,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   }
+  },
+  {
+   "name": "gate_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 8192,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 2147483648,
+   "weight_bytes_int8": 16777216,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 8192,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   }
+  },
+  {
+   "name": "up_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 8192,
+   "K": 2048,
+   "repeat": 16,
+   "macs": 2147483648,
+   "weight_bytes_int8": 16777216,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 8192,
+    "K": 2048,
+    "G": 1,
+    "calls": 16
+   }
+  },
+  {
+   "name": "down_proj",
+   "op": "dense",
+   "M": 128,
+   "N": 2048,
+   "K": 8192,
+   "repeat": 16,
+   "macs": 2147483648,
+   "weight_bytes_int8": 16777216,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 128,
+    "N": 2048,
+    "K": 8192,
+    "G": 1,
+    "calls": 16
+   }
+  },
+  {
+   "name": "lm_head",
+   "op": "dense",
+   "M": 1,
+   "N": 128256,
+   "K": 2048,
+   "repeat": 1,
+   "macs": 262668288,
+   "weight_bytes_int8": 262668288,
+   "bias_bytes_int32": 0,
+   "b_operand": "weights",
+   "lowered": {
+    "M": 1,
+    "N": 128256,
+    "K": 2048,
+    "G": 1,
+    "calls": 1
+   },
+   "note": "tied with embed_tokens (weights counted once in the total). Prefill computes logits for the last position only, as serving runtimes do; HF default full-sequence logits would be M=128"
+  }
+ ],
+ "vector_ops": [
+  {
+   "name": "input_layernorm_rmsnorm",
+   "op": "rmsnorm",
+   "elements": 262144,
+   "repeat": 16
+  },
+  {
+   "name": "rope_qk",
+   "op": "rope",
+   "elements": 327680,
+   "repeat": 16
+  },
+  {
+   "name": "softmax",
+   "op": "softmax",
+   "elements": 524288,
+   "repeat": 16
+  },
+  {
+   "name": "residual_add_attn",
+   "op": "residual_add",
+   "elements": 262144,
+   "repeat": 16
+  },
+  {
+   "name": "post_attention_layernorm_rmsnorm",
+   "op": "rmsnorm",
+   "elements": 262144,
+   "repeat": 16
+  },
+  {
+   "name": "silu_gate_x_up",
+   "op": "silu_mul",
+   "elements": 1048576,
+   "repeat": 16
+  },
+  {
+   "name": "residual_add_mlp",
+   "op": "residual_add",
+   "elements": 262144,
+   "repeat": 16
+  },
+  {
+   "name": "final_norm_rmsnorm",
+   "op": "rmsnorm",
+   "elements": 262144,
+   "repeat": 1
+  },
+  {
+   "name": "embedding_gather",
+   "op": "gather",
+   "elements": 262144,
+   "repeat": 1
+  }
+ ],
+ "totals": {
+  "macs": 125890461696,
+  "weight_bytes_int8": 1235746816,
+  "bias_bytes_int32": 0,
+  "simulator_calls": 145,
+  "param_check": {
+   "computed_total_params": 1235814400,
+   "published_params": "1.23B (model card); HF 1,235,814,400",
+   "match": true,
+   "note": "weight_bytes_int8 counts lm_head (= tied embed_tokens) once; RMSNorm gains excluded"
+  },
+  "kv_cache_bytes_int8": 2097152,
+  "reference": {
+   "rule_of_thumb": "MACs ~= non-embedding params x tokens + attention + lm_head",
+   "non_embedding_params_x_tokens_plus_lm_head": 124816719872,
+   "computed_vs_rule": 1.0086
+  }
+ }
+}

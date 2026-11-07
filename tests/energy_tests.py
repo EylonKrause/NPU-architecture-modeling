@@ -9,8 +9,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-import energy_report as energy
+sys.path.insert(0, str(ROOT))
+from npuperf import energy
 
 
 def fixture():
@@ -18,6 +18,13 @@ def fixture():
             "macs": 10, "read_bytes": 7, "write_bytes": 3,
             "modeled_latency_ns": 100, "output_hash": 123,
             "config": {"frequency_mhz": 200}}
+
+
+def nested_fixture():
+    """fixture() with the option-table config layout (SPEC 1.1)."""
+    result = fixture()
+    result["config"] = {"shape": {"m": 1, "n": 1, "k": 10}, "arch": {"frequency_mhz": 200}}
+    return result
 
 
 class EnergyTests(unittest.TestCase):
@@ -31,6 +38,14 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(result["average_power_mw"], 4.5)
         self.assertEqual(result["coefficients"]["static_mw"], 4)
 
+    def test_nested_config_frequency(self):
+        report = energy.estimate(nested_fixture(), mac_pj=2, dram_byte_pj=3, static_mw=4)
+        self.assertEqual(report["total_pj"], 450)
+        result = nested_fixture()
+        result["config"]["arch"]["frequency_mhz"] = 100
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            energy.estimate(result, 1, 1)
+
     def test_zero_coefficients_and_default_excluded_static(self):
         result = energy.estimate(fixture(), 0, 0)
         self.assertEqual(result["total_pj"], 0)
@@ -43,7 +58,42 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(report["component_pj"]["mac"], 8)
         self.assertEqual(report["source_counts"]["macs"], 10)
         self.assertEqual(report["source_counts"]["executed_macs"], 4)
-        self.assertTrue(any("decompression" in item for item in report["limitations"]))
+        self.assertIn("weight_decode", report["scope"]["excluded"])
+        self.assertNotIn("weight_decode", report["scope"]["included"])
+
+    def test_component_shares_sum_to_one(self):
+        report = energy.estimate(fixture(), mac_pj=2, dram_byte_pj=3, static_mw=4)
+        self.assertAlmostEqual(sum(report["component_share"].values()), 1.0)
+        self.assertEqual(report["component_share"]["static"], 400 / 450)
+
+    def test_timing_only_result_is_accepted_without_hash(self):
+        source = {**fixture(), "numerics": "skipped"}
+        del source["numerical_match"], source["output_hash"]
+        report = energy.estimate(source, 2, 3)
+        self.assertEqual(report["numerics"], "skipped")
+        self.assertEqual(report["total_pj"], 50)
+
+    def test_timing_only_result_with_null_match_and_hash(self):
+        # npu-sim --timing-only prints "numerical_match": null and "output_hash": null.
+        source = {**fixture(), "numerics": "skipped", "numerical_match": None,
+                  "output_hash": None}
+        report = energy.estimate(source, 2, 3)
+        self.assertEqual(report["numerics"], "skipped")
+        self.assertIsNone(report["source_output_hash"])
+        self.assertEqual(report["total_pj"], 50)
+        for match in (True, False):
+            with self.subTest(match=match), self.assertRaises(ValueError):
+                energy.estimate({**source, "numerical_match": match}, 2, 3)
+        with self.assertRaises(ValueError):
+            energy.estimate({**source, "numerics": "bit-exact"}, 2, 3)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "timing-only.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            run = subprocess.run([sys.executable, str(ROOT / "scripts" / "energy_report.py"),
+                                  "--result", str(path), "--mac-pj", "2", "--dram-byte-pj", "3"],
+                                 text=True, capture_output=True, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["numerics"], "skipped")
 
     def test_inconsistent_or_invalid_sparse_counters_rejected(self):
         for executed, skipped in ((11, 0), (4, 5), (True, 9), (-1, 11), (0, 11)):
@@ -122,8 +172,13 @@ class EnergyTests(unittest.TestCase):
             self.assertEqual(json.loads(output.read_text()), json.loads(first.stdout))
             before = output.read_bytes()
             second = subprocess.run(command, text=True, capture_output=True, timeout=10)
-            self.assertNotEqual(second.returncode, 0)
+            self.assertEqual(second.returncode, 2)
+            self.assertTrue(second.stderr.startswith("energy_report: "), second.stderr)
             self.assertEqual(second.stdout, "")
+            self.assertEqual(output.read_bytes(), before)
+            forced = subprocess.run(command + ["--force"], text=True, capture_output=True,
+                                    timeout=10)
+            self.assertEqual(forced.returncode, 0, forced.stderr)
             self.assertEqual(output.read_bytes(), before)
 
     def test_cli_required_coefficients_and_nonfinite_rejection(self):
@@ -137,7 +192,8 @@ class EnergyTests(unittest.TestCase):
                               ["--mac-pj", "-1", "--dram-byte-pj", "1"]):
                 with self.subTest(arguments=arguments):
                     result = subprocess.run(base + arguments, text=True, capture_output=True, timeout=10)
-                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(result.returncode, 2)
+                    self.assertTrue(result.stderr.startswith("energy_report: "), result.stderr)
                     self.assertEqual(result.stdout, "")
 
     def test_json_nan_duplicate_keys_and_nonobject_rejected(self):

@@ -10,8 +10,8 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-from graph_optimize import optimize_graph, verify_graphs
+sys.path.insert(0, str(ROOT))
+from npuperf.graph_optimize import optimize_graph, verify_graphs
 
 BINARY = ROOT / "build/npu-sim"
 
@@ -99,7 +99,13 @@ class OptimizerTests(unittest.TestCase):
             self.assertTrue(json.loads(run.stdout)["verification"]["outputs_match"])
             previous = output.read_bytes()
             run = subprocess.run(command, capture_output=True, text=True, timeout=30)
-            self.assertNotEqual(run.returncode, 0)
+            self.assertEqual(run.returncode, 2)
+            self.assertTrue(run.stderr.startswith("graph_optimize: "), run.stderr)
+            self.assertIn("exists", run.stderr)
+            self.assertEqual(output.read_bytes(), previous)
+            output.write_text("{}", encoding="utf-8")
+            run = subprocess.run(command + ["--force"], capture_output=True, text=True, timeout=30)
+            self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(output.read_bytes(), previous)
 
 

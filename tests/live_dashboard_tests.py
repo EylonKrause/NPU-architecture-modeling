@@ -3,10 +3,16 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import http.client
-import importlib.util
+import io
 import json
+import os
 from pathlib import Path
+import re
+import socket
+import subprocess
+import sys
 import threading
 import time
 import unittest
@@ -14,10 +20,9 @@ from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[1]
-spec = importlib.util.spec_from_file_location("live_dashboard", ROOT / "scripts" / "live_dashboard.py")
-dashboard = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(dashboard)
+sys.path.insert(0, str(ROOT))
+from npuperf import live as dashboard
+from npuperf import sim
 BINARY: Path
 
 
@@ -39,7 +44,7 @@ class DashboardTests(unittest.TestCase):
             time.sleep(0.01)
         self.fail("Model failed to reach the expected state before the deadline.")
 
-    def test_real_simulation_pause_step_resume_stop(self):
+    def test_pause_step_resume_stop(self):
         state = self.controller.control({"action": "start", "profile": "balanced"})
         self.assertEqual(state["state"], "running")
         state = self.wait_for(lambda s: s["telemetry"].get("cycles", 0) > 0)
@@ -94,7 +99,7 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(state["jobs_completed"], 1, profile)
             self.assertTrue(state["recent_jobs"][0]["telemetry"]["validated"], profile)
 
-    def test_palette_decodes_real_buffers_varies_inputs_and_cleans_fixture(self):
+    def test_palette_decode_varies_inputs_and_cleans_fixture(self):
         self.controller.control({"action": "reset", "profile": "palette-weights"})
         command = self.controller.process.args
         fixture = Path(command[command.index("--input") + 1])
@@ -107,15 +112,76 @@ class DashboardTests(unittest.TestCase):
         first, second = [job["telemetry"] for job in state["recent_jobs"][:2]]
         for result in (first, second):
             self.assertTrue(result["validated"])
-            self.assertEqual(result["config"]["weight_encoding"], "palette")
-            self.assertEqual(result["config"]["weight_bits"], 8)
-            self.assertEqual(result["config"]["palette_bits"], 2)
+            self.assertEqual(sim.config_value(result["config"], "weight_encoding"), "palette")
+            self.assertEqual(sim.config_value(result["config"], "weight_bits"), 8)
+            self.assertEqual(sim.config_value(result["config"], "palette_bits"), 2)
             self.assertLess(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])
             self.assertGreater(result["weight_decode_cycles"], 0)
             self.assertEqual(result["executed_macs"], result["macs"])
             self.assertEqual(result["skipped_macs"], 0)
         self.assertNotEqual(first["input_preview"], second["input_preview"])
         self.assertNotEqual(first["output_hash"], second["output_hash"])
+        workload = dict(state["workload"])
+        self.assertIn(workload.pop("groups"), (1, None))  # None: a build without --groups
+        self.assertEqual(workload, {"m": 64, "n": 64, "k": 128, "weight_bits": 8,
+                                    "weight_encoding": "palette", "frequency_mhz": 200})
+
+    def test_slice_utilisation_is_the_last_advance(self):
+        state = self.controller.control({"action": "reset", "profile": "balanced"})
+        self.assertIsNone(state["slice"])
+        before = state["telemetry"]
+        for cycles in (300, 17, 1):
+            state = self.controller.control({"action": "step", "cycles": cycles})
+            after = state["telemetry"]
+            expected = {key: after[key] - before[key]
+                        for key in ("cycles", "compute_busy_cycles", "dma_busy_cycles")}
+            self.assertEqual({key: state["slice"][key] for key in expected}, expected)
+            self.assertEqual(expected["cycles"], cycles)
+            for name in ("compute", "dma"):
+                self.assertEqual(state["slice"][f"{name}_busy_fraction"],
+                                 expected[f"{name}_busy_cycles"] / cycles)
+            before = after
+        # Paused: every poll returns the last step's slice, not the whole job so far.
+        time.sleep(0.05)
+        self.assertEqual(self.controller.snapshot()["slice"], state["slice"])
+        whole_job = after["compute_busy_cycles"] / after["cycles"]
+        self.assertNotEqual(state["slice"]["compute_busy_fraction"], whole_job)
+        self.assertEqual(state["workload"]["weight_encoding"], "dense")
+
+    def test_slice_delta_and_workload_summary(self):
+        before = {"cycles": 10, "compute_busy_cycles": 4, "dma_busy_cycles": 10}
+        after = {"cycles": 30, "compute_busy_cycles": 19, "dma_busy_cycles": 20}
+        self.assertEqual(dashboard.slice_delta(before, after),
+                         {"cycles": 20, "compute_busy_cycles": 15, "dma_busy_cycles": 10,
+                          "compute_busy_fraction": 0.75, "dma_busy_fraction": 0.5})
+        for stale in (before, {**after, "cycles": 5}, {"cycles": 40}):
+            with self.subTest(stale=stale):
+                self.assertIsNone(dashboard.slice_delta(before, stale))
+        nested = {"shape": {"m": 4, "n": 5, "k": 6, "groups": 2, "seed": 1},
+                  "arch": {"frequency_mhz": 500},
+                  "weights": {"bits": 4, "encoding": "sparse", "palette_bits": 4}}
+        flat = {"m": 4, "n": 5, "k": 6, "groups": 2, "frequency_mhz": 500, "weight_bits": 4,
+                "weight_encoding": "sparse"}
+        expected = {"m": 4, "n": 5, "k": 6, "groups": 2, "weight_bits": 4,
+                    "weight_encoding": "sparse", "frequency_mhz": 500}
+        self.assertEqual(dashboard.workload_summary(nested), expected)
+        self.assertEqual(dashboard.workload_summary(flat), expected)
+        self.assertEqual(set(dashboard.workload_summary(None).values()), {None})
+
+    def test_page_reads_only_published_fields(self):
+        # app.js shows the controller's "workload" and "slice" fields; every key it reads
+        # must be one the controller publishes.
+        script = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertNotIn("configValue", script)
+        read = set(re.findall(r"workload[.](\w+)", script))
+        unpacked = re.search(r"const [{]([^}]*)[}] = workload", script).group(1)
+        read.update(name.strip() for name in unpacked.split(","))
+        self.assertLessEqual(read, set(dashboard.WORKLOAD_KEYS))
+        self.assertIn("slice[`${name}_busy_fraction`]", script)
+        self.assertIn('for (const name of ["compute", "dma"])', script)
+        zero = dict.fromkeys(dashboard.SLICE_COUNTERS, 0)
+        published = dashboard.slice_delta(zero, dict.fromkeys(dashboard.SLICE_COUNTERS, 1))
+        self.assertLessEqual({"compute_busy_fraction", "dma_busy_fraction"}, set(published))
 
     def test_bounded_commands_and_state_transitions(self):
         for value in ({}, [], {"action": []}, {"action": "shell"},
@@ -182,6 +248,57 @@ class DashboardTests(unittest.TestCase):
             server.shutdown()
             server.server_close()
             thread.join(timeout=2)
+
+
+class DashboardCliTests(unittest.TestCase):
+    def run_main(self, argv):
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), contextlib.redirect_stdout(io.StringIO()):
+            status = dashboard.main(argv)
+        return status, stderr.getvalue()
+
+    def test_missing_binary_is_one_line_error(self):
+        status, stderr = self.run_main(["--binary", str(ROOT / "does-not-exist" / "npu-sim")])
+        self.assertEqual(status, 2)
+        self.assertTrue(stderr.startswith("live_dashboard: "), stderr)
+        self.assertEqual(len(stderr.strip().splitlines()), 1)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_busy_port_is_one_line_error(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(1)
+            port = listener.getsockname()[1]
+            status, stderr = self.run_main(["--binary", str(BINARY), "--port", str(port)])
+        self.assertEqual(status, 1)
+        self.assertTrue(stderr.startswith(f"live_dashboard: cannot listen on 127.0.0.1:{port}"),
+                        stderr)
+        self.assertNotIn("Traceback", stderr)
+
+    def test_script_rejects_bad_port_with_status_two(self):
+        run = subprocess.run([sys.executable, str(ROOT / "scripts" / "live_dashboard.py"),
+                              "--port", "70000"], capture_output=True, text=True, timeout=20)
+        self.assertEqual(run.returncode, 2)
+        self.assertTrue(run.stderr.startswith("live_dashboard: "), run.stderr)
+
+    def test_state_does_not_wait_for_the_simulator_lock(self):
+        controller = dashboard.Controller(BINARY, tick_seconds=0.01, slice_cycles=64)
+        try:
+            controller.control({"action": "reset", "profile": "balanced"})
+            result = {}
+            with controller.lock:  # the scheduler holds this while it talks to the child
+                reader = threading.Thread(target=lambda: result.update(controller.snapshot()))
+                reader.start()
+                reader.join(timeout=2)
+                self.assertFalse(reader.is_alive())
+            self.assertEqual(result["state"], "paused")
+        finally:
+            controller.close()
+
+    def test_profiles_report_their_analytic_bound(self):
+        self.assertEqual(dashboard.profile_bound("compute-bound"), "compute")
+        self.assertIn(dashboard.profile_bound("memory-bound"), ("bandwidth", "latency"))
+        self.assertIsNone(dashboard.profile_bound("palette-weights"))
 
 
 if __name__ == "__main__":
