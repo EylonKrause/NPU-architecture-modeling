@@ -3,13 +3,13 @@
   "description": "16x16 output-stationary array, 512 KiB SRAM, 32 B/cycle DMA with 256 B bursts, 1 GHz",
   "shape": {"m": 64, "n": 64, "k": 128, "seed": 7},
   "arch": {
-    "compute": {"array_rows": 16, "array_cols": 16, "pipeline_cycles": 4},
+    "compute": {"array_rows": 16, "array_cols": 16, "dataflow": "os", "pipeline_cycles": 4},
     "memory": {"bytes_per_cycle": 32, "latency": 40, "burst_bytes": 256},
     "sram_bytes": 524288,
     "weight_cache_bytes": 65536,
     "frequency_mhz": 1000
   },
-  "mapping": {"tile_m": 32, "tile_n": 32, "tile_k": 64, "buffer_slots": 2},
+  "mapping": {"tile_m": 32, "tile_n": 32, "tile_k": 64, "buffer_slots": 2, "panel_buffers": 2},
   "weights": {"bits": 8, "encoding": "dense"},
   "quant": {
     "input_zero": 0,
