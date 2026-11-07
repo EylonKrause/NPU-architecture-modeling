@@ -253,19 +253,24 @@ std::uint64_t mac_cycles(const Config& config, std::uint64_t rows, std::uint64_t
                        checked_add(rows, skew));
 }
 
+// The weight decoder runs ahead of the MAC array and streams decoded values
+// into it, so a compressed panel takes the longer of the two plus the
+// pipeline charge. Without the encoded panel, the decode term is its bound:
+// every value, and for sparse every bitmap block as well.
 std::uint64_t compute_panel_cycles(const Config& config, std::uint64_t rows,
                                    std::uint64_t cols, std::uint64_t k) {
     const auto& compute = config.arch.compute;
-    auto cycles = checked_add(mac_cycles(config, rows, cols, k), compute.pipeline_cycles);
+    auto busy = mac_cycles(config, rows, cols, k);
     if (config.weights.encoding != WeightEncoding::Dense) {
         const auto count = checked_mul(k, cols);
         const auto rate = compute.weight_decode_values_per_cycle;
-        cycles = checked_add(cycles, ceil_div(count, rate));
+        auto decode = ceil_div(count, rate);
         if (config.weights.encoding == WeightEncoding::Sparse)
-            cycles = checked_add(cycles,
+            decode = checked_add(decode,
                                  ceil_div(ceil_div(count, config.weights.sparse_block), rate));
+        busy = std::max(busy, decode);
     }
-    return cycles;
+    return checked_add(busy, compute.pipeline_cycles);
 }
 
 std::uint64_t all_read_bytes(const Config& config, std::uint64_t rows,
@@ -941,16 +946,14 @@ void compute_tile_encoded(const Problem& problem, const Config& config,
 std::uint64_t encoded_panel_compute_cycles(const Config& config, const Tile& tile,
     std::uint64_t block, const EncodedWeightPanel& panel) {
     const auto& compute = config.arch.compute;
-    if (config.weights.encoding == WeightEncoding::Sparse)
-        return checked_add(checked_add(ceil_div(checked_mul(tile.rows, panel.nonzero_values),
-                                                compute.macs_per_cycle),
-                                       compute.pipeline_cycles),
-                           panel.decode_cycles);
-    // Remove the conservative decoder bound and add this panel's exact cost.
-    return checked_add(panel_compute_cycles(config, tile, block) -
-                           ceil_div(checked_mul(panel.k, panel.cols),
-                                    compute.weight_decode_values_per_cycle),
-                       panel.decode_cycles);
+    require(panel.k == panel_k(config, block) && panel.cols == tile.cols,
+            "encoded weight panel does not match tile");
+    // Sparse MAC work covers the nonzero-centered weights only; the decoder
+    // overlaps it as in compute_panel_cycles.
+    const auto macs = config.weights.encoding == WeightEncoding::Sparse ?
+        ceil_div(checked_mul(tile.rows, panel.nonzero_values), compute.macs_per_cycle) :
+        mac_cycles(config, tile.rows, tile.cols, panel.k);
+    return checked_add(std::max(macs, panel.decode_cycles), compute.pipeline_cycles);
 }
 
 std::uint64_t reduction_blocks(const Config& config) {

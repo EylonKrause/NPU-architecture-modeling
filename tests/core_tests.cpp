@@ -720,6 +720,46 @@ void check_grouped_gemm() {
     }, "tile is outside the output matrix");
 }
 
+void check_decoder_overlap() {
+    npu::Config c;
+    c.shape.m = 4; c.shape.n = 8; c.shape.k = 16;
+    c.mapping.tile_m = 4; c.mapping.tile_n = 8; c.mapping.tile_k = 8;
+    c.arch.compute.macs_per_cycle = 16;
+    c.arch.compute.pipeline_cycles = 3;
+    c.quant.input_zero = c.quant.weight_zero = 0;
+    c.weights.palette_bits = 2;
+    c.weights.sparse_block = 4;
+    // Column 0 holds 1 and every other weight is 0: one nonzero per K row.
+    npu::Problem p;
+    p.m = 4; p.n = 8; p.k = 16;
+    p.activations.assign(64, 1);
+    p.bias.assign(8, 0);
+    for (std::uint64_t index = 0; index < 128; ++index)
+        p.weights.push_back(static_cast<std::int8_t>(index % 8 == 0));
+    const npu::Tile tile{0, 0, 0, 4, 8};
+    // A K panel of 8: 4*8*8 MACs at 16 per cycle is 16 cycles.
+    const auto panel_cycles = [&](npu::WeightEncoding encoding, std::uint64_t rate) {
+        c.weights.encoding = encoding;
+        c.arch.compute.weight_decode_values_per_cycle = rate;
+        const auto panels = npu::encode_weights(c, p);
+        return npu::encoded_panel_compute_cycles(c, tile, 1,
+                                                 npu::weight_panel(c, panels, tile, 1));
+    };
+    // Palette decodes 64 values: 4 cycles at 16 per cycle hide under the MACs.
+    require(panel_cycles(npu::WeightEncoding::Palette, 16) == 16 + 3, "MAC-bound palette panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 16 + 3, "palette bound equals dense");
+    require(panel_cycles(npu::WeightEncoding::Palette, 1) == 64 + 3, "decode-bound palette panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 64 + 3, "palette decode bound");
+    // Sparse: 16 bitmap blocks, 8 of them kept (32 values), 8 nonzero
+    // weights. At 2 per cycle decode is 8 + 16 cycles; MACs ceil(4*8/16).
+    require(panel_cycles(npu::WeightEncoding::Sparse, 2) == 24 + 3, "decode-bound sparse panel");
+    require(npu::panel_compute_cycles(c, tile, 1) == 32 + 8 + 3,
+            "sparse bound decodes every value and block");
+    require(panel_cycles(npu::WeightEncoding::Sparse, 64) == 2 + 3, "MAC-bound sparse panel");
+    c.weights.encoding = npu::WeightEncoding::Dense;
+    require(npu::panel_compute_cycles(c, tile, 1) == 16 + 3, "dense panel");
+}
+
 void check_limits() {
     const auto shape_error = [](const std::function<void(npu::Config&)>& mutation,
                                 const std::string& expected) {
@@ -851,6 +891,7 @@ int main() {
         check_overflow_and_shapes();
         check_tosa_rescale();
         check_grouped_gemm();
+        check_decoder_overlap();
         check_limits();
         check_validation();
         std::cout << "core tests: all checks passed\n";
