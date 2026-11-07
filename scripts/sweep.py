@@ -27,8 +27,9 @@ def resolve_binary(name):
 
 
 def validate_result(result):
-    if not isinstance(result, dict) or result.get("schema_version") != 1:
-        raise ValueError("expected a JSON object with schema_version 1")
+    version = result.get("schema_version") if isinstance(result, dict) else None
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("expected a JSON object with schema_version 1 or 2")
     if result.get("numerical_match") is not True:
         raise ValueError("simulator did not report full numerical agreement")
     for key in ("cycles", "macs", "read_bytes", "write_bytes", "compute_busy_cycles",

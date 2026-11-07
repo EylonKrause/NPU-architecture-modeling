@@ -21,6 +21,11 @@
 #include <vector>
 
 namespace {
+// Layout version of the result and snapshot JSON. Version 2 nests "config" by
+// option-table path (shape.m, arch.frequency_mhz, ...); version 1 results
+// carried flat keys (m, frequency_mhz, ...).
+constexpr int schema_version = 2;
+
 void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actions& actions) {
     if (actions & sc_core::SC_DISPLAY) std::cerr << report.what() << '\n';
     sc_core::sc_report_handler::default_handler(
@@ -384,8 +389,8 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
     const auto core_cycles = npu::checked_mul(snap.cycles, model.cores());
     const auto ratio = [core_cycles](std::uint64_t busy) { return fraction(busy, core_cycles); };
     stream << std::boolalpha << std::setprecision(17)
-        << "{\"schema_version\":1,\"type\":\"" << type << "\",\"simulation\":true"
-        << ",\"config\":";
+        << "{\"schema_version\":" << schema_version << ",\"type\":\"" << type
+        << "\",\"simulation\":true,\"config\":";
     npu::write_config_json(stream, c);
     stream << ",\"cycles\":" << snap.cycles
         << ",\"completed\":" << snap.completed << ",\"validated\":" << checked
@@ -578,7 +583,7 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         lower_bound = std::max(lower_bound, npu::ceil_div(model.memory().dram_bytes,
                                                           memory.dram_bytes_per_cycle));
     std::cout << std::setprecision(17) << std::boolalpha;
-    std::cout << "{\n\"schema_version\":1,\n\"config\":";
+    std::cout << "{\n\"schema_version\":" << schema_version << ",\n\"config\":";
     npu::write_config_json(std::cout, c);
     std::cout << ",\n"
         << "\"cycles\":" << s.cycles << ",\n\"macs\":" << s.macs

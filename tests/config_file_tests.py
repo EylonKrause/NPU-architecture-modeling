@@ -90,8 +90,12 @@ class ConfigFile(unittest.TestCase):
 
     def test_describe_config_equals_the_result_echo(self):
         described = self.describe("--config", EXAMPLE, "--m", 32)
-        self.assertEqual(described, self.result("--config", EXAMPLE, "--m", 32)["config"])
+        result = self.result("--config", EXAMPLE, "--m", 32)
+        self.assertEqual(described, result["config"])
         self.assertEqual(described["shape"]["m"], 32)
+        # Version 2 is the nested layout; version 1 results had flat keys.
+        self.assertEqual(result["schema_version"], 2)
+        self.assertNotIn("m", result["config"])
 
     def test_later_assignments_win(self):
         later = self.describe("--config", EXAMPLE, "--m", 32, "--rounding", "away")
@@ -112,7 +116,13 @@ class ConfigFile(unittest.TestCase):
         snapshots = [json.loads(line) for line in proc.stdout.splitlines()]
         self.assertEqual([s["type"] for s in snapshots], ["snapshot", "stopped"])
         for snapshot in snapshots:
+            self.assertEqual(snapshot["schema_version"], 2)
             self.assertEqual(snapshot["config"], self.describe("--config", EXAMPLE))
+        progress = Path(self.directory.name) / "progress.jsonl"
+        self.result("--config", EXAMPLE, "--progress-jsonl", progress)
+        lines = progress.read_text(encoding="utf-8").splitlines()
+        self.assertTrue(lines)
+        self.assertEqual({json.loads(line)["schema_version"] for line in lines}, {2})
 
     def test_rejected_config_files(self):
         cases = [

@@ -137,7 +137,8 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
             --binary $<TARGET_FILE:npu-sim>)
   add_test(NAME energy-analysis
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/energy_tests.py)
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/energy_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
   add_test(NAME mapping-search
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/autotune_tests.py
             --binary $<TARGET_FILE:npu-sim>)

@@ -46,8 +46,9 @@ def uint64(value, name, positive=False):
 
 
 def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
-    if not isinstance(result, dict) or type(result.get("schema_version")) is not int or result["schema_version"] != 1:
-        raise ValueError("expected a simulator JSON object with schema_version 1")
+    version = result.get("schema_version") if isinstance(result, dict) else None
+    if type(version) is not int or version not in (1, 2):
+        raise ValueError("expected a simulator JSON object with schema_version 1 or 2")
     if result.get("numerical_match") is not True:
         raise ValueError("simulator must report numerical_match true")
     cycles = uint64(result.get("cycles"), "cycles", positive=True)
@@ -64,8 +65,10 @@ def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
     config = result.get("config")
     if not isinstance(config, dict):
         raise ValueError("simulator result requires a config object")
-    # npu-sim nests the clock under "arch"; hand-written results may keep it flat.
-    clock = config.get("arch") if isinstance(config.get("arch"), dict) else config
+    # Version 2 nests the clock under "arch"; version 1 keeps it flat.
+    clock = config.get("arch") if version == 2 else config
+    if not isinstance(clock, dict):
+        raise ValueError("a schema_version 2 config requires an arch object")
     frequency = finite_nonnegative(clock.get("frequency_mhz"), "frequency_mhz")
     latency = finite_nonnegative(result.get("modeled_latency_ns"), "modeled_latency_ns")
     if frequency == 0 or latency == 0:
