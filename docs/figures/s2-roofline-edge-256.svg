@@ -3,7 +3,7 @@
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="roofline-plot"><rect x="75.48" y="58" width="576.4" height="388"/></clipPath></defs>
 <text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Roofline: edge-256</text>
-<text x="14" y="52" font-size="12" fill="#52514e">one 16x16 OS array, 256 MAC/cycle; DRAM 8 B/cycle; every GEMM layer of five workloads, INT8</text>
+<text x="14" y="52" font-size="12" fill="#52514e">one 16x16 OS array, 256 MAC/cycle; system SRAM 8 B/cycle; every GEMM layer of 3 workloads, INT8</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="75.48" y1="446" x2="649.88" y2="446"/>
 <line x1="75.48" y1="349.5" x2="649.88" y2="349.5"/>
@@ -95,7 +95,7 @@
 <text x="66.48" y="160.7" font-size="12" fill="#52514e" text-anchor="end">100</text>
 <text x="66.48" y="64.2" font-size="12" fill="#52514e" text-anchor="end">1,000</text>
 </g>
-<text x="362.68" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">arithmetic intensity (MAC per DRAM byte moved)</text>
+<text x="362.68" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">arithmetic intensity (MAC per system SRAM byte moved)</text>
 <text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">MAC per cycle</text>
 <g clip-path="url(#roofline-plot)">
 <path d="M75.48,358.85 L555.13,117.1 L649.88,117.1" fill="none" stroke="#0b0b0b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
@@ -191,41 +191,17 @@
 <polygon points="551.53,122.89 556.71,131.95 546.36,131.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
 <polygon points="551.53,122.89 556.71,131.95 546.36,131.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
 <polygon points="554.22,119.29 559.39,128.34 549.04,128.34" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="367.42,222.47 373.05,228.09 367.42,233.72 361.8,228.09" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="371.96,209.97 377.59,215.6 371.96,221.22 366.34,215.6" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.73,257.57 272.36,263.19 266.73,268.82 261.11,263.19" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="266.58,257.9 272.21,263.52 266.58,269.15 260.96,263.52" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="560.5,128.01 565.67,118.96 555.32,118.96" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="566.24,127.67 571.41,118.62 561.06,118.62" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="553.76,130.26 558.94,121.2 548.59,121.2" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="554.79,128.85 559.96,119.79 549.61,119.79" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<polygon points="266.58,268.7 271.76,259.64 261.41,259.64" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
 </g>
 <text x="560.13" y="440" font-size="12" fill="#6f6e69">ridge 32 MAC/B</text>
-<text x="643.88" y="110.1" font-size="12" fill="#0b0b0b" text-anchor="end">peak 256 MAC/cycle</text>
+<text x="547.13" y="108.1" font-size="12" fill="#0b0b0b" text-anchor="end">peak 256 MAC/cycle</text>
 <text x="215.78" y="279.18" font-size="12" fill="#0b0b0b" text-anchor="middle" transform="rotate(-26.75 215.78 279.18)">8 B/cycle</text>
 <g transform="translate(667.88,68)">
-<rect width="140.12" height="105" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<rect width="140.12" height="67" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
 <circle cx="18" cy="14.5" r="4" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <text x="34" y="18.7" font-size="12" fill="#0b0b0b">MobileNetV2</text>
 <rect x="14.4" y="29.9" width="7.2" height="7.2" fill="none" stroke="#eb6834" stroke-width="1.75"/>
 <text x="34" y="37.7" font-size="12" fill="#0b0b0b">ResNet-50 v1.5</text>
 <polygon points="18,47.9 22.6,55.95 13.4,55.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
 <text x="34" y="56.7" font-size="12" fill="#0b0b0b">BERT-base layer</text>
-<polygon points="18,66.5 23,71.5 18,76.5 13,71.5" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<text x="34" y="75.7" font-size="12" fill="#0b0b0b">Llama decode</text>
-<polygon points="18,95.1 22.6,87.05 13.4,87.05" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
-<text x="34" y="94.7" font-size="12" fill="#0b0b0b">Llama prefill</text>
 </g>
 </svg>

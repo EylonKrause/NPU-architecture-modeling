@@ -9,11 +9,14 @@ Conventions shared by the studies:
     docs/design-points.md). A layer runs on its point with the tiles npuperf.mapper picks.
   - Only the GEMM layers of a workload run; vector operators (softmax, normalisation,
     pooling, residual adds) are not modeled. A layer with ``calls`` identical instances
-    runs once and counts ``calls`` times.
+    runs once and counts ``calls`` times. Depthwise convolution is the im2col lowering of
+    npuperf.workloads (G groups of N = 1, K = kh*kw): every activation-panel row is a
+    kh*kw-byte run and every output row a 1-byte run per group.
   - A call runs bit-exact (tensors, numerics, reference) when it fits the functional limits
     and FUNCTIONAL_MACS; otherwise --timing-only. Dense timing does not depend on the data.
-  - DRAM bytes are the bytes moved over DRAM: whole AXI beats, so a partial beat counts in
-    full, as the DRAM timeline charges it.
+  - External-memory bytes are the bytes the DRAM timeline charges (system SRAM on
+    edge-256): whole AXI beats, so a partial beat counts in full.
+  - The LLM workloads run only on points whose external memory is DRAM (Point.runs_llm).
   - One MAC is two operations (TOP/s).
   - A result that breaks a physical limit (above a roof, utilisation above 1, speedup above
     the core count, bandwidth above the bus) stops the run with a ``SanityError``.
@@ -92,16 +95,24 @@ class Context:
 
 @dataclass(frozen=True)
 class Point:
-    """A design point: its config file and the analytic.Design it describes."""
+    """A design point: its config file, the analytic.Design it describes and the memory
+    behind its port ("DRAM" or "system SRAM")."""
 
     name: str
     path: Path
     design: analytic.Design
     min_depth: int
+    memory: str = "DRAM"
 
     @property
     def frequency_mhz(self) -> float:
         return self.design.frequency_mhz
+
+    @property
+    def runs_llm(self) -> bool:
+        """A billion-parameter model's weights fit no microcontroller-class system SRAM,
+        so the LLM workloads run only on points that stream from DRAM."""
+        return self.memory == "DRAM"
 
     def flags(self, **extra: Any) -> dict[str, Any]:
         """--config first, so the flags after it override the file."""
@@ -113,7 +124,7 @@ def design_points(names: Iterable[str] = designs.DESIGN_POINTS) -> list[Point]:
     for name in names:
         document = designs.load(name)
         points.append(Point(name, designs.config_path(name), designs.design(document),
-                            designs.min_panel_depth(name)))
+                            designs.min_panel_depth(name), designs.external_memory(name)))
     return points
 
 
@@ -187,6 +198,10 @@ def fmt(value: float, digits: int = 3) -> str:
     return f"{rounded:,.{decimals}f}"
 
 
+def plural(count: int, noun: str) -> str:
+    return f"{count} {noun}" + ("" if count == 1 else "s")
+
+
 def pct(value: float, decimals: int = 1) -> str:
     return f"{100 * value:.{decimals}f}%"
 
@@ -257,6 +272,8 @@ def run_networks(ctx: Context, points: Sequence[Point]) -> dict[tuple[str, str, 
     for point in points:
         for name, network in NETWORKS.items():
             plan[(point.name, network, 8)] = network_calls(point, name, network)
+        if not point.runs_llm:
+            continue
         for bits in (8, 4):
             plan[(point.name, "Llama decode", bits)] = network_calls(point, DECODE,
                                                                     "Llama decode", bits)
@@ -273,11 +290,56 @@ def run_networks(ctx: Context, points: Sequence[Point]) -> dict[tuple[str, str, 
     return out
 
 
+def network_weight_bytes(name: str) -> int:
+    """INT8 bytes of every weight operand of a workload, each once; an attention matmul's B
+    operand is the KV cache, not a weight."""
+    total = 0
+    for layer in workloads.load(name)["layers"]:
+        if layer.get("b_operand", "weights") == "weights":
+            gemm = workloads.lower(layer)
+            total += gemm.calls * gemm.groups * gemm.k * gemm.n
+    return total
+
+
+def burst_efficiency(pairs: Sequence[tuple[Call, Mapping[str, Any]]], direction: str) -> float:
+    """Payload bytes over whole-beat bytes of one AXI direction, every call counted."""
+    payload = moved = 0
+    for call, result in pairs:
+        channel = result["memory"][direction]
+        payload += call.gemm.calls * channel["payload_bytes"]
+        moved += call.gemm.calls * channel["beats"] * sim.config_value(result["config"],
+                                                                       "axi_data_bytes")
+    return payload / moved
+
+
+def depthwise_row(point: Point, calls: Sequence[Call],
+                  results: Sequence[Mapping[str, Any]]) -> tuple[list[str], dict[str, Any]]:
+    """MobileNetV2 with and without its depthwise layers on ``point``."""
+    pairs = list(zip(calls, results))
+    depthwise = [pair for pair in pairs if pair[0].layer["op"] == "depthwise_conv2d"]
+    rest = [pair for pair in pairs if pair[0].layer["op"] != "depthwise_conv2d"]
+    whole, dw = totals(calls, results), totals(*zip(*depthwise))
+    other = totals(*zip(*rest))
+    util = other.macs / (other.cycles * point.design.peak_macs_per_cycle)
+    record = {"point": point.name, "cycles": whole.cycles, "depthwise_cycles": dw.cycles,
+              "dram_bytes": whole.dram_bytes, "depthwise_dram_bytes": dw.dram_bytes,
+              "depthwise_read_efficiency": burst_efficiency(depthwise, "read"),
+              "depthwise_write_efficiency": burst_efficiency(depthwise, "write"),
+              "other_cycles": other.cycles, "other_macs": other.macs,
+              "other_mac_utilisation": util}
+    row = [f"`{point.name}`", fmt(whole.latency_ms(point.frequency_mhz)),
+           pct(dw.cycles / whole.cycles), pct(dw.dram_bytes / whole.dram_bytes),
+           pct(record["depthwise_read_efficiency"]), pct(record["depthwise_write_efficiency"]),
+           fmt(other.latency_ms(point.frequency_mhz)), pct(util)]
+    return row, record
+
+
 def s1_networks(ctx: Context) -> StudyOutput:
     points = design_points()
     runs = run_networks(ctx, points)
     out = StudyOutput()
-    rows, llm, raw = [], [], []
+    rows, llm, depthwise, raw = [], [], [], []
+    weights = {network: network_weight_bytes(name) for name, network in NETWORKS.items()}
     for point in points:
         peak = point.design.peak_macs_per_cycle
         for network in NETWORKS.values():
@@ -287,14 +349,21 @@ def s1_networks(ctx: Context) -> StudyOutput:
             util = t.macs / (t.cycles * peak)
             require(util <= 1, f"{point.name} {network}: utilisation {util}")
             memory = t.bound_calls["bandwidth"] + t.bound_calls["latency"]
-            rows.append([f"`{point.name}`", network, fmt(ms), fmt(1e3 / ms),
+            rows.append([f"`{point.name}`", network, point.memory,
+                         fmt(weights[network] / 1e6), fmt(ms), fmt(1e3 / ms),
                          fmt(OPS_PER_MAC * t.macs / (ms * 1e9)), pct(util),
                          fmt(t.dram_bytes / 1e6), pct(t.bound_calls["compute"] / t.calls, 0),
                          pct(memory / t.calls, 0)])
-            raw.append({"point": point.name, "network": network, "cycles": t.cycles,
+            raw.append({"point": point.name, "network": network, "memory": point.memory,
+                        "weight_bytes": weights[network], "cycles": t.cycles,
                         "macs": t.macs, "dram_bytes": t.dram_bytes, "latency_ms": ms,
                         "bound_calls": t.bound_calls, "calls": t.calls,
                         "bit_exact_calls": t.bit_exact_calls})
+        row, record = depthwise_row(point, *runs[(point.name, "MobileNetV2", 8)])
+        depthwise.append(row)
+        raw.append({"network": "MobileNetV2 depthwise split", **record})
+        if not point.runs_llm:
+            continue
         decode = {bits: totals(*runs[(point.name, "Llama decode", bits)]) for bits in (8, 4)}
         prefill = {bits: totals(*runs[(point.name, "Llama prefill", bits)]) for bits in (8, 4)}
         tps = {bits: 1e3 / decode[bits].latency_ms(point.frequency_mhz) for bits in (8, 4)}
@@ -317,9 +386,15 @@ def s1_networks(ctx: Context) -> StudyOutput:
                             "bound_calls": t.bound_calls, "calls": t.calls,
                             "bit_exact_calls": t.bit_exact_calls})
     out.tables["s1-networks"] = markdown_table(
-        ["Design point", "Network", "Latency (ms)", "Inferences/s", "Achieved TOP/s",
-         "MAC utilisation", "DRAM MB/inference", "Compute-bound layers",
-         "Memory-bound layers"], rows, [False, False] + [True] * 7)
+        ["Design point", "Network", "External memory", "Weights (MB)", "Latency (ms)",
+         "Inferences/s", "Achieved TOP/s", "MAC utilisation", "External memory MB/inference",
+         "Compute-bound layers", "Memory-bound layers"], rows,
+        [False, False, False] + [True] * 8)
+    out.tables["s1-depthwise"] = markdown_table(
+        ["Design point", "MobileNetV2 latency (ms)", "Depthwise share of cycles",
+         "Depthwise share of external-memory bytes", "Depthwise read burst efficiency",
+         "Depthwise write burst efficiency", "Latency without depthwise (ms)",
+         "MAC utilisation without depthwise"], depthwise)
     out.tables["s1-llm"] = markdown_table(
         ["Design point", "Decode tokens/s INT8", "Decode tokens/s INT4", "INT4 speedup",
          "Decode DRAM MB/token INT8", "Decode DRAM rate used INT8", "Prefill TTFT INT8 (ms)",
@@ -340,7 +415,8 @@ def s2_roofline(ctx: Context) -> StudyOutput:
     raw = []
     for point in points:
         marks = []
-        for network in NETWORK_ORDER:
+        networks = [network for network in NETWORK_ORDER if (point.name, network, 8) in runs]
+        for network in networks:
             calls, results = runs[(point.name, network, 8)]
             for call, result in zip(calls, results):
                 intensity = result["macs"] / dram_bytes(result)
@@ -356,13 +432,13 @@ def s2_roofline(ctx: Context) -> StudyOutput:
         d = point.design
         array = f"{d.array_rows}x{d.array_cols} {d.dataflow.upper()}"
         cores = f"{d.cores} cores of {array}" if d.cores > 1 else f"one {array} array"
-        subtitle = (f"{cores}, {d.peak_macs_per_cycle:,} MAC/cycle; DRAM "
-                    f"{d.dram_bytes_per_cycle:g} B/cycle; every GEMM layer of five workloads, "
-                    "INT8")
+        subtitle = (f"{cores}, {d.peak_macs_per_cycle:,} MAC/cycle; {point.memory} "
+                    f"{d.dram_bytes_per_cycle:g} B/cycle; every GEMM layer of "
+                    f"{len(networks)} workloads, INT8")
         fig = roofline.figure(d, marks, title=f"Roofline: {point.name}", subtitle=subtitle,
                               label_points=False, width=820, height=500,
                               group_order=NETWORK_ORDER, hollow=True)
-        fig.x.label = "arithmetic intensity (MAC per DRAM byte moved)"
+        fig.x.label = f"arithmetic intensity (MAC per {point.memory} byte moved)"
         fig.legend_position = "right"
         out.figures[f"s2-roofline-{point.name}"] = fig
     out.raw["points"] = raw
@@ -448,6 +524,14 @@ def s4_layers() -> list[tuple[str, workloads.Gemm, int]]:
             ("Llama-3.2-1B gate_proj GEMV INT4 (1x8192x2048)", decode["gate_proj"], 4)]
 
 
+def coincident(curves: Sequence[Sequence[float]]) -> list[list[int]]:
+    """Indexes of ``curves`` grouped by equal values (to 1e-9), in order of first appearance."""
+    groups: dict[tuple[float, ...], list[int]] = {}
+    for index, values in enumerate(curves):
+        groups.setdefault(tuple(round(value, 9) for value in values), []).append(index)
+    return list(groups.values())
+
+
 def s4_scaling(ctx: Context) -> StudyOutput:
     point = design_points(["client-16c"])[0]
     out = StudyOutput()
@@ -489,7 +573,7 @@ def s4_scaling(ctx: Context) -> StudyOutput:
         fig.x.tick_format = lambda v: f"{v:g}"
         fig.y.tick_format = lambda v: f"{v:g}"
         fig.line(S4_CORES, S4_CORES, color=svg.INK_MUTED, width=1.25, label="ideal (= cores)")
-        index = 0
+        curves: list[tuple[str, int, int, list[float]]] = []   # partition, rate, units, speedups
         for rate in S4_RATES.values():
             for partition in ("m", "n"):
                 chunk = [next(results) for _ in S4_CORES]
@@ -513,10 +597,8 @@ def s4_scaling(ctx: Context) -> StudyOutput:
                                 "dram_ceiling": ceiling, "dram_bytes": dram_bytes(result),
                                 "units": result["cluster"]["units"],
                                 "imbalance": result["cluster"]["imbalance"]})
-                color = svg.PALETTE[index]
-                dash = None if rate == S4_RATES["client-16c"] else "7 4"
-                fig.line(S4_CORES, speedups, color=color, dash=dash,
-                         marker=svg.MARKERS[index], label=f"partition {partition}, {rate} B/cycle")
+                units = max(result["cluster"]["units"] for result, _ in chunk[1:])
+                curves.append((partition, rate, units, speedups))
                 if partition == "m":
                     fig.hline(ceiling, f"DRAM ceiling at {rate} B/cycle: {ceiling:.1f}",
                               color=svg.INK_SECONDARY, dash="2 3", width=1)
@@ -524,7 +606,19 @@ def s4_scaling(ctx: Context) -> StudyOutput:
                             + [f"{s:.2f}" for s, c in zip(speedups, S4_CORES)
                                if c in (2, 4, 8, 16, 32)]
                             + [f"{ceiling:.2f}"])
-                index += 1
+        # Curves that coincide (the m split of a one-row GEMV leaves one busy core at every
+        # DRAM rate) are drawn once under a joint label.
+        for members in coincident([speedups for *_, speedups in curves]):
+            first = members[0]
+            _, rate, _, speedups = curves[first]
+            partitions = "/".join(sorted({curves[i][0] for i in members}))
+            rates = " and ".join(str(curves[i][1]) for i in members)
+            dash = None if rate == S4_RATES["client-16c"] else "7 4"
+            fig.line(S4_CORES, speedups, color=svg.PALETTE[first], dash=dash,
+                     marker=svg.MARKERS[first], label=f"partition {partitions}, {rates} B/cycle")
+            if all(curves[i][2] == 1 for i in members):
+                fig.annotate(S4_CORES[1], speedups[1], f"partition {partitions}: one tile band, "
+                             "one busy core", dx=4, dy=-10, color=svg.PALETTE[first])
         out.figures[f"s4-scaling-{slug}"] = fig
     out.tables["s4-scaling"] = markdown_table(
         ["Layer", "Partition", "DRAM B/cycle", "2 cores", "4 cores", "8 cores", "16 cores",
@@ -573,35 +667,38 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
         raw.append({"network": network, "layer": layer["name"], "type": kind,
                     "calls": gemm.calls, "m": gemm.m, "n": gemm.n, "k": gemm.k,
                     "groups": gemm.groups, "os": values[0], "ws": values[1]})
-    smallest = min(min(v[0][0], v[1][0]) for members in by_type.values() for _, v in members)
-    low = 10 ** math.floor(math.log10(smallest))
-    fig = svg.Figure(820, 560, title="Array utilisation: output- vs weight-stationary",
+    # Linear axes: the dense layers sit between 0.4 and 1, where the OS-WS differences of
+    # the table are; the depthwise and FC layers collapse near the origin.
+    fig = svg.Figure(820, 600, title="Array utilisation: output- vs weight-stationary",
                      subtitle="32x32 array, one core of client-16c; MACs / (compute-busy "
-                              "cycles x 1024), each MobileNetV2 and ResNet-50 layer",
+                              "cycles x 1024); one mark per distinct layer shape",
                      x_label="output-stationary utilisation", y_label="weight-stationary "
-                     "utilisation", x_scale="log", y_scale="log", x_range=(low, 1),
-                     y_range=(low, 1), legend="lower right", id_prefix="s5")
-    fig.line([low, 1], [low, 1], color=svg.INK_MUTED, width=1, dash="4 4")
-    fig.annotate(0.3, 0.3, "equal", dx=6, dy=14, color=svg.INK_MUTED)
+                     "utilisation", x_range=(0, 1), y_range=(0, 1), legend="upper left",
+                     id_prefix="s5")
+    fig.line([0, 1], [0, 1], color=svg.INK_MUTED, width=1, dash="4 4")
+    fig.annotate(0.3, 0.3, "equal", dx=8, dy=14, color=svg.INK_MUTED)
     rows = []
     for index, kind in enumerate(TYPE_ORDER):
         members = by_type[kind]
         if not members:
             continue
-        fig.scatter([v[0][0] for _, v in members], [v[1][0] for _, v in members],
+        # Layers count every call; workload entries that repeat a shape plot once.
+        layers = sum(gemm.calls for gemm, _ in members)
+        shapes = sorted({(gemm.m, gemm.n, gemm.k, gemm.groups): v
+                         for gemm, v in members}.items())
+        fig.scatter([v[0][0] for _, v in shapes], [v[1][0] for _, v in shapes],
                     color=svg.PALETTE[index], marker=svg.MARKERS[index],
-                    label=f"{kind} ({len(members)})", hollow=True)
+                    label=f"{kind} ({plural(layers, 'layer')}, "
+                          f"{plural(len(shapes), 'shape')})", hollow=True)
+        # MAC-weighted means of (OS, WS) x (array, end-to-end) utilisation.
         weights = [g.total_macs for g, _ in members]
-        total = sum(weights)
-
-        def mean(position: int, measure: int) -> float:
-            return sum(w * v[position][measure] for w, (_, v) in zip(weights, members)) / total
-        rows.append([kind, str(len(members)), fmt(total / 1e6), pct(mean(0, 0)),
-                     pct(mean(1, 0)), pct(mean(0, 1)), pct(mean(1, 1))])
+        means = [pct(sum(w * v[flow][measure] for w, (_, v) in zip(weights, members))
+                     / sum(weights)) for measure in (0, 1) for flow in (0, 1)]
+        rows.append([kind, str(layers), str(len(shapes)), fmt(sum(weights) / 1e6), *means])
     out.figures["s5-dataflow"] = fig
     out.tables["s5-dataflow"] = markdown_table(
-        ["Layer type", "Layers", "MACs (M)", "OS array utilisation", "WS array utilisation",
-         "OS end-to-end", "WS end-to-end"], rows)
+        ["Layer type", "Layers", "Distinct shapes", "MACs (M)", "OS array utilisation",
+         "WS array utilisation", "OS end-to-end", "WS end-to-end"], rows)
     out.raw["layers"] = raw
     return out
 
@@ -666,58 +763,94 @@ def _random_config(rng: random.Random, model: str) -> dict[str, Any]:
     return flags
 
 
+def s6_entry(flags: Mapping[str, Any], result: Mapping[str, Any]) -> dict[str, Any]:
+    """analyze() and schedule() of one npu-sim run, against its result."""
+    design = analytic.Design.from_result(result)
+    model = analytic.analyze(design)
+    replay = analytic.schedule(design)
+    cycles = result["cycles"]
+    require(model.lower_bound_cycles <= cycles,
+            f"S6: lower bound {model.lower_bound_cycles} above {cycles} for {flags}")
+    traffic = (model.read_bytes, model.write_bytes, model.compute_busy_cycles) == (
+        result["read_bytes"], result["write_bytes"], result["compute_busy_cycles"])
+    return {"flags": dict(flags), "cycles": cycles, "estimate": model.estimate_cycles,
+            "lower_bound": model.lower_bound_cycles, "schedule": replay.cycles,
+            "bound": model.bound, "observed_bound": analytic.observed_bound(result),
+            "traffic_exact": traffic}
+
+
+def s6_design_point_runs(ctx: Context) -> dict[str, list[tuple[dict, dict]]]:
+    """Point name -> the distinct (flags, result) runs of its S1 network and LLM layers,
+    each with the tiling npuperf.mapper picked by its analyze() estimate."""
+    runs = run_networks(ctx, design_points())
+    out: dict[str, list[tuple[dict, dict]]] = {}
+    seen: set[str] = set()
+    for (point, _, _), (calls, results) in runs.items():
+        for call, result in zip(calls, results):
+            key = Context.key(call.flags)
+            if key not in seen:
+                seen.add(key)
+                out.setdefault(point, []).append((call.flags, result))
+    return out
+
+
 def s6_analytic(ctx: Context) -> StudyOutput:
     configs = s6_configs()
     results = ctx.run_all(configs)
     out = StudyOutput()
     raw = []
-    groups: dict[str, list[dict]] = {"serial": [], "axi": [], "axi cluster": []}
+    groups: dict[str, list[dict]] = {"random serial": [], "random axi": [],
+                                     "random axi cluster": []}
     for flags, result in zip(configs, results):
         check_result(result, f"S6 {flags}")
-        design = analytic.Design.from_result(result)
-        model = analytic.analyze(design)
-        replay = analytic.schedule(design)
-        cycles = result["cycles"]
-        require(model.lower_bound_cycles <= cycles,
-                f"S6: lower bound {model.lower_bound_cycles} above {cycles} for {flags}")
-        traffic = (model.read_bytes, model.write_bytes, model.compute_busy_cycles) == (
-            result["read_bytes"], result["write_bytes"], result["compute_busy_cycles"])
-        entry = {"flags": flags, "cycles": cycles, "estimate": model.estimate_cycles,
-                 "lower_bound": model.lower_bound_cycles, "schedule": replay.cycles,
-                 "bound": model.bound, "observed_bound": analytic.observed_bound(result),
-                 "traffic_exact": traffic}
+        entry = s6_entry(flags, result)
         raw.append(entry)
-        kind = flags["memory_model"] + (" cluster" if flags.get("cores", 1) > 1 else "")
+        kind = "random " + flags["memory_model"] + (" cluster" if flags.get("cores", 1) > 1
+                                                     else "")
         groups[kind].append(entry)
+    for point, runs in s6_design_point_runs(ctx).items():
+        kind = f"`{point}` network layers"
+        for flags, result in runs:
+            entry = s6_entry(flags, result)
+            raw.append({"point": point, **entry})
+            groups.setdefault(kind, []).append(entry)
     rows = []
-    low = min(min(e["cycles"], e["estimate"]) for e in raw)
-    high = max(max(e["cycles"], e["estimate"]) for e in raw)
-    lo, hi = 10 ** math.floor(math.log10(low)), 10 ** math.ceil(math.log10(high))
-    fig = svg.Figure(760, 560, title="Closed-form estimate vs npu-sim cycles",
-                     subtitle=f"{len(raw)} seeded random dense configurations "
-                              f"(seed {S6_SEED}); diagonal = exact",
-                     x_label="npu-sim cycles", y_label="analytic.analyze estimate (cycles)",
-                     x_scale="log", y_scale="log", x_range=(lo, hi), y_range=(lo, hi),
-                     legend="upper left", id_prefix="s6")
-    fig.line([lo, hi], [lo, hi], color=svg.INK_MUTED, width=1, dash="4 4")
+    # The ratio on a linear axis: on log-log axes spanning six decades a 30% error is a
+    # few pixels off the diagonal.
+    lo = 10 ** math.floor(math.log10(min(e["cycles"] for e in raw)))
+    hi = 10 ** math.ceil(math.log10(max(e["cycles"] for e in raw)))
+    ratios = [e["estimate"] / e["cycles"] for e in raw]
+    random_count = sum(len(groups[kind]) for kind in groups if kind.startswith("random"))
+    fig = svg.Figure(820, 600, title="Closed-form estimate / npu-sim cycles",
+                     subtitle=f"{random_count} seeded random dense configurations (seed "
+                              f"{S6_SEED}) and the distinct S1 layer runs of each design "
+                              "point; 1 = exact",
+                     x_label="npu-sim cycles", y_label="analytic.analyze estimate / npu-sim "
+                     "cycles", x_scale="log", x_range=(lo, hi),
+                     y_range=(math.floor(min(ratios) * 10) / 10, math.ceil(max(ratios) * 10) / 10),
+                     legend="right", id_prefix="s6")
+    fig.hline(1.0, color=svg.INK_MUTED, dash="4 4", width=1)
     for index, (kind, members) in enumerate(groups.items()):
         if not members:
             continue
         errors = sorted(abs(e["estimate"] - e["cycles"]) / e["cycles"] for e in members)
+        low_count = sum(e["estimate"] < e["cycles"] for e in members)
         agree = sum(e["bound"] == e["observed_bound"] for e in members)
         exact = sum(e["schedule"] == e["cycles"] for e in members)
         traffic = sum(e["traffic_exact"] for e in members)
-        rows.append([kind, str(len(members)), pct(statistics.median(errors)),
-                     pct(_percentile(errors, 0.95)), pct(errors[-1]),
-                     f"{agree}/{len(members)}", f"{exact}/{len(members)}",
-                     f"{traffic}/{len(members)}"])
-        fig.scatter([e["cycles"] for e in members], [e["estimate"] for e in members],
+        count = len(members)
+        rows.append([kind, str(count), pct(statistics.median(errors)),
+                     pct(_percentile(errors, 0.95)), pct(errors[-1]), f"{low_count}/{count}",
+                     f"{agree}/{count}", f"{exact}/{count}", f"{traffic}/{count}"])
+        fig.scatter([e["cycles"] for e in members],
+                    [e["estimate"] / e["cycles"] for e in members],
                     color=svg.PALETTE[index], marker=svg.MARKERS[index],
-                    label=f"{kind} ({len(members)})", hollow=True, size=4)
+                    label=f"{kind.replace('`', '')} ({count})", hollow=True, size=4)
     out.figures["s6-analytic"] = fig
     out.tables["s6-analytic"] = markdown_table(
-        ["Memory model", "Configs", "Median error", "p95 error", "Max error",
-         "Bound class agrees", "schedule() exact", "Traffic and compute exact"], rows)
+        ["Configurations", "Count", "Median error", "p95 error", "Max error",
+         "Estimate below npu-sim", "Bound class agrees", "schedule() exact",
+         "Traffic and compute exact"], rows)
     out.raw["configs"] = raw
     return out
 
@@ -761,38 +894,46 @@ def palette_input(ctx: Context, gemm: workloads.Gemm) -> Path:
     return path
 
 
+def decode_rate(point: Point, pieces: Sequence[workloads.Gemm],
+                results: Sequence[Mapping[str, Any]], attention_cycles: int,
+                label: str) -> tuple[int, float]:
+    """(cycles, tokens/s) of one decode token: the attention matmuls plus every weight
+    piece's calls."""
+    cycles = attention_cycles
+    for piece, result in zip(pieces, results):
+        check_result(result, f"S7 {point.name} {piece.name} {label}")
+        cycles += piece.calls * result["cycles"]
+    return cycles, 1e3 / (cycles / (point.frequency_mhz * 1e3))
+
+
 def s7_compression(ctx: Context) -> StudyOutput:
-    points = design_points()
+    points = [point for point in design_points() if point.runs_llm]
     decode = workloads.load(DECODE)
     out = StudyOutput()
     rows, raw = [], []
-    fig = svg.Figure(820, 500, title="Llama-3.2-1B decode: 4-bit palette weights",
-                     subtitle="tokens/s relative to dense INT8 weights; dashed: dense INT4; "
-                              "KV-cache matmuls stay INT8",
-                     x_label="weight decoder throughput (values per cycle per core)",
-                     y_label="decode tokens/s / dense INT8 tokens/s", x_scale="log",
-                     x_range=(4, 256), y_range=(0, 2.2), x_ticks=list(S7_DECODER_RATES),
-                     legend="right", id_prefix="s7")
-    fig.x.tick_format = lambda v: f"{v:g}"
-    for index, point in enumerate(points):
-        dense = {bits: network_calls(point, DECODE, "Llama decode", bits) for bits in (8, 4)}
-        dense_results = {bits: ctx.run_all([c.flags for c in calls])
-                         for bits, calls in dense.items()}
-        tps = {f"INT{bits}": 1e3 / totals(dense[bits], dense_results[bits])
-               .latency_ms(point.frequency_mhz) for bits in (8, 4)}
-        # Palette: the weight operands, split to the functional host limit and mapped for
-        # the palette encoding at each decoder rate; attention matmuls keep their dense
-        # INT8 runs.
-        attention = [(c, r) for c, r in zip(dense[8], dense_results[8])
+    # Every weight GEMM is split to the functional host limit of the palette runs, and the
+    # dense baselines run the same pieces, so per-call fill and drain costs compare like for
+    # like (S1 runs the unsplit layers).
+    pieces = [piece for layer in decode["layers"] if layer.get("b_operand") == "weights"
+              for piece in workloads.split(workloads.lower(layer), timing_only=False,
+                                           max_host=PALETTE_HOST_BYTES)]
+    curves = []
+    for point in points:
+        # Attention matmuls read the KV cache, which stays INT8 in every column.
+        attention = [c for c in network_calls(point, DECODE, "Llama decode", 8)
                      if c.layer.get("b_operand") != "weights"]
-        attention_cycles = sum(c.gemm.calls * r["cycles"] for c, r in attention)
-        pieces = []
-        for layer in decode["layers"]:
-            if layer.get("b_operand") != "weights":
-                continue
-            gemm = workloads.lower(layer)
-            for piece in workloads.split(gemm, timing_only=False, max_host=PALETTE_HOST_BYTES):
-                pieces.append(piece)
+        attention_results = ctx.run_all([c.flags for c in attention])
+        for call, result in zip(attention, attention_results):
+            check_result(result, f"S7 {point.name} {call.layer['name']}")
+        attention_cycles = sum(c.gemm.calls * r["cycles"]
+                               for c, r in zip(attention, attention_results))
+        dense = {}
+        for bits in (8, 4):
+            results = ctx.run_all([layer_flags(point, piece, bits) for piece in pieces])
+            cycles, speed = decode_rate(point, pieces, results, attention_cycles, f"INT{bits}")
+            dense[f"INT{bits}"] = speed
+            raw.append({"point": point.name, "weights": f"dense INT{bits}", "cycles": cycles,
+                        "tokens_per_s": speed})
         palette = []
         for rate in S7_DECODER_RATES:
             runs = []
@@ -809,24 +950,34 @@ def s7_compression(ctx: Context) -> StudyOutput:
                                         weight_encoding="palette", palette_bits=PALETTE_BITS,
                                         weight_decode_values_per_cycle=rate))
             results = ctx.run_all(runs)
-            cycles = attention_cycles
             for piece, result in zip(pieces, results):
-                check_result(result, f"S7 {point.name} {piece.name} rate {rate}")
                 require(result["numerics"] == "bit-exact", f"S7 {piece.name}: not bit-exact")
-                cycles += piece.calls * result["cycles"]
-            speed = 1e3 / (cycles / (point.frequency_mhz * 1e3))
+            cycles, speed = decode_rate(point, pieces, results, attention_cycles,
+                                        f"palette rate {rate}")
             palette.append(speed)
-            raw.append({"point": point.name, "decoder_values_per_cycle": rate,
-                        "cycles": cycles, "tokens_per_s": speed})
-        color = svg.PALETTE[index]
-        fig.line(S7_DECODER_RATES, [p / tps["INT8"] for p in palette], color=color,
-                 marker=svg.MARKERS[index], label=f"{point.name} palette")
-        fig.line([4, 256], [tps["INT4"] / tps["INT8"]] * 2, color=color, width=1.25,
-                 dash="6 4")
-        rows.append([f"`{point.name}`", fmt(tps["INT8"]), fmt(tps["INT4"])]
+            raw.append({"point": point.name, "weights": "palette",
+                        "decoder_values_per_cycle": rate, "cycles": cycles,
+                        "tokens_per_s": speed})
+        curves.append((point, dense, palette))
+        rows.append([f"`{point.name}`", fmt(dense["INT8"]), fmt(dense["INT4"])]
                     + [fmt(p) for p in palette])
-        raw.append({"point": point.name, "dense_tokens_per_s": tps})
-    fig.hline(1.0, "dense INT8", color=svg.INK_MUTED)
+    # Relative to dense INT4, so one reference line serves every point.
+    int8 = [dense["INT8"] / dense["INT4"] for _, dense, _ in curves]
+    top = max(p / dense["INT4"] for _, dense, palette in curves for p in palette)
+    fig = svg.Figure(820, 500, title="Llama-3.2-1B decode: 4-bit palette vs dense INT4 weights",
+                     subtitle=f"every weight GEMM in the same pieces for all three formats; "
+                              f"dense INT8 runs at {min(int8):.2f} to {max(int8):.2f} of dense "
+                              "INT4; KV-cache matmuls stay INT8",
+                     x_label="weight decoder throughput (values per cycle per core)",
+                     y_label="palette tokens/s / dense INT4 tokens/s", x_scale="log",
+                     x_range=(4, 256), y_range=(0, max(1.2, math.ceil(top * 10) / 10)),
+                     x_ticks=list(S7_DECODER_RATES), legend="lower right", id_prefix="s7")
+    fig.x.tick_format = lambda v: f"{v:g}"
+    fig.hline(1.0, "dense INT4, same pieces", color=svg.INK_MUTED, text_anchor="start")
+    for index, (point, dense, palette) in enumerate(curves):
+        fig.line(S7_DECODER_RATES, [p / dense["INT4"] for p in palette],
+                 color=svg.PALETTE[index], marker=svg.MARKERS[index],
+                 label=f"{point.name} palette")
     out.figures["s7-compression"] = fig
     out.tables["s7-compression"] = markdown_table(
         ["Design point", "Dense INT8", "Dense INT4"]

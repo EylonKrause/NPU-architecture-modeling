@@ -67,6 +67,8 @@
 <text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">speedup over one core</text>
 <g clip-path="url(#s4-conv-plot)">
 <path d="M65.16,431.07 L173.9,384.68 L282.63,338.3 L391.37,291.92 L454.97,264.78 L500.1,245.53 L563.71,218.4 L608.84,199.15" fill="none" stroke="#6f6e69" stroke-width="1.25" stroke-linejoin="round" stroke-linecap="round"/>
+<line x1="65.16" y1="241.5" x2="608.84" y2="241.5" stroke="#52514e" stroke-width="1" stroke-dasharray="2 3"/>
+<line x1="65.16" y1="114.54" x2="608.84" y2="114.54" stroke="#52514e" stroke-width="1" stroke-dasharray="2 3"/>
 <path d="M65.16,431.07 L173.9,391.13 L282.63,357.19 L391.37,323.28 L454.97,333.78 L500.1,315.53 L563.71,315.53 L608.84,315.53" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <circle cx="65.16" cy="431.07" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="173.9" cy="391.13" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
@@ -76,7 +78,6 @@
 <circle cx="500.1" cy="315.53" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="563.71" cy="315.53" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="608.84" cy="315.53" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
-<line x1="65.16" y1="241.5" x2="608.84" y2="241.5" stroke="#52514e" stroke-width="1" stroke-dasharray="2 3"/>
 <path d="M65.16,431.07 L173.9,391.6 L282.63,375.95 L391.37,375.95 L454.97,375.95 L500.1,375.95 L563.71,375.95 L608.84,375.95" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <rect x="61.56" y="427.47" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="170.3" y="388" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
@@ -95,7 +96,6 @@
 <polygon points="500.1,257.85 504.7,265.9 495.5,265.9" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="563.71,257.85 568.31,265.9 559.11,265.9" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="608.84,235.75 613.44,243.8 604.24,243.8" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
-<line x1="65.16" y1="114.54" x2="608.84" y2="114.54" stroke="#52514e" stroke-width="1" stroke-dasharray="2 3"/>
 <path d="M65.16,431.07 L173.9,391.56 L282.63,359.99 L391.37,359.99 L454.97,359.99 L500.1,359.99 L563.71,359.99 L608.84,359.99" fill="none" stroke="#eda100" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 4"/>
 <polygon points="65.16,426.07 70.16,431.07 65.16,436.07 60.16,431.07" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="173.9,386.56 178.9,391.56 173.9,396.56 168.9,391.56" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>

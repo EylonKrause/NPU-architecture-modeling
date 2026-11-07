@@ -3,7 +3,7 @@
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="roofline-plot"><rect x="71.52" y="58" width="580.36" height="388"/></clipPath></defs>
 <text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Roofline: workstation-32c</text>
-<text x="14" y="52" font-size="12" fill="#52514e">32 cores of 32x32 OS, 32,768 MAC/cycle; DRAM 667 B/cycle; every GEMM layer of five workloads, INT8</text>
+<text x="14" y="52" font-size="12" fill="#52514e">32 cores of 32x32 OS, 32,768 MAC/cycle; DRAM 667 B/cycle; every GEMM layer of 5 workloads, INT8</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="71.52" y1="446" x2="649.88" y2="446"/>
 <line x1="71.52" y1="368.8" x2="649.88" y2="368.8"/>
@@ -234,8 +234,8 @@
 <polygon points="578.07,126.72 583.24,117.66 572.89,117.66" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
 <polygon points="360.42,242.35 365.6,233.3 355.25,233.3" fill="none" stroke="#e87ba4" stroke-width="1.75"/>
 </g>
-<text x="610.25" y="440" font-size="12" fill="#6f6e69">ridge 49.1 MAC/B</text>
-<text x="643.88" y="90.41" font-size="12" fill="#0b0b0b" text-anchor="end">peak 32,768 MAC/cycle</text>
+<text x="600.25" y="440" font-size="12" fill="#6f6e69" text-anchor="end">ridge 49.1 MAC/B</text>
+<text x="597.25" y="88.41" font-size="12" fill="#0b0b0b" text-anchor="end">peak 32,768 MAC/cycle</text>
 <text x="227.87" y="289.83" font-size="12" fill="#0b0b0b" text-anchor="middle" transform="rotate(-28.1 227.87 289.83)">667 B/cycle</text>
 <g transform="translate(667.88,68)">
 <rect width="140.12" height="105" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>

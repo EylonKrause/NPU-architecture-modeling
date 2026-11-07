@@ -39,6 +39,10 @@ TEXT_KEYS = ("name", "description")
 # Sram_burst_length for edge-256 (its port reads system SRAM) and Dram_burst_length for the
 # rest (docs/design-points.md). tile_rule and npuperf.mapper keep panels at least this deep.
 MIN_PANEL_DEPTH = {"edge-256": 32, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
+# The memory behind each point's AXI port: edge-256 follows Vela's Sram_Only memory mode, every
+# tensor in system SRAM; the others stream every tensor from DRAM.
+EXTERNAL_MEMORY = {"edge-256": "system SRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
+                   "workstation-32c": "DRAM"}
 
 
 def config_path(name: str | Path) -> Path:
@@ -55,6 +59,11 @@ def config_path(name: str | Path) -> Path:
 def min_panel_depth(name: str) -> int:
     """MIN_PANEL_DEPTH of a design point; 32 B (the smaller Vela burst) for any other."""
     return MIN_PANEL_DEPTH.get(name, 32)
+
+
+def external_memory(name: str) -> str:
+    """EXTERNAL_MEMORY of a design point; DRAM for any other."""
+    return EXTERNAL_MEMORY.get(name, "DRAM")
 
 
 def names() -> list[str]:
