@@ -58,7 +58,8 @@ def run_sweep(binary: Path, timeout: float = 60) -> tuple[dict, list[dict]]:
                          "read_bytes": result["read_bytes"], "write_bytes": result["write_bytes"],
                          "compute_busy_cycles": result["compute_busy_cycles"],
                          "dma_busy_cycles": result["dma_busy_cycles"], "bound": model.bound,
-                         "output_hash": result["output_hash"]})
+                         "output_hash": result["output_hash"],
+                         "numerical_match": result["numerical_match"]})
     report = {"schema_version": 1, "experiment": "paired_architecture_cycles",
               "pair_count_per_variant": len(SHAPES),
               "geomean_baseline_over_candidate_cycles": {name: geomean(values)

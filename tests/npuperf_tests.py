@@ -7,6 +7,7 @@ skipped, so the suite runs against older and newer npu-sim builds alike.
 from __future__ import annotations
 
 import argparse
+import csv
 import itertools
 import json
 import os
@@ -210,15 +211,31 @@ class FlagTests(unittest.TestCase):
     def test_result_validation(self):
         good = {"schema_version": 1, "numerical_match": True, "cycles": 10, "macs": 1,
                 "read_bytes": 1, "write_bytes": 1, "compute_busy_cycles": 2,
-                "dma_busy_cycles": 3, "config": {}, "output_hash": 7}
+                "dma_busy_cycles": 3, "peak_inflight_tiles": 1, "slot_wait_cycles": 0,
+                "scratchpad_bytes": 64, "simulation_wall_seconds": 0.001,
+                "compute_utilization": 0.2, "memory_utilization": 0.3,
+                "modeled_latency_ns": 50, "config": {}, "output_hash": 7}
         sim.validate_result(dict(good))
+        sim.validate_result({**good, "numerics": "bit-exact"})
         skipped = {**good, "numerics": "skipped"}
         del skipped["numerical_match"], skipped["output_hash"]
         sim.validate_result(skipped)
+        # npu-sim --timing-only prints null for both.
+        sim.validate_result({**skipped, "numerical_match": None, "output_hash": None})
         for change in ({"numerical_match": False}, {"cycles": 0}, {"dma_busy_cycles": 11},
-                       {"numerics": "approximate"}, {"macs": -1}, {"config": None}):
+                       {"numerics": "approximate"}, {"macs": -1}, {"config": None},
+                       {"numerics": "bit-exact", "numerical_match": None},
+                       {"numerics": "skipped", "numerical_match": True},
+                       {"compute_utilization": 1.5}, {"modeled_latency_ns": float("nan")}):
             with self.subTest(change=change), self.assertRaises(sim.CheckError):
                 sim.validate_result({**good, **change})
+        for key in ("peak_inflight_tiles", "slot_wait_cycles", "scratchpad_bytes",
+                    "simulation_wall_seconds", "compute_utilization", "memory_utilization",
+                    "modeled_latency_ns", "dma_busy_cycles"):
+            truncated = dict(good)
+            del truncated[key]
+            with self.subTest(missing=key), self.assertRaises(sim.CheckError):
+                sim.validate_result(truncated)
 
 
 class CliTests(unittest.TestCase):
@@ -713,6 +730,21 @@ class WorkloadTests(unittest.TestCase):
         self.assertTrue(all(p.m <= 4096 for p in legacy))
         with self.assertRaisesRegex(ValueError, "partial-sum"):
             workloads.split(workloads.Gemm("deep", 1, 1, 8192), True, max_dimension=4096)
+
+
+class ExperimentScriptTests(unittest.TestCase):
+    def tool(self, *arguments: str, env: dict | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-m", *arguments], cwd=ROOT, capture_output=True,
+                              text=True, timeout=300, env=env)
+
+    def test_sweep_rows_carry_the_numerical_match_column(self):
+        with tempfile.TemporaryDirectory() as folder:
+            result = self.tool("npuperf.sweep", "--binary", str(BINARY), "--output-dir", folder)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with open(Path(folder) / "sweep.csv", encoding="utf-8", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 15)
+        self.assertTrue(all(row["numerical_match"] == "True" for row in rows))
 
 
 class RooflineAndTraceTests(unittest.TestCase):

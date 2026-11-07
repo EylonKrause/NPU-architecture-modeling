@@ -185,21 +185,30 @@ def _nonnegative_int(result: Mapping[str, Any], key: str) -> int:
     return value
 
 
+def result_numerics(result: Mapping[str, Any]) -> str | None:
+    """"bit-exact" (numerical_match true), "skipped" (a --timing-only run, which reports
+    numerical_match null or omits it), or None for any other combination. Results from
+    builds older than the "numerics" field are bit-exact when numerical_match is true."""
+    match = result.get("numerical_match")
+    numerics = result.get("numerics", "bit-exact" if match is True else None)
+    if numerics == "bit-exact" and match is True:
+        return numerics
+    if numerics == "skipped" and match is None:
+        return numerics
+    return None
+
+
 def validate_result(result: Any) -> dict:
     """Reject anything that is not a complete, self-consistent npu-sim result."""
     if not isinstance(result, dict) or result.get("schema_version") != 1:
         raise CheckError("expected a JSON object with schema_version 1")
-    numerics = result.get("numerics", "bit-exact" if result.get("numerical_match") is True else None)
-    if numerics not in ("bit-exact", "skipped"):
-        raise CheckError("simulator did not report full numerical agreement")
-    if numerics == "bit-exact" and result.get("numerical_match", True) is not True:
+    numerics = result_numerics(result)
+    if numerics is None:
         raise CheckError("simulator did not report full numerical agreement")
     for key in ("cycles", "macs", "read_bytes", "write_bytes", "compute_busy_cycles",
-                "dma_busy_cycles"):
+                "dma_busy_cycles", "peak_inflight_tiles", "slot_wait_cycles",
+                "scratchpad_bytes"):
         _nonnegative_int(result, key)
-    for key in ("peak_inflight_tiles", "slot_wait_cycles", "scratchpad_bytes"):
-        if key in result:
-            _nonnegative_int(result, key)
     if result["cycles"] == 0:
         raise CheckError("cycle count must be positive")
     clustered = isinstance(result.get("cores"), list) and len(result["cores"]) > 1
@@ -209,7 +218,7 @@ def validate_result(result: Any) -> dict:
                 raise CheckError(f"resource busy cycles exceed elapsed cycles: {key}")
     for key in ("simulation_wall_seconds", "compute_utilization", "memory_utilization",
                 "modeled_latency_ns"):
-        value = result.get(key, 0)
+        value = result.get(key)
         if isinstance(value, bool) or not isinstance(value, (int, float)) \
                 or not math.isfinite(value) or value < 0:
             raise CheckError(f"invalid finite nonnegative result: {key}")

@@ -20,6 +20,13 @@ def fixture():
             "config": {"frequency_mhz": 200}}
 
 
+def nested_fixture():
+    """fixture() with the option-table config layout (SPEC 1.1)."""
+    result = fixture()
+    result["config"] = {"shape": {"m": 1, "n": 1, "k": 10}, "arch": {"frequency_mhz": 200}}
+    return result
+
+
 class EnergyTests(unittest.TestCase):
     def test_hand_calculated_units(self):
         # Illustrative arithmetic coefficients, not hardware energy data.
@@ -30,6 +37,14 @@ class EnergyTests(unittest.TestCase):
         self.assertEqual(result["total_nj"], 0.45)
         self.assertEqual(result["average_power_mw"], 4.5)
         self.assertEqual(result["coefficients"]["static_mw"], 4)
+
+    def test_nested_config_frequency(self):
+        report = energy.estimate(nested_fixture(), mac_pj=2, dram_byte_pj=3, static_mw=4)
+        self.assertEqual(report["total_pj"], 450)
+        result = nested_fixture()
+        result["config"]["arch"]["frequency_mhz"] = 100
+        with self.assertRaisesRegex(ValueError, "disagrees"):
+            energy.estimate(result, 1, 1)
 
     def test_zero_coefficients_and_default_excluded_static(self):
         result = energy.estimate(fixture(), 0, 0)
@@ -57,6 +72,28 @@ class EnergyTests(unittest.TestCase):
         report = energy.estimate(source, 2, 3)
         self.assertEqual(report["numerics"], "skipped")
         self.assertEqual(report["total_pj"], 50)
+
+    def test_timing_only_result_with_null_match_and_hash(self):
+        # npu-sim --timing-only prints "numerical_match": null and "output_hash": null.
+        source = {**fixture(), "numerics": "skipped", "numerical_match": None,
+                  "output_hash": None}
+        report = energy.estimate(source, 2, 3)
+        self.assertEqual(report["numerics"], "skipped")
+        self.assertIsNone(report["source_output_hash"])
+        self.assertEqual(report["total_pj"], 50)
+        for match in (True, False):
+            with self.subTest(match=match), self.assertRaises(ValueError):
+                energy.estimate({**source, "numerical_match": match}, 2, 3)
+        with self.assertRaises(ValueError):
+            energy.estimate({**source, "numerics": "bit-exact"}, 2, 3)
+        with tempfile.TemporaryDirectory() as folder:
+            path = Path(folder) / "timing-only.json"
+            path.write_text(json.dumps(source), encoding="utf-8")
+            run = subprocess.run([sys.executable, str(ROOT / "scripts" / "energy_report.py"),
+                                  "--result", str(path), "--mac-pj", "2", "--dram-byte-pj", "3"],
+                                 text=True, capture_output=True, timeout=10)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout)["numerics"], "skipped")
 
     def test_inconsistent_or_invalid_sparse_counters_rejected(self):
         for executed, skipped in ((11, 0), (4, 5), (True, 9), (-1, 11), (0, 11)):

@@ -44,9 +44,11 @@ def estimate(result: Any, mac_pj: float, dram_byte_pj: float, static_mw: float =
     if not isinstance(result, dict) or type(result.get("schema_version")) is not int \
             or result["schema_version"] != 1:
         raise ValueError("expected a simulator JSON object with schema_version 1")
-    skipped = result.get("numerics") == "skipped" and "numerical_match" not in result
-    if not skipped and result.get("numerical_match") is not True:
-        raise ValueError("simulator must report numerical_match true")
+    numerics = sim.result_numerics(result)
+    if numerics is None:
+        raise ValueError('simulator must report numerical_match true, or numerics "skipped" '
+                         "with numerical_match null")
+    skipped = numerics == "skipped"
     cycles = uint64(result.get("cycles"), "cycles", positive=True)
     macs = uint64(result.get("macs"), "macs")
     executed_macs = uint64(result.get("executed_macs", macs), "executed_macs")
