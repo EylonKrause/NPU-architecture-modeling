@@ -76,6 +76,13 @@ Microcontroller-class point sized from the Ethos-U55 top configuration.
 | Tiles | 32x32x128 | Minimum depth 32 B (`Sram_burst_length`). T = 64 needs 57,856 B at depth 32; at T = 32, depth 256 needs 76,032 B |
 | Weight cache | 7,936 B | 51,200 - 2 x 21,632 |
 
+The model sets no capacity on the system SRAM behind the port. Arm's Corstone-300 reference
+platform for the Ethos-U55 has 2 MiB of SRAM and places the model and tensor arena in DDR by
+default ([`platform.ld`][corstone]). Vela's U55 reference systems attach the second AXI port
+to off-chip flash, where its `Shared_Sram` memory mode places the constants ([vela-ini]).
+[results.md](results.md) therefore states the weight bytes each `edge-256` row assumes the
+system SRAM holds, and runs no LLM workload on this point.
+
 ## mobile-2k
 
 Mobile point sized from the Ethos-U85 top configuration.
@@ -122,13 +129,24 @@ Two-die point: two `client-16c` dies on one DRAM, 32 cores.
 | Per-core fields | As `client-16c` | SRAM 133.5 KiB, 256-bit port, Vela latencies and limits, 8-beat bursts, 64x64x128 tiles, 29,696 B weight cache, `auto` partition |
 | Die-to-die link | Not modeled | All 32 cores reach the one DRAM timeline at the same cost |
 
+The per-core throughput is `client-16c`'s, sized from the M4 generation's figure. Public data
+on the M3 generation implies about half: Apple states the M3-family Neural Engine is "up to
+60 percent faster than in the M1 family" ([Apple, October 2023][m3]) and M1's at "11 trillion
+operations per second" ([Apple, November 2020][m1]), 1.6 x 11 = 17.6 T ops/s per 16 cores and
+35.2 per 32, against this point's 78.6432 TOP/s. The point pairs M4-class cores with the
+M3 Ultra's core count and memory rate.
+
 ## Reading the points
 
-A T x T tile moves 2 x T x `tile_k` bytes per panel for T^2 x `tile_k` MACs: T/2 MAC per byte
-before weight-cache hits and the output store, 16 on `edge-256` and 32 on the others. All
-four ridges lie above that, so a GEMM whose weights the cache does not hold is DRAM-bound on
-every point. The SRAM sets T, and no point's SRAM holds the two slots of a tile wide enough
-to reach its ridge.
+An a x b tile moves (a + b) x `tile_k` bytes per panel for a x b x `tile_k` MACs: ab/(a + b)
+MAC per byte before weight-cache hits and the output store. With the config files' 2-slot
+T x T tiles that is T/2, 16 on `edge-256` and 32 on the others. All four ridges lie above it,
+so under that default mapping a GEMM whose weights the cache does not hold is DRAM-bound on
+every point: the SRAM sets T, and no point's SRAM holds the two slots of a tile wide enough
+to reach its ridge. `npuperf.mapper`, which the results use, can give up the second slot for
+a wider tile; on `edge-256` a one-slot 49 x 128 tile of a 49-row layer reaches
+6272/177 = 35.4 MAC per byte, above the 32 MAC/B ridge, so some `edge-256` layers in
+[results.md](results.md) are compute-bound.
 
 ## Sources
 
@@ -142,6 +160,9 @@ to reach its ridge.
 - Apple Newsroom, *Apple introduces M4 chip*, 2024-05: <https://www.apple.com/newsroom/2024/05/apple-introduces-m4-chip/>
 - Apple Newsroom, *Apple introduces M4 Pro and M4 Max*, 2024-10: <https://www.apple.com/newsroom/2024/10/apple-introduces-m4-pro-and-m4-max/>
 - Apple Newsroom, *Apple reveals M3 Ultra*, 2025-03: <https://www.apple.com/newsroom/2025/03/apple-reveals-m3-ultra-taking-apple-silicon-to-a-new-extreme/>
+- Apple Newsroom, *Apple unveils M3, M3 Pro, and M3 Max*, 2023-10: <https://www.apple.com/newsroom/2023/10/apple-unveils-m3-m3-pro-and-m3-max-the-most-advanced-chips-for-a-personal-computer/>
+- Apple Newsroom, *Apple unleashes M1*, 2020-11: <https://www.apple.com/newsroom/2020/11/apple-unleashes-m1/>
+- Arm, Ethos-U core platform, Corstone-300 linker script at tag 26.08: <https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform/-/blob/26.08/targets/corstone-300/platform.ld>
 
 [brief]: https://armkeil.blob.core.windows.net/developer/Files/pdf/datasheets/arm-ethos-u-processor-series-product-brief.pdf
 [u85-blog]: https://newsroom.arm.com/blog/ethos-u85
@@ -151,3 +172,6 @@ to reach its ridge.
 [m4]: https://www.apple.com/newsroom/2024/05/apple-introduces-m4-chip/
 [m4-pro]: https://www.apple.com/newsroom/2024/10/apple-introduces-m4-pro-and-m4-max/
 [m3-ultra]: https://www.apple.com/newsroom/2025/03/apple-reveals-m3-ultra-taking-apple-silicon-to-a-new-extreme/
+[m3]: https://www.apple.com/newsroom/2023/10/apple-unveils-m3-m3-pro-and-m3-max-the-most-advanced-chips-for-a-personal-computer/
+[m1]: https://www.apple.com/newsroom/2020/11/apple-unleashes-m1/
+[corstone]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform/-/blob/26.08/targets/corstone-300/platform.ld
