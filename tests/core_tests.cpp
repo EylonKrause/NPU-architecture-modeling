@@ -40,7 +40,7 @@ void check_arithmetic() {
 }
 
 void check_requantization() {
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
     q.multiplier = 1;
     q.shift = 1;
@@ -88,9 +88,9 @@ void check_requantization() {
 }
 
 void check_even_rounding() {
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
-    q.rounding = "even";
+    q.rounding = npu::Rounding::HalfToEven;
     q.multiplier = 1;
     q.shift = 1;
     const std::vector<std::int32_t> inputs = {-5, -4, -3, -2, -1, 0, 1, 2, 3, 4, 5};
@@ -112,8 +112,9 @@ void check_even_rounding() {
                 npu::requantize(6, q, 1) == 2 && npu::requantize(-6, q, 1) == -2 &&
                 npu::requantize(20, q, 2) == 2 && npu::requantize(-20, q, 2) == -2,
             "per-channel nearest-even at different scales");
-    q.rounding = "floor";
-    rejects<std::invalid_argument>([&] { npu::requantize(1, q); }, "unsupported rounding mode");
+    require(!npu::from_string<npu::Rounding>("floor") &&
+                npu::from_string<npu::Rounding>("even") == npu::Rounding::HalfToEven,
+            "rounding spellings are closed");
 }
 
 void check_known_dense() {
@@ -123,7 +124,7 @@ void check_known_dense() {
     p.activations = {1, 2, 3, -1, 0, 2};
     p.weights = {4, -2, 5, 1, -3, 2};
     p.bias = {7, -5};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = 1;
     q.weight_zero = -1;
     q.output_zero = 3;
@@ -151,7 +152,7 @@ void check_per_channel_quantization() {
     p.activations = {1, 3, -2, 4};
     p.weights = {2, -3, 7, -4, 6, -8};
     p.bias = {5, -7, 3};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = 1;
     q.weight_zero = 0;
     q.weight_zero_points = {1, -2, 3};
@@ -205,8 +206,8 @@ void check_per_channel_quantization() {
 
 void check_int4() {
     npu::Config c;
-    c.m = c.n = c.k = 2;
-    c.weight_bits = 4;
+    c.shape.m = c.shape.n = c.shape.k = 2;
+    c.weights.bits = 4;
     c.quant.weight_zero = 0;
     const auto p = npu::make_problem(c);
     require(p.weights == std::vector<std::int8_t>{-8, 7, -6, 1},
@@ -219,7 +220,7 @@ void check_int4() {
     known.activations = {127, -128};
     known.weights = {-8, 7, 7, -8};
     known.bias = {1, -1};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = q.output_zero = 0;
     q.shift = 0;
     const auto result = npu::reference(known, q);
@@ -233,22 +234,22 @@ void check_int4() {
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "INT4 channel zero outside range");
     c.quant.weight_zero_points = {-8, 7};
     npu::validate(c);
-    c.weight_bits = 3;
+    c.weights.bits = 3;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "weight width must be4 or8");
 }
 
 void check_fixture() {
     npu::Config c;
-    c.m = 2;
-    c.n = 2;
-    c.k = 2;
+    c.shape.m = 2;
+    c.shape.n = 2;
+    c.shape.k = 2;
     const auto p = npu::make_problem(c);
     require(p.activations == std::vector<std::int8_t>{-9, 6, -5, 5},
             "LCG activation golden fixture");
     require(p.weights == std::vector<std::int8_t>{13, -10, 0, 4},
             "LCG weight golden fixture");
     require(p.bias == std::vector<std::int32_t>{39, 35}, "LCG bias golden fixture");
-    c.seed += UINT64_C(1) << 32;
+    c.shape.seed += UINT64_C(1) << 32;
     const auto wrap = npu::make_problem(c);
     require(p.activations == wrap.activations && p.weights == wrap.weights && p.bias == wrap.bias,
             "seed masks to low 32 bits");
@@ -262,14 +263,14 @@ void check_fixture() {
 
 void check_tiles_and_timing() {
     npu::Config c;
-    c.m = 5;
-    c.n = 7;
-    c.k = 3;
-    c.tile_m = 3;
-    c.tile_n = 4;
-    c.macs_per_cycle = 7;
-    c.pipeline_cycles = 2;
-    c.buffer_slots = 2;
+    c.shape.m = 5;
+    c.shape.n = 7;
+    c.shape.k = 3;
+    c.mapping.tile_m = 3;
+    c.mapping.tile_n = 4;
+    c.arch.compute.macs_per_cycle = 7;
+    c.arch.compute.pipeline_cycles = 2;
+    c.mapping.buffer_slots = 2;
     const auto tiles = npu::make_tiles(c);
     require(tiles.size() == 4, "edge tile count");
     require(tiles[0].id == 0 && tiles[0].row == 0 && tiles[0].col == 0 &&
@@ -286,10 +287,10 @@ void check_tiles_and_timing() {
     for (const auto& tile : tiles)
         for (auto r = tile.row; r < tile.row + tile.rows; ++r)
             for (auto col = tile.col; col < tile.col + tile.cols; ++col)
-                ++coverage[static_cast<std::size_t>(r * c.n + col)];
+                ++coverage[static_cast<std::size_t>(r * c.shape.n + col)];
     require(std::all_of(coverage.begin(), coverage.end(), [](unsigned n) { return n == 1; }),
             "tiles cover every output exactly once");
-    c.tile_m = c.tile_n = 4096;
+    c.mapping.tile_m = c.mapping.tile_n = 4096;
     require(npu::make_tiles(c).size() == 1, "oversized mapping handles one edge tile");
     require(npu::scratchpad_bytes(c) == 2 * (15 + 21 + 28 + 5 * 35),
             "oversized mapping allocates actual extents");
@@ -297,11 +298,11 @@ void check_tiles_and_timing() {
 
 void check_reduction_panels_and_systolic() {
     npu::Config c;
-    c.m = 5; c.n = 7; c.k = 5;
-    c.tile_m = 3; c.tile_n = 4; c.tile_k = 2;
-    c.weight_bits = 4;
-    c.macs_per_cycle = 7;
-    c.pipeline_cycles = 2;
+    c.shape.m = 5; c.shape.n = 7; c.shape.k = 5;
+    c.mapping.tile_m = 3; c.mapping.tile_n = 4; c.mapping.tile_k = 2;
+    c.weights.bits = 4;
+    c.arch.compute.macs_per_cycle = 7;
+    c.arch.compute.pipeline_cycles = 2;
     c.quant.weight_zero_points.assign(7, 0);
     c.quant.multipliers.assign(7, 1);
     c.quant.shifts.assign(7, 0);
@@ -320,26 +321,26 @@ void check_reduction_panels_and_systolic() {
                 npu::panel_compute_cycles(c, tile, 2) == 4 &&
                 npu::tile_compute_cycles(c, tile) == 16,
             "vector pipeline charged for every Kpanel");
-    c.array_rows = 2; c.array_cols = 3;
+    c.arch.compute.array_rows = 2; c.arch.compute.array_cols = 3;
     require(npu::peak_macs_per_cycle(c) == 6 &&
                 npu::panel_compute_cycles(c, tile, 0) == 22 &&
                 npu::panel_compute_cycles(c, tile, 2) == 18 &&
                 npu::tile_compute_cycles(c, tile) == 62,
             "systolic fold waves and fill/drain including edge Kpanel");
     rejects<std::invalid_argument>([&] { npu::panel_k(c, 3); }, "K block bounds");
-    c.array_rows = 0;
+    c.arch.compute.array_rows = 0;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "both array dimensions required");
-    c.array_rows = 257;
+    c.arch.compute.array_rows = 257;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "array bound");
-    c.array_rows = c.array_cols = 0;
-    c.tile_k = 4097;
+    c.arch.compute.array_rows = c.arch.compute.array_cols = 0;
+    c.mapping.tile_k = 4097;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "Ktile bound");
     c = npu::Config{};
-    c.m = 1; c.n = 3; c.k = 3;
-    c.tile_m = 1; c.tile_n = 3; c.tile_k = 1; c.weight_bits = 4;
+    c.shape.m = 1; c.shape.n = 3; c.shape.k = 3;
+    c.mapping.tile_m = 1; c.mapping.tile_n = 3; c.mapping.tile_k = 1; c.weights.bits = 4;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 21,
             "odd INT4 nibble is padded separately in each DMApanel");
-    c.tile_k = 0;
+    c.mapping.tile_k = 0;
     require(npu::tile_read_bytes(c, {0, 0, 0, 1, 3}) == 20,
             "fullK uses only one INT4 pad nibble");
 }
@@ -352,12 +353,12 @@ void check_random_edges() {
     };
     for (unsigned trial = 0; trial < 64; ++trial) {
         npu::Config c;
-        c.m = 1 + next() % 19;
-        c.n = 1 + next() % 17;
-        c.k = 1 + next() % 23;
-        c.tile_m = 1 + next() % 11;
-        c.tile_n = 1 + next() % 9;
-        c.seed = next();
+        c.shape.m = 1 + next() % 19;
+        c.shape.n = 1 + next() % 17;
+        c.shape.k = 1 + next() % 23;
+        c.mapping.tile_m = 1 + next() % 11;
+        c.mapping.tile_n = 1 + next() % 9;
+        c.shape.seed = next();
         c.quant.input_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.weight_zero = static_cast<std::int32_t>(next() % 256) - 128;
         c.quant.output_zero = static_cast<std::int32_t>(next() % 256) - 128;
@@ -365,7 +366,7 @@ void check_random_edges() {
         c.quant.shift = next() % 18;
         c.quant.relu = next() % 2 != 0;
         if (trial % 2) {
-            for (std::uint64_t col = 0; col < c.n; ++col) {
+            for (std::uint64_t col = 0; col < c.shape.n; ++col) {
                 c.quant.weight_zero_points.push_back(static_cast<std::int32_t>(next() % 256) - 128);
                 c.quant.multipliers.push_back(next() % 257);
                 c.quant.shifts.push_back(next() % 18);
@@ -395,7 +396,7 @@ void check_overflow_and_shapes() {
     p.activations = {127};
     p.weights = {127};
     p.bias = {std::numeric_limits<std::int32_t>::max()};
-    npu::Quantization q;
+    npu::Requant q;
     q.input_zero = q.weight_zero = 0;
     rejects<std::overflow_error>([&] { npu::reference(p, q); }, "reference INT32 overflow");
     rejects<std::overflow_error>([&] {
@@ -436,57 +437,57 @@ void check_validation() {
         mutation(c);
         rejects([&] { npu::validate(c); }, "invalid configuration");
     };
-    bad([](auto& c) { c.m = 0; });
-    bad([](auto& c) { c.n = 4097; });
-    bad([](auto& c) { c.k = UINT64_MAX; });
-    bad([](auto& c) { c.m = c.n = c.k = 4096; });
-    bad([](auto& c) { c.tile_m = 0; });
-    bad([](auto& c) { c.tile_n = 4097; });
-    bad([](auto& c) { c.macs_per_cycle = 0; });
-    bad([](auto& c) { c.memory_bytes_per_cycle = 0; });
-    bad([](auto& c) { c.memory_latency = UINT64_MAX; });
-    bad([](auto& c) { c.pipeline_cycles = 1000000001; });
-    bad([](auto& c) { c.buffer_slots = 0; });
-    bad([](auto& c) { c.buffer_slots = 65; });
-    bad([](auto& c) { c.sram_bytes = 1; });
-    bad([](auto& c) { c.frequency_mhz = 0; });
-    bad([](auto& c) { c.frequency_mhz = 1e-300; });
-    bad([](auto& c) { c.frequency_mhz = std::numeric_limits<double>::quiet_NaN(); });
-    bad([](auto& c) { c.frequency_mhz = std::numeric_limits<double>::infinity(); });
-    bad([](auto& c) { c.timing = "rtl"; });
+    bad([](auto& c) { c.shape.m = 0; });
+    bad([](auto& c) { c.shape.n = 4097; });
+    bad([](auto& c) { c.shape.k = UINT64_MAX; });
+    bad([](auto& c) { c.shape.m = c.shape.n = c.shape.k = 4096; });
+    bad([](auto& c) { c.mapping.tile_m = 0; });
+    bad([](auto& c) { c.mapping.tile_n = 4097; });
+    bad([](auto& c) { c.arch.compute.macs_per_cycle = 0; });
+    bad([](auto& c) { c.arch.memory.bytes_per_cycle = 0; });
+    bad([](auto& c) { c.arch.memory.latency = UINT64_MAX; });
+    bad([](auto& c) { c.arch.compute.pipeline_cycles = 1000000001; });
+    bad([](auto& c) { c.mapping.buffer_slots = 0; });
+    bad([](auto& c) { c.mapping.buffer_slots = 65; });
+    bad([](auto& c) { c.arch.sram_bytes = 1; });
+    bad([](auto& c) { c.arch.frequency_mhz = 0; });
+    bad([](auto& c) { c.arch.frequency_mhz = 1e-300; });
+    bad([](auto& c) { c.arch.frequency_mhz = std::numeric_limits<double>::quiet_NaN(); });
+    bad([](auto& c) { c.arch.frequency_mhz = std::numeric_limits<double>::infinity(); });
     bad([](auto& c) { c.quant.output_zero = 128; });
     bad([](auto& c) {
-        c.m = c.n = 4096; c.k = 1;
-        c.tile_m = c.tile_n = 1;
-        c.sram_bytes = UINT64_MAX;
+        c.shape.m = c.shape.n = 4096; c.shape.k = 1;
+        c.mapping.tile_m = c.mapping.tile_n = 1;
+        c.arch.sram_bytes = UINT64_MAX;
     }); // Tile metadata alone exceeds the host memory safety budget.
     bad([](auto& c) {
-        c.m = c.n = 1000; c.k = 1;
-        c.tile_m = c.tile_n = 1;
+        c.shape.m = c.shape.n = 1000; c.shape.k = 1;
+        c.mapping.tile_m = c.mapping.tile_n = 1;
     }); // Trace/metadata storage alone exceeds the host safety budget.
     npu::Config c;
-    c.frequency_mhz = 1e-6;
+    c.arch.frequency_mhz = 1e-6;
     npu::validate(c); // A 1 Hz target remains representable and valid.
-    c.sram_bytes = npu::scratchpad_bytes(c);
+    c.arch.sram_bytes = npu::scratchpad_bytes(c);
     npu::validate(c);
-    --c.sram_bytes;
+    --c.arch.sram_bytes;
     rejects<std::invalid_argument>([&] { npu::validate(c); }, "exact SRAM capacity boundary");
 
     npu::Config slow;
-    slow.m = slow.n = slow.k = slow.tile_m = slow.tile_n = slow.buffer_slots = 1;
-    slow.memory_latency = slow.pipeline_cycles = 1000000000;
+    slow.shape.m = slow.shape.n = slow.shape.k = 1;
+    slow.mapping.tile_m = slow.mapping.tile_n = slow.mapping.buffer_slots = 1;
+    slow.arch.memory.latency = slow.arch.compute.pipeline_cycles = 1000000000;
     npu::validate(slow); // Event mode jumps directly across long stage waits.
-    slow.timing = "cycle";
+    slow.sim.timing = npu::TimingMode::Cycle;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
                                    "cycle mode rejects impractical wait iteration count");
-    slow.macs_per_cycle = slow.memory_bytes_per_cycle = 1;
-    slow.memory_latency = 0;
-    slow.pipeline_cycles = 9999992;
+    slow.arch.compute.macs_per_cycle = slow.arch.memory.bytes_per_cycle = 1;
+    slow.arch.memory.latency = 0;
+    slow.arch.compute.pipeline_cycles = 9999992;
     npu::validate(slow); // Read6 + compute(1+9999992) + write1 = 10000000.
-    ++slow.pipeline_cycles;
+    ++slow.arch.compute.pipeline_cycles;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
                                    "cycle mode rejects one iteration beyond boundary");
-    slow.pipeline_cycles = 0;
+    slow.arch.compute.pipeline_cycles = 0;
     npu::validate(slow); // The minimal mapping costs eight serial cycles.
 }
 

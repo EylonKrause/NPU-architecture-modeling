@@ -243,6 +243,13 @@ def invoke(c: dict, **kwargs) -> tuple[dict, subprocess.CompletedProcess]:
 
 
 class SimulatorIntegration(unittest.TestCase):
+    def assert_rejected(self, proc: subprocess.CompletedProcess, why: str) -> None:
+        # Rejected input exits 2 with a one-line "npu-sim: " diagnostic, the
+        # last stderr line after any SystemC banner.
+        self.assertEqual(proc.returncode, 2, f"{why}: {proc.stderr}")
+        lines = proc.stderr.strip().splitlines()
+        self.assertTrue(lines and lines[-1].startswith("npu-sim: "), f"{why}: {proc.stderr}")
+
     def check_trace(self, text: str, c: dict, result: dict) -> None:
         records = list(csv.DictReader(text.splitlines()))
         self.assertEqual(len(records), 3 * len(tiles(c)))
@@ -372,14 +379,14 @@ class SimulatorIntegration(unittest.TestCase):
                     event_trace, cycle_trace = Path(temp) / f"event{index}.trace", Path(temp) / f"cycle{index}.trace"
                     event, _ = invoke(c, timing="event", trace=event_trace)
                     cycle, _ = invoke(c, timing="cycle", trace=cycle_trace)
-                    # The selected host stepping mode is configuration, not an
-                    # architecture outcome; it legitimately differs here.
+                    # The host stepping mode and the trace path are run options,
+                    # not architecture outcomes; they legitimately differ here.
                     def architecture_result(value: dict) -> dict:
                         copy = json.loads(json.dumps(value))
                         copy.pop("simulation_wall_seconds", None)
                         copy.pop("timing", None)
-                        if isinstance(copy.get("config"), dict):
-                            copy["config"].pop("timing", None)
+                        copy["config"]["sim"].pop("timing")
+                        copy["config"]["sim"].pop("trace_path")
                         return copy
                     self.assertEqual(
                         architecture_result(event), architecture_result(cycle)
@@ -475,7 +482,7 @@ class SimulatorIntegration(unittest.TestCase):
                     self.assertEqual(result["output_hash"], expected_hash(expected_acc, expected_quant))
                     self.assertIs(result["numerical_match"], True)
                     for name in ("m", "n", "k"):
-                        self.assertEqual(result["config"][name], c[name])
+                        self.assertEqual(result["config"]["shape"][name], c[name])
                     if index == 2:
                         self.assertEqual(result["outputs"], [-2, -1, 1, 2])
 
@@ -500,17 +507,16 @@ class SimulatorIntegration(unittest.TestCase):
                 with self.subTest(case=index):
                     path.write_text(contents)
                     proc = subprocess.run([str(BINARY), "--input", str(path)], capture_output=True, text=True, timeout=15)
-                    self.assertGreater(proc.returncode, 0, "bad workload must be rejected without crashing")
-                    self.assertTrue(proc.stderr.strip())
+                    self.assert_rejected(proc, "bad workload must be rejected without crashing")
             path.write_text("NPU1 1 1 1 1 1 2147483647\n")
             proc = subprocess.run(
                 [str(BINARY), "--input", str(path), "--input-zero", "0", "--weight-zero", "0"],
                 capture_output=True, text=True, timeout=15,
             )
-            self.assertGreater(proc.returncode, 0, "INT32 overflow must be rejected without crashing")
+            self.assert_rejected(proc, "INT32 overflow must be rejected without crashing")
             path.write_text("NPU1 1 1 1 0 0 0\n")
             proc = subprocess.run([str(BINARY), "--input", str(path), "--m", "1"], capture_output=True, text=True, timeout=15)
-            self.assertGreater(proc.returncode, 0, "ambiguous input and CLI dimensions must be rejected without crashing")
+            self.assert_rejected(proc, "ambiguous input and CLI dimensions must be rejected without crashing")
 
     def test_empty_explicit_paths_are_rejected(self):
         for arguments in [
@@ -520,8 +526,7 @@ class SimulatorIntegration(unittest.TestCase):
         ]:
             with self.subTest(arguments=arguments):
                 proc = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True, timeout=5)
-                self.assertGreater(proc.returncode, 0, "an explicit empty path must not be silently skipped")
-                self.assertTrue(proc.stderr.strip())
+                self.assert_rejected(proc, "an explicit empty path must not be silently skipped")
 
     def test_cycle_step_budget_rejects_huge_wait_event_mode_remains_usable(self):
         c = {
@@ -530,8 +535,7 @@ class SimulatorIntegration(unittest.TestCase):
             "memory_bytes_per_cycle": 1, "macs_per_cycle": 1,
         }
         proc = subprocess.run(command(c, timing="cycle", dump=False), capture_output=True, text=True, timeout=5)
-        self.assertGreater(proc.returncode, 0, "cycle mode must reject excessive host stepping work before simulation")
-        self.assertTrue(proc.stderr.strip())
+        self.assert_rejected(proc, "cycle mode must reject excessive host stepping work before simulation")
         # Event mode takes a handful of scheduling events despite the large
         # physical cycle count.  No trace, input file or output dump is needed.
         event, _ = invoke(c, timing="event", dump=False)
@@ -547,6 +551,7 @@ class SimulatorIntegration(unittest.TestCase):
             ["--memory-bytes-per-cycle", "0"], ["--buffer-slots", "0"],
             ["--sram-bytes", "1"], ["--frequency-mhz", "0"],
             ["--frequency-mhz", "nan"], ["--frequency-mhz", "inf"],
+            ["--frequency-mhz", "abc"], ["--frequency-mhz", "1e999"], ["--frequency-mhz", " 200"],
             ["--input-zero", "-129"], ["--weight-zero", "128"],
             ["--output-zero", "128"], ["--shift", "32"],
             ["--multiplier", "2147483648"], ["--multiplier", "-1"],
@@ -557,8 +562,7 @@ class SimulatorIntegration(unittest.TestCase):
         for args in arguments:
             with self.subTest(arguments=args):
                 proc = subprocess.run([str(BINARY), *args], capture_output=True, text=True, timeout=15)
-                self.assertGreater(proc.returncode, 0, f"invalid input must be rejected without crashing: {args}")
-                self.assertTrue(proc.stderr.strip(), "rejection must explain the error on stderr")
+                self.assert_rejected(proc, f"invalid input must be rejected without crashing: {args}")
 
 
 def main() -> int:

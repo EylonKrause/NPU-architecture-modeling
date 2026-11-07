@@ -64,7 +64,9 @@ def estimate(result, mac_pj, dram_byte_pj, static_mw=0.0):
     config = result.get("config")
     if not isinstance(config, dict):
         raise ValueError("simulator result requires a config object")
-    frequency = finite_nonnegative(config.get("frequency_mhz"), "frequency_mhz")
+    # npu-sim nests the clock under "arch"; hand-written results may keep it flat.
+    clock = config.get("arch") if isinstance(config.get("arch"), dict) else config
+    frequency = finite_nonnegative(clock.get("frequency_mhz"), "frequency_mhz")
     latency = finite_nonnegative(result.get("modeled_latency_ns"), "modeled_latency_ns")
     if frequency == 0 or latency == 0:
         raise ValueError("frequency_mhz and modeled_latency_ns must be positive")

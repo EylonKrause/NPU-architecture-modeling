@@ -19,7 +19,10 @@ function render(value) {
   element("traffic").textContent=typeof read==="number"&&typeof write==="number"?bytes(read+write):"—";
   element("traffic-detail").textContent=`${bytes(read)} read / ${bytes(write)} write`;
   element("jobs").textContent=format(value.jobs_completed);
-  const config=t.config||t.configuration||{};
+  const echoed=t.config||t.configuration||{};
+  // npu-sim nests its configuration by group; flatten the fields shown here.
+  const config=echoed.shape?{...echoed.shape,weight_bits:echoed.weights.bits,
+    weight_encoding:echoed.weights.encoding,frequency_mhz:echoed.arch.frequency_mhz}:echoed;
   element("workload-shape").textContent=config.m?`${config.m} × ${config.n} × ${config.k} · signed INT${config.weight_bits||8} weights · ${config.weight_encoding||"dense"}`:"INT8 matrix computation";
   element("compression-detail").textContent=(config.weight_encoding&&config.weight_encoding!=="dense")
     ?`${config.weight_encoding} · ${bytes(stats.encoded_weight_storage_bytes)} encoded / ${bytes(stats.dense_weight_storage_bytes)} packed-dense weights · ${format(stats.weight_decode_cycles)} decode cycles · ${format(stats.skipped_macs)} MACs skipped`

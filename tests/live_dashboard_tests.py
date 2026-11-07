@@ -107,9 +107,9 @@ class DashboardTests(unittest.TestCase):
         first, second = [job["telemetry"] for job in state["recent_jobs"][:2]]
         for result in (first, second):
             self.assertTrue(result["validated"])
-            self.assertEqual(result["config"]["weight_encoding"], "palette")
-            self.assertEqual(result["config"]["weight_bits"], 8)
-            self.assertEqual(result["config"]["palette_bits"], 2)
+            self.assertEqual(result["config"]["weights"]["encoding"], "palette")
+            self.assertEqual(result["config"]["weights"]["bits"], 8)
+            self.assertEqual(result["config"]["weights"]["palette_bits"], 2)
             self.assertLess(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])
             self.assertGreater(result["weight_decode_cycles"], 0)
             self.assertEqual(result["executed_macs"], result["macs"])

@@ -304,10 +304,10 @@ public:
         SC_THREAD(schedule);
     }
 
-    static npu::Quantization quant() {
-        npu::Quantization result;
+    static npu::Requant quant() {
+        npu::Requant result;
         result.shift = 4;
-        result.rounding = "even";
+        result.rounding = npu::Rounding::HalfToEven;
         return result;
     }
 

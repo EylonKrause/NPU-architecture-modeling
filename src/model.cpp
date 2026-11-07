@@ -4,34 +4,43 @@
 #include <tuple>
 
 namespace npu {
+namespace {
+
+std::uint64_t packed_weight_bytes(const Config& config, std::uint64_t k, std::uint64_t cols) {
+    return ceil_div(checked_mul(checked_mul(k, cols), config.weights.bits), 8);
+}
+
+}  // namespace
 
 Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
                          const Problem& problem)
-    : sc_module(name), config_(config), problem_(problem), encoded_weights_(encode_weights(config, problem)),
-      tiles_(make_tiles(config)),
-      free_slots_("free_slots", static_cast<int>(config.buffer_slots)),
-      loaded_("loaded_tiles", static_cast<int>(config.buffer_slots)),
-      computed_("computed_tiles", static_cast<int>(config.buffer_slots)) {
+    : sc_module(name), config_(config), problem_(problem),
+      encoded_weights_(encode_weights(config, problem)), tiles_(make_tiles(config)),
+      free_slots_("free_slots", static_cast<int>(config.mapping.buffer_slots)),
+      loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots)),
+      computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)) {
     validate(config);
     for (const auto& panel : encoded_weights_) {
-        stats_.encoded_weight_storage_bytes = checked_add(stats_.encoded_weight_storage_bytes, panel.buffer.size());
+        stats_.encoded_weight_storage_bytes =
+            checked_add(stats_.encoded_weight_storage_bytes, panel.buffer.size());
         stats_.dense_weight_storage_bytes = checked_add(stats_.dense_weight_storage_bytes,
-            ceil_div(checked_mul(checked_mul(panel.k, panel.cols), config.weight_bits), 8));
+            packed_weight_bytes(config, panel.k, panel.cols));
     }
-    if (config.weight_encoding == "dense") {
+    if (config.weights.encoding == WeightEncoding::Dense) {
         for (const auto& tile : tiles_) {
             if (tile.row != 0) continue;
             for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
                 stats_.dense_weight_storage_bytes = checked_add(stats_.dense_weight_storage_bytes,
-                    ceil_div(checked_mul(checked_mul(panel_k(config, block), tile.cols), config.weight_bits), 8));
+                    packed_weight_bytes(config, panel_k(config, block), tile.cols));
         }
         stats_.encoded_weight_storage_bytes = stats_.dense_weight_storage_bytes;
     }
-    const auto size = static_cast<std::size_t>(checked_mul(config.m, config.n));
+    const auto size = static_cast<std::size_t>(checked_mul(config.shape.m, config.shape.n));
     output_.accumulators.resize(size);
     output_.quantized.resize(size);
-    spans_.reserve(static_cast<std::size_t>(checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
-    for (std::uint64_t i = 0; i < config.buffer_slots; ++i) {
+    spans_.reserve(static_cast<std::size_t>(
+        checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
+    for (std::uint64_t i = 0; i < config.mapping.buffer_slots; ++i) {
         if (!free_slots_.nb_write(i)) throw std::logic_error("cannot initialize slots");
     }
     SC_THREAD(load);
@@ -73,10 +82,10 @@ void Accelerator::changed() { state_changed_.notify(sc_core::SC_ZERO_TIME); }
 
 void Accelerator::observe() {
     const auto view = snapshot();
-    if (view.inflight_tiles > config_.buffer_slots ||
-        view.loaded_tiles > config_.buffer_slots ||
-        view.computed_tiles > config_.buffer_slots ||
-        cached_bytes_ > config_.weight_cache_bytes ||
+    if (view.inflight_tiles > config_.mapping.buffer_slots ||
+        view.loaded_tiles > config_.mapping.buffer_slots ||
+        view.computed_tiles > config_.mapping.buffer_slots ||
+        cached_bytes_ > config_.arch.weight_cache_bytes ||
         ((view.dma_busy || view.compute_busy) && view.inflight_tiles == 0) ||
         (view.completed && (view.inflight_tiles != 0 || view.dma_busy ||
                             view.compute_busy || !reads_.empty() || !writes_.empty()))) {
@@ -140,7 +149,7 @@ void Accelerator::trace_signals(sc_core::sc_trace_file* file) const {
 }
 
 void Accelerator::advance(std::uint64_t cycles) {
-    if (config_.timing == "cycle") {
+    if (config_.sim.timing == TimingMode::Cycle) {
         for (std::uint64_t i = 0; i < cycles; ++i)
             wait(sc_core::sc_time::from_value(1));
     } else {
@@ -149,7 +158,7 @@ void Accelerator::advance(std::uint64_t cycles) {
 }
 
 bool Accelerator::weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes) {
-    if (!config_.weight_cache_bytes) return false;
+    if (!config_.arch.weight_cache_bytes) return false;
     const auto key = checked_add(checked_mul(tile.col, reduction_blocks(config_)), block);
     const auto found = weight_lines_.find(key);
     if (found != weight_lines_.end()) {
@@ -159,8 +168,8 @@ bool Accelerator::weight_cached(const Tile& tile, std::uint64_t block, std::uint
         return true;
     }
     ++stats_.weight_cache_misses;
-    if (bytes > config_.weight_cache_bytes) return false;
-    while (cached_bytes_ > config_.weight_cache_bytes - bytes) {
+    if (bytes > config_.arch.weight_cache_bytes) return false;
+    while (cached_bytes_ > config_.arch.weight_cache_bytes - bytes) {
         const auto& last = weight_lru_.back();
         cached_bytes_ -= last.bytes;
         weight_lines_.erase(last.key);
@@ -177,21 +186,24 @@ void Accelerator::transfer(const Tile& tile, bool read, std::uint64_t block) {
     auto bytes = read ? panel_read_bytes(config_, tile, block) : tile_write_bytes(tile);
     std::uint64_t weight_bytes = 0;
     if (read) {
-        const auto weights = ceil_div(checked_mul(checked_mul(panel_k(config_, block), tile.cols), config_.weight_bits), 8);
-        const auto actual = config_.weight_encoding == "dense" ? weights :
-            static_cast<std::uint64_t>(weight_panel(config_, encoded_weights_, tile, block).buffer.size());
-        if (config_.weight_encoding != "dense") {
+        const auto& format = config_.weights;
+        const auto weights = packed_weight_bytes(config_, panel_k(config_, block), tile.cols);
+        const auto encoded_bytes = format.encoding == WeightEncoding::Dense ? weights :
+            static_cast<std::uint64_t>(
+                weight_panel(config_, encoded_weights_, tile, block).buffer.size());
+        if (format.encoding != WeightEncoding::Dense) {
             // panel_read_bytes uses a conservative encoded SRAM/traffic bound.
-            // Replace that bound with the actual serialized panel byte count.
+            // Replace that bound with the serialized panel byte count.
             const auto elements = checked_mul(panel_k(config_, block), tile.cols);
-            const auto bound = config_.weight_encoding == "palette" ?
-                checked_add(checked_add(4, std::min(elements, UINT64_C(1) << config_.palette_bits)),
-                            ceil_div(checked_mul(elements, config_.palette_bits), 8)) :
-                checked_add(checked_add(4, ceil_div(ceil_div(elements, config_.sparse_block), 8)), weights);
-            bytes = checked_add(bytes - bound, actual);
+            const auto bound = format.encoding == WeightEncoding::Palette ?
+                checked_add(checked_add(4, std::min(elements, UINT64_C(1) << format.palette_bits)),
+                            ceil_div(checked_mul(elements, format.palette_bits), 8)) :
+                checked_add(checked_add(4, ceil_div(ceil_div(elements, format.sparse_block), 8)),
+                            weights);
+            bytes = checked_add(bytes - bound, encoded_bytes);
         }
-        if (weight_cached(tile, block, actual)) bytes -= actual;
-        else weight_bytes = actual;
+        if (weight_cached(tile, block, encoded_bytes)) bytes -= encoded_bytes;
+        else weight_bytes = encoded_bytes;
     }
     Request request(tile, bytes, block);
     (read ? reads_ : writes_).push_back(&request);
@@ -231,7 +243,7 @@ void Accelerator::compute() {
         const auto id = job / blocks;
         const auto block = job % blocks;
         const auto& tile = tiles_.at(static_cast<std::size_t>(id));
-        const auto* encoded = config_.weight_encoding == "dense" ? nullptr :
+        const auto* encoded = config_.weights.encoding == WeightEncoding::Dense ? nullptr :
             &weight_panel(config_, encoded_weights_, tile, block);
         const auto duration = encoded ? encoded_panel_compute_cycles(config_, tile, block, *encoded) :
             panel_compute_cycles(config_, tile, block);
@@ -251,7 +263,7 @@ void Accelerator::compute() {
         advance(duration);
         stats_.compute_busy_cycles = checked_add(stats_.compute_busy_cycles, duration);
         const auto logical_macs = checked_mul(checked_mul(tile.rows, tile.cols), panel_k(config_, block));
-        const auto executed_macs = config_.weight_encoding == "sparse" ?
+        const auto executed_macs = config_.weights.encoding == WeightEncoding::Sparse ?
             checked_mul(tile.rows, encoded->nonzero_values) : logical_macs;
         stats_.macs = checked_add(stats_.macs, logical_macs);
         stats_.executed_macs = checked_add(stats_.executed_macs, executed_macs);
@@ -310,8 +322,9 @@ void Accelerator::dma() {
         advance(duration);
         spans_.push_back({read ? "load" : "store", request->tile.id, start, now(), request->bytes, request->block});
         ++stats_.dma_requests;
+        const auto burst = config_.arch.memory.burst_bytes;
         stats_.dma_bursts = checked_add(stats_.dma_bursts,
-            config_.dma_burst_bytes ? ceil_div(request->bytes, config_.dma_burst_bytes) : 1);
+                                        burst ? ceil_div(request->bytes, burst) : 1);
         stats_.dma_busy_cycles = checked_add(stats_.dma_busy_cycles, duration);
         auto& traffic = read ? stats_.read_bytes : stats_.write_bytes;
         traffic = checked_add(traffic, request->bytes);

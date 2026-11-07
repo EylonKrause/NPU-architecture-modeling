@@ -25,6 +25,11 @@ DEFAULT = dict(m=3, n=5, k=5, tile_m=1, tile_n=3, tile_k=2, weight_bits=4,
                dma_burst_bytes=0, weight_cache_bytes=0)
 
 
+def last_stderr_line(proc):
+    lines = proc.stderr.strip().splitlines()
+    return lines[-1] if lines else ''
+
+
 def divup(a, b):
     return (a + b - 1) // b
 
@@ -122,7 +127,8 @@ class ArchitectureChecks(unittest.TestCase):
         for key, value in expected.items():
             if key not in {'jobs', 'stores', 'serial_cycles'}:
                 self.assertEqual(actual[key], value, key)
-        self.assertEqual(actual['macs'], actual['config']['m'] * actual['config']['n'] * actual['config']['k'])
+        shape = actual['config']['shape']
+        self.assertEqual(actual['macs'], shape['m'] * shape['n'] * shape['k'])
 
     def assert_trace(self, c, actual, trace, expected):
         self.assertEqual(len(trace), len(expected['jobs']) * 2 + len(expected['stores']))
@@ -231,8 +237,9 @@ class ArchitectureChecks(unittest.TestCase):
         for key, value in c.items():
             command += ['--' + key.replace('_', '-'), str(value)]
         proc = subprocess.run(command, capture_output=True, text=True, timeout=30)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn('SRAM', proc.stderr)
+        self.assertEqual(proc.returncode, 2, proc.stderr)
+        self.assertTrue(last_stderr_line(proc).startswith('npu-sim: '), proc.stderr)
+        self.assertIn('SRAM', last_stderr_line(proc))
 
     def test_bad_architecture_flags(self):
         for flags in [
@@ -246,8 +253,8 @@ class ArchitectureChecks(unittest.TestCase):
         ]:
             with self.subTest(flags=flags):
                 proc = subprocess.run([str(BINARY), *flags], capture_output=True, text=True, timeout=30)
-                self.assertNotEqual(proc.returncode, 0)
-                self.assertTrue(proc.stderr.strip())
+                self.assertEqual(proc.returncode, 2, proc.stderr)
+                self.assertTrue(last_stderr_line(proc).startswith('npu-sim: '), proc.stderr)
 
 
 if __name__ == '__main__':

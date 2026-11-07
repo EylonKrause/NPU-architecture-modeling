@@ -1,49 +1,12 @@
 #pragma once
 
+#include "npu/config.hpp"
+
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <vector>
 
 namespace npu {
-
-struct Quantization {
-    std::int32_t input_zero = -3;
-    std::int32_t weight_zero = 2;
-    std::int32_t output_zero = 0;
-    std::uint32_t multiplier = 1;
-    std::uint32_t shift = 7;
-    bool relu = false;
-    std::string rounding = "away";
-    std::vector<std::int32_t> weight_zero_points;
-    std::vector<std::uint32_t> multipliers;
-    std::vector<std::uint32_t> shifts;
-};
-
-struct Config {
-    std::uint64_t m = 16, n = 16, k = 32;
-    std::uint64_t tile_m = 8, tile_n = 8;
-    std::uint64_t tile_k = 0;
-    std::uint64_t weight_bits = 8;
-    std::string weight_encoding = "dense";
-    std::uint64_t palette_bits = 4;
-    std::uint64_t sparse_block = 8;
-    std::uint64_t weight_decode_values_per_cycle = 16;
-    std::uint64_t array_rows = 0, array_cols = 0;
-    std::uint64_t macs_per_cycle = 64;
-    std::uint64_t memory_bytes_per_cycle = 16;
-    std::uint64_t memory_latency = 12;
-    std::uint64_t dma_burst_bytes = 0;
-    std::uint64_t weight_cache_bytes = 0;
-    std::uint64_t pipeline_cycles = 4;
-    std::uint64_t buffer_slots = 2;
-    std::uint64_t sram_bytes = 262144;
-    std::uint64_t seed = 1;
-    double frequency_mhz = 200.0;
-    std::string timing = "event";
-    std::string trace_path;
-    Quantization quant;
-};
 
 struct Problem {
     std::uint64_t m = 0, n = 0, k = 0;
@@ -85,11 +48,11 @@ void validate(const Config& config);
 std::uint64_t scratchpad_bytes(const Config& config);
 Problem make_problem(const Config& config);
 std::vector<Tile> make_tiles(const Config& config);
-Output reference(const Problem& problem, const Quantization& quant);
-void compute_tile(const Problem& problem, const Quantization& quant,
+Output reference(const Problem& problem, const Requant& quant);
+void compute_tile(const Problem& problem, const Requant& quant,
                   const Tile& tile, Output& output);
-std::int8_t requantize(std::int32_t accumulator, const Quantization& quant);
-std::int8_t requantize(std::int32_t accumulator, const Quantization& quant,
+std::int8_t requantize(std::int32_t accumulator, const Requant& quant);
+std::int8_t requantize(std::int32_t accumulator, const Requant& quant,
                       std::uint64_t channel);
 std::uint64_t reduction_blocks(const Config& config);
 std::uint64_t panel_k(const Config& config, std::uint64_t block);

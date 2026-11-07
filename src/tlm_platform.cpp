@@ -189,9 +189,9 @@ private:
         if (tx.is_read()) {
             std::uint32_t value = 0;
             switch (address) {
-            case reg_m: value = static_cast<std::uint32_t>(config_.m); break;
-            case reg_n: value = static_cast<std::uint32_t>(config_.n); break;
-            case reg_k: value = static_cast<std::uint32_t>(config_.k); break;
+            case reg_m: value = static_cast<std::uint32_t>(config_.shape.m); break;
+            case reg_n: value = static_cast<std::uint32_t>(config_.shape.n); break;
+            case reg_k: value = static_cast<std::uint32_t>(config_.shape.k); break;
             case reg_status: value = (busy_ ? status_busy : 0U) | (done_ ? status_done : 0U); break;
             case reg_irq_enable: value = irq_enabled_ ? 1U : 0U; break;
             case reg_jobs: value = jobs_; break;
@@ -249,10 +249,10 @@ private:
         while (true) {
             wait(command_);
             npu::Problem problem;
-            problem.m = config_.m; problem.n = config_.n; problem.k = config_.k;
-            problem.activations.resize(static_cast<std::size_t>(config_.m * config_.k));
-            problem.weights.resize(static_cast<std::size_t>(config_.k * config_.n));
-            problem.bias.resize(static_cast<std::size_t>(config_.n));
+            problem.m = config_.shape.m; problem.n = config_.shape.n; problem.k = config_.shape.k;
+            problem.activations.resize(static_cast<std::size_t>(config_.shape.m * config_.shape.k));
+            problem.weights.resize(static_cast<std::size_t>(config_.shape.k * config_.shape.n));
+            problem.bias.resize(static_cast<std::size_t>(config_.shape.n));
             transfer(false, activation_address, reinterpret_cast<unsigned char*>(problem.activations.data()), problem.activations.size());
             transfer(false, weight_address, reinterpret_cast<unsigned char*>(problem.weights.data()), problem.weights.size());
             std::vector<unsigned char> bias(problem.bias.size() * 4U);
@@ -260,7 +260,7 @@ private:
             for (std::size_t i = 0; i < problem.bias.size(); ++i)
                 problem.bias[i] = signed_word(load_u32(bias.data() + 4U * i));
             npu::Output output;
-            output.accumulators.resize(static_cast<std::size_t>(config_.m * config_.n));
+            output.accumulators.resize(static_cast<std::size_t>(config_.shape.m * config_.shape.n));
             output.quantized.resize(output.accumulators.size());
             for (const auto& tile : npu::make_tiles(config_)) {
                 npu::compute_tile(problem, config_.quant, tile, output);
@@ -360,11 +360,11 @@ private:
 
     npu::Problem input(unsigned job) const {
         npu::Problem p;
-        p.m = config_.m; p.n = config_.n; p.k = config_.k;
+        p.m = config_.shape.m; p.n = config_.shape.n; p.k = config_.shape.k;
         for (std::uint64_t i = 0; i < p.m * p.k; ++i)
-            p.activations.push_back(static_cast<std::int8_t>(static_cast<int>((i * 7 + config_.seed + job * 3U) % 31U) - 15));
+            p.activations.push_back(static_cast<std::int8_t>(static_cast<int>((i * 7 + config_.shape.seed + job * 3U) % 31U) - 15));
         for (std::uint64_t i = 0; i < p.k * p.n; ++i)
-            p.weights.push_back(static_cast<std::int8_t>(static_cast<int>((i * 11 + config_.seed * 3 + job * 5U) % 23U) - 11));
+            p.weights.push_back(static_cast<std::int8_t>(static_cast<int>((i * 11 + config_.shape.seed * 3 + job * 5U) % 23U) - 11));
         for (std::uint64_t i = 0; i < p.n; ++i)
             p.bias.push_back(static_cast<std::int32_t>(i * 13U + job * 9U) - 20);
         return p;
@@ -376,7 +376,7 @@ private:
         reset_n.write(true);
         wait(clock.posedge_event());
         require(read_register(reg_status) == 0 && read_register(reg_jobs) == 0 && !irq.read(), "reset state is incorrect");
-        require(read_register(reg_m) == config_.m && read_register(reg_n) == config_.n && read_register(reg_k) == config_.k,
+        require(read_register(reg_m) == config_.shape.m && read_register(reg_n) == config_.shape.n && read_register(reg_k) == config_.shape.k,
                 "fixed dimensions readback failed");
         protocol_checks();
         // Job 0 verifies an enabled IRQ. Later jobs also test masked completion.
@@ -480,11 +480,11 @@ int sc_main(int argc, char* argv[]) {
         }
         if (jobs == 0 || jobs > 100) throw std::invalid_argument("jobs must be between 1 and 100");
         npu::Config config;
-        config.m = 3; config.n = 5; config.k = 7;
-        config.tile_m = 2; config.tile_n = 3;
-        config.macs_per_cycle = 4; config.pipeline_cycles = 2;
-        config.quant.shift = 4; config.quant.rounding = "even";
-        config.seed = seed;
+        config.shape.m = 3; config.shape.n = 5; config.shape.k = 7;
+        config.mapping.tile_m = 2; config.mapping.tile_n = 3;
+        config.arch.compute.macs_per_cycle = 4; config.arch.compute.pipeline_cycles = 2;
+        config.quant.shift = 4; config.quant.rounding = npu::Rounding::HalfToEven;
+        config.shape.seed = seed;
         npu::validate(config);
         // Keep stdout machine-readable. Warnings and errors retain their normal
         // SystemC report actions; only the routine stop/timescale notices hide.

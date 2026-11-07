@@ -26,8 +26,25 @@ else()
   find_package(SystemCLanguage 3.0 CONFIG REQUIRED)
 endif()
 
-add_library(npu_core src/core.cpp src/json.cpp)
-target_include_directories(npu_core PUBLIC include)
+# Version header: project version plus the configure-time git describe.
+# GIT_OPTIONAL_LOCKS=0 keeps --dirty from rewriting the index.
+set(NPU_GIT_DESCRIBE "unknown")
+find_package(Git QUIET)
+if(GIT_FOUND)
+  execute_process(
+    COMMAND ${CMAKE_COMMAND} -E env GIT_OPTIONAL_LOCKS=0
+            ${GIT_EXECUTABLE} describe --always --dirty --tags
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+    OUTPUT_VARIABLE NPU_GIT_OUTPUT OUTPUT_STRIP_TRAILING_WHITESPACE
+    RESULT_VARIABLE NPU_GIT_RESULT ERROR_QUIET)
+  if(NPU_GIT_RESULT EQUAL 0 AND NPU_GIT_OUTPUT)
+    set(NPU_GIT_DESCRIBE "${NPU_GIT_OUTPUT}")
+  endif()
+endif()
+configure_file(cmake/version.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/generated/npu/version.hpp @ONLY)
+
+add_library(npu_core src/core.cpp src/json.cpp src/options.cpp)
+target_include_directories(npu_core PUBLIC include ${CMAKE_CURRENT_BINARY_DIR}/generated)
 add_executable(npu-sim src/main.cpp src/model.cpp)
 target_link_libraries(npu-sim PRIVATE npu_core SystemC::systemc)
 target_include_directories(npu-sim SYSTEM PRIVATE
@@ -79,7 +96,8 @@ if(BUILD_TESTING)
     target_compile_options(npu-config-tests PRIVATE -fsanitize=undefined -fno-sanitize-recover=all)
     target_link_options(npu-config-tests PRIVATE -fsanitize=undefined)
   endif()
-  add_test(NAME config-options-and-json COMMAND npu-config-tests)
+  add_test(NAME config-options-and-json
+    COMMAND npu-config-tests ${CMAKE_CURRENT_SOURCE_DIR}/configs/example.json)
   find_package(Python3 3.10 REQUIRED COMPONENTS Interpreter)
   add_test(NAME independent-integration
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/integration.py
@@ -104,6 +122,9 @@ if(BUILD_TESTING)
             --binary $<TARGET_FILE:npu-mobile-demo>)
   set_tests_properties(mobile-weight-compression mobile-transformer mobile-soc-platform
     graph-compiler-fusion PROPERTIES TIMEOUT 180)
+  add_test(NAME config-file-cli
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/config_file_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
   add_test(NAME architecture-contract
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
             --binary $<TARGET_FILE:npu-sim>)
