@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <limits>
 #include <stdexcept>
+#include <utility>
 
 namespace npu {
 namespace {
@@ -40,20 +41,22 @@ void commit(ChannelStatistics& stats, const MemRequest& request) {
 // bytes_per_cycle) data cycles (its beats).
 class SerialDma final : public sc_core::sc_module, public MemoryPort {
 public:
-    SerialDma(sc_core::sc_module_name name, const Config& config, sc_core::sc_event& changed)
-        : sc_module(name), config_(config), changed_(changed) {
+    SerialDma(sc_core::sc_module_name name, const Config& config, MemoryListener changed)
+        : sc_module(name), config_(config), changed_(std::move(changed)) {
         SC_THREAD(serve);
     }
 
     void transport(MemRequest& request) override {
+        if (request.requester != 0) throw std::invalid_argument("the serial DMA has one port");
         begin(request);
         (request.direction == MemDirection::Read ? reads_ : writes_).push_back(&request);
-        changed_.notify(sc_core::SC_ZERO_TIME);
+        changed_(0);
         ready_.notify(sc_core::SC_ZERO_TIME);
         sc_core::wait(request.done);
     }
 
-    MemoryView view() const override {
+    MemoryView view(std::uint64_t requester) const override {
+        if (requester != 0) throw std::invalid_argument("the serial DMA has one port");
         MemoryView view;
         view.read.active = busy_ && read_;
         view.write.active = busy_ && !read_;
@@ -73,7 +76,7 @@ public:
 
 private:
     const Config& config_;
-    sc_core::sc_event& changed_;
+    MemoryListener changed_;
     sc_core::sc_event ready_;
     std::deque<MemRequest*> reads_, writes_;
     ChannelStatistics read_stats_, write_stats_;
@@ -112,7 +115,7 @@ private:
             block_id_ = request->block_id;
             read_ = read;
             busy_ = true;
-            changed_.notify(sc_core::SC_ZERO_TIME);
+            changed_(0);
             advance(config_.sim.timing, duration_);
             request->completion = now();
             request->bursts = burst ? ceil_div(request->bytes, burst) : 1;
@@ -120,7 +123,7 @@ private:
             commit(stats, *request);
             busy_cycles_ = checked_add(busy_cycles_, duration_);
             busy_ = false;
-            changed_.notify(sc_core::SC_ZERO_TIME);
+            changed_(0);
             prefer_read_ = !read;
             request->done.notify(sc_core::SC_ZERO_TIME);
             // The requester owns the request; it may reuse it once resumed.
@@ -132,10 +135,10 @@ private:
 // channel's bursts and owns the DRAM timeline.
 class AxiMemory final : public sc_core::sc_module, public MemoryPort {
 public:
-    AxiMemory(sc_core::sc_module_name name, const Config& config, sc_core::sc_event& changed,
+    AxiMemory(sc_core::sc_module_name name, const Config& config, MemoryListener changed,
               std::uint64_t ports)
-        : sc_module(name), config_(config), changed_(changed),
-          ports_(static_cast<std::size_t>(ports)) {
+        : sc_module(name), config_(config), changed_(std::move(changed)),
+          ports_(static_cast<std::size_t>(ports)), issue_at_(2 * ports_.size(), none) {
         const auto& axi = config.arch.memory.axi;
         for (auto& port : ports_) {
             port.read.limit = axi.read_outstanding;
@@ -150,8 +153,9 @@ public:
         begin(request);
         if (request.requester >= ports_.size())
             throw std::invalid_argument("memory requester has no AXI port");
+        const auto index = slot(request.requester, request.direction);
         auto& port = ports_[static_cast<std::size_t>(request.requester)];
-        auto& channel = request.direction == MemDirection::Read ? port.read : port.write;
+        auto& channel = channel_at(index);
         if (port.active++ == 0) port.busy_since = request.arrival;
         ++channel.active;
         channel.tile_id = request.tile_id;
@@ -162,20 +166,23 @@ public:
         } else {
             channel.queue.push_back(&request);
             if (channel.queue.size() == 1) front(channel);
+            refresh(index);
             wake_.notify(sc_core::SC_ZERO_TIME);
         }
-        changed_.notify(sc_core::SC_ZERO_TIME);
+        changed_(request.requester);
         sc_core::wait(request.done);
         commit(channel.stats, request);
         --channel.active;
         if (--port.active == 0)
             port.busy_cycles = checked_add(port.busy_cycles, now() - port.busy_since);
-        changed_.notify(sc_core::SC_ZERO_TIME);
+        changed_(request.requester);
     }
 
-    MemoryView view() const override {
+    MemoryView view(std::uint64_t requester) const override {
+        if (requester >= ports_.size())
+            throw std::invalid_argument("memory requester has no AXI port");
         const auto time = now();
-        const auto& port = ports_.front();
+        const auto& port = ports_[static_cast<std::size_t>(requester)];
         MemoryView view;
         const auto channel_view = [time](const Channel& channel) {
             ChannelView result;
@@ -196,10 +203,8 @@ public:
         view.block_id = shown.block_id;
         view.busy_cycles = port.active ? checked_add(port.busy_cycles, time - port.busy_since) :
                                          port.busy_cycles;
-        for (const auto& each : ports_)
-            view.dram_bytes = checked_add(view.dram_bytes,
-                checked_mul(checked_add(each.read.stats.beats, each.write.stats.beats),
-                            config_.arch.memory.axi.data_bytes));
+        view.dram_bytes = checked_mul(checked_add(port.read.stats.beats, port.write.stats.beats),
+                                      config_.arch.memory.axi.data_bytes);
         return view;
     }
 
@@ -233,11 +238,32 @@ private:
         bool last_read = false;
     };
 
+    static constexpr auto none = std::numeric_limits<std::uint64_t>::max();
     const Config& config_;
-    sc_core::sc_event& changed_;
+    MemoryListener changed_;
     sc_core::sc_event wake_;
     std::vector<Port> ports_;
+    // Next issue cycle of every channel, none while its queue is empty, in
+    // grant order: port, then read before write. A channel's issue cycle moves
+    // only when a request reaches the front of its queue or a burst issues, so
+    // the arbiter scans these instead of every channel's state.
+    std::vector<std::uint64_t> issue_at_;
     DramTimeline dram_;
+
+    static std::size_t slot(std::uint64_t requester, MemDirection direction) {
+        return static_cast<std::size_t>(2 * requester) +
+               static_cast<std::size_t>(direction == MemDirection::Write);
+    }
+
+    Channel& channel_at(std::size_t index) {
+        auto& port = ports_[index / 2];
+        return index % 2 ? port.write : port.read;
+    }
+
+    void refresh(std::size_t index) {
+        const auto& channel = channel_at(index);
+        issue_at_[index] = channel.queue.empty() ? none : channel.next_issue();
+    }
 
     // Points the channel at the first nonempty run of its front request.
     static void front(Channel& channel) {
@@ -250,12 +276,8 @@ private:
 
     void arbitrate() {
         const bool step = config_.sim.timing == TimingMode::Cycle;
-        constexpr auto none = std::numeric_limits<std::uint64_t>::max();
         while (true) {
-            auto next = none;
-            for (const auto& port : ports_)
-                for (const auto* channel : {&port.read, &port.write})
-                    if (!channel->queue.empty()) next = std::min(next, channel->next_issue());
+            const auto next = *std::min_element(issue_at_.begin(), issue_at_.end());
             if (next == none) {
                 wait(wake_);
                 continue;
@@ -274,10 +296,11 @@ private:
                 wait(sc_core::SC_ZERO_TIME);
                 continue;
             }
-            for (auto& port : ports_)
-                for (auto* channel : {&port.read, &port.write})
-                    if (!channel->queue.empty() && channel->next_issue() == time)
-                        issue(*channel, time);
+            for (std::size_t index = 0; index < issue_at_.size(); ++index) {
+                if (issue_at_[index] != time) continue;
+                issue(channel_at(index), time);
+                refresh(index);
+            }
         }
     }
 
@@ -332,10 +355,47 @@ private:
 
 }  // namespace
 
-std::unique_ptr<MemoryPort> make_memory(const Config& config, sc_core::sc_event& changed) {
+MemoryView combine(const std::vector<MemoryView>& ports) {
+    if (ports.empty()) throw std::invalid_argument("no memory ports to combine");
+    if (ports.size() == 1) return ports.front();
+    MemoryView total;
+    const auto add = [](ChannelView& sum, const ChannelView& port) {
+        sum.active = sum.active || port.active;
+        sum.outstanding = checked_add(sum.outstanding, port.outstanding);
+        sum.queued = checked_add(sum.queued, port.queued);
+        auto& s = sum.statistics;
+        const auto& p = port.statistics;
+        s.requests = checked_add(s.requests, p.requests);
+        s.bursts = checked_add(s.bursts, p.bursts);
+        s.beats = checked_add(s.beats, p.beats);
+        s.payload_bytes = checked_add(s.payload_bytes, p.payload_bytes);
+        s.busy_cycles = checked_add(s.busy_cycles, p.busy_cycles);
+        s.latency_cycles = checked_add(s.latency_cycles, p.latency_cycles);
+        s.max_latency_cycles = std::max(s.max_latency_cycles, p.max_latency_cycles);
+        s.peak_outstanding = std::max(s.peak_outstanding, p.peak_outstanding);
+    };
+    const auto* shown = &ports.front();
+    for (const auto& port : ports) {
+        add(total.read, port.read);
+        add(total.write, port.write);
+        total.busy_cycles = checked_add(total.busy_cycles, port.busy_cycles);
+        total.dram_bytes = checked_add(total.dram_bytes, port.dram_bytes);
+        if (shown == &ports.front() && !(shown->read.active || shown->write.active) &&
+            (port.read.active || port.write.active))
+            shown = &port;
+    }
+    total.tile_id = shown->tile_id;
+    total.block_id = shown->block_id;
+    total.reading = shown->reading;
+    return total;
+}
+
+std::unique_ptr<MemoryPort> make_memory(const Config& config, MemoryListener changed) {
     if (config.arch.memory.model == MemoryModel::Axi)
-        return std::make_unique<AxiMemory>("memory", config, changed, 1);
-    return std::make_unique<SerialDma>("memory", config, changed);
+        return std::make_unique<AxiMemory>("memory", config, std::move(changed),
+                                           config.arch.cores);
+    if (config.arch.cores != 1) throw std::invalid_argument("the serial DMA has one port");
+    return std::make_unique<SerialDma>("memory", config, std::move(changed));
 }
 
 }  // namespace npu

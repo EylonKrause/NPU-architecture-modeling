@@ -4,6 +4,7 @@
 #include <systemc>
 #include <cstdint>
 #include <deque>
+#include <functional>
 #include <memory>
 #include <vector>
 
@@ -88,12 +89,22 @@ public:
     virtual ~MemoryPort() = default;
     // Blocks the calling SC_THREAD until `request` completes.
     virtual void transport(MemRequest& request) = 0;
-    virtual MemoryView view() const = 0;
+    // The port of one requester. The serial model has requester 0 only;
+    // dram_bytes counts that port's beats.
+    virtual MemoryView view(std::uint64_t requester) const = 0;
 };
 
+// The ports of a cluster as one: counters and live counts add, the latency and
+// outstanding peaks take the largest port, and the request shown is that of the
+// lowest-numbered port with a channel active, else port 0's. One port is
+// returned unchanged.
+MemoryView combine(const std::vector<MemoryView>& ports);
+
+// Called from the process that changed a port's view, at request boundaries.
+using MemoryListener = std::function<void(std::uint64_t requester)>;
+
 // The model config.arch.memory.model selects, as a child of the module under
-// construction. `changed` gets a delta notification whenever the view changes
-// at a request boundary.
-std::unique_ptr<MemoryPort> make_memory(const Config& config, sc_core::sc_event& changed);
+// construction: the serial server, or an axi port per core of arch.cores.
+std::unique_ptr<MemoryPort> make_memory(const Config& config, MemoryListener changed);
 
 }  // namespace npu

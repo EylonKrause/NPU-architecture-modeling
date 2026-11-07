@@ -233,8 +233,10 @@ def schedule(panels: list[list[tuple[int, int, int]]], stores: list[tuple[int, i
     prefer_read = True
 
     def span(stage: str, tile: int, block: int, duration: int, size: int) -> None:
+        # One core: every span names core 0.
         spans.append({"stage": stage, "tile_id": tile, "start_cycle": time,
-                      "end_cycle": time + duration, "bytes": size, "block_id": block})
+                      "end_cycle": time + duration, "bytes": size, "block_id": block,
+                      "core": 0})
 
     while finished < count:
         # Every completion at the same timestamp is visible before arbitration.
@@ -363,8 +365,10 @@ class SimulatorIntegration(unittest.TestCase):
         records = list(csv.DictReader(text.splitlines()))
         self.assertEqual(len(records), len(tiles(c)) * (2 * blocks + 1))
         self.assertEqual(
-            set(records[0]), {"stage", "tile_id", "start_cycle", "end_cycle", "bytes", "block_id"}
+            set(records[0]),
+            {"stage", "tile_id", "start_cycle", "end_cycle", "bytes", "block_id", "core"}
         )
+        self.assertEqual({record["core"] for record in records}, {"0"})
         stages: dict[tuple[str, int, int], tuple[int, int, int]] = {}
         for record in records:
             stage, tile_id, block = record["stage"], int(record["tile_id"]), int(record["block_id"])

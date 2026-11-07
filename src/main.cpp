@@ -317,11 +317,11 @@ double fraction(std::uint64_t value, std::uint64_t total) {
 // (beats * beat bytes) and payload bytes per cycle of the run; snapshots add
 // the channel state. Beat bytes are the serial bytes_per_cycle or the AXI
 // data_bytes.
-void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryView& memory,
-                 std::uint64_t cycles, bool live) {
+void channels_json(std::ostream& stream, const npu::Config& c, const npu::MemoryView& memory,
+                   std::uint64_t cycles, bool live) {
     const auto& m = c.arch.memory;
-    const bool axi = m.model == npu::MemoryModel::Axi;
-    const auto beat_bytes = axi ? m.axi.data_bytes : m.bytes_per_cycle;
+    const auto beat_bytes = m.model == npu::MemoryModel::Axi ? m.axi.data_bytes :
+                                                               m.bytes_per_cycle;
     const auto channel = [&](const char* name, const npu::ChannelView& view) {
         const auto& s = view.statistics;
         stream << '"' << name << "\":{\"requests\":" << s.requests << ",\"bursts\":" << s.bursts
@@ -338,11 +338,19 @@ void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryVi
                    << ",\"queued\":" << view.queued;
         stream << '}';
     };
-    stream << "{\"model\":\"" << npu::to_string(m.model) << '"'
-           << ",\"peak_bytes_per_cycle\":" << npu::peak_memory_bytes_per_cycle(c) << ',';
     channel("read", memory.read);
     stream << ',';
     channel("write", memory.write);
+}
+
+// The cluster's memory: every port combined, and under axi the shared DRAM.
+void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryView& memory,
+                 std::uint64_t cycles, bool live) {
+    const auto& m = c.arch.memory;
+    const bool axi = m.model == npu::MemoryModel::Axi;
+    stream << "{\"model\":\"" << npu::to_string(m.model) << '"'
+           << ",\"peak_bytes_per_cycle\":" << npu::peak_memory_bytes_per_cycle(c) << ',';
+    channels_json(stream, c, memory, cycles, live);
     if (axi)
         stream << ",\"dram\":{\"bytes_per_cycle\":" << m.dram_bytes_per_cycle
                << ",\"bytes\":" << memory.dram_bytes << ",\"utilization\":"
@@ -351,16 +359,23 @@ void memory_json(std::ostream& stream, const npu::Config& c, const npu::MemoryVi
     stream << '}';
 }
 
+// The plan's static fields; the caller closes the object.
+void plan_json(std::ostream& stream, const npu::ClusterPlan& plan) {
+    stream << "{\"cores\":" << plan.cores << ",\"partition\":\"" << npu::to_string(plan.partition)
+           << "\",\"split\":\"" << npu::to_string(plan.split) << "\",\"units\":" << plan.units;
+}
+
 void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Problem& problem,
                    const npu::Accelerator& model, const char* type = "snapshot") {
     const auto snap = model.snapshot();
     const auto& s = snap.statistics;
     const auto tiles = npu::tile_count(c);
+    const auto blocks = npu::reduction_blocks(c);
     // A timing-only run has nothing to validate or hash.
     const bool checked = snap.completed && !c.sim.timing_only;
-    const auto ratio = [cycles = snap.cycles](std::uint64_t busy) {
-        return cycles ? static_cast<double>(busy) / static_cast<double>(cycles) : 0.0;
-    };
+    // Cluster utilizations are the mean over cores.
+    const auto core_cycles = npu::checked_mul(snap.cycles, model.cores());
+    const auto ratio = [core_cycles](std::uint64_t busy) { return fraction(busy, core_cycles); };
     stream << std::boolalpha << std::setprecision(17)
         << "{\"schema_version\":1,\"type\":\"" << type << "\",\"simulation\":true"
         << ",\"config\":";
@@ -387,9 +402,36 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
         << ",\"dma_block_id\":" << snap.dma_block_id << ",\"compute_tile_id\":" << snap.compute_tile_id
         << ",\"compute_block_id\":" << snap.compute_block_id << ",\"memory\":";
     memory_json(stream, c, snap.memory, snap.cycles, true);
+    stream << ",\"cluster\":";
+    plan_json(stream, model.plan());
+    stream << "},\"cores\":[";
+    for (std::uint64_t core = 0; core < model.cores(); ++core) {
+        const auto& view = snap.cores[static_cast<std::size_t>(core)];
+        const auto& v = view.statistics;
+        const auto core_tiles = model.core_tiles(core);
+        stream << (core ? "," : "") << "{\"core\":" << core
+               << ",\"completed\":" << view.completed << ",\"cycles\":" << view.cycles
+               << ",\"tiles_total\":" << core_tiles
+               << ",\"tiles_completed\":" << v.completed_tiles
+               << ",\"panels_total\":" << npu::checked_mul(core_tiles, blocks)
+               << ",\"panels_completed\":" << v.computed_panels
+               << ",\"loaded_panels\":" << v.loaded_panels
+               << ",\"inflight_tiles\":" << view.inflight_tiles
+               << ",\"dma_busy\":" << view.dma_busy << ",\"compute_busy\":" << view.compute_busy
+               << ",\"dma_read\":" << view.dma_read << ",\"dma_write\":" << view.dma_write
+               << ",\"dma_tile_id\":" << view.dma_tile_id
+               << ",\"dma_block_id\":" << view.dma_block_id
+               << ",\"compute_tile_id\":" << view.compute_tile_id
+               << ",\"compute_block_id\":" << view.compute_block_id << ",\"macs\":" << v.macs
+               << ",\"read_bytes\":" << v.read_bytes << ",\"write_bytes\":" << v.write_bytes
+               << ",\"compute_busy_cycles\":" << v.compute_busy_cycles
+               << ",\"dma_busy_cycles\":" << v.dma_busy_cycles << ",\"memory\":{";
+        channels_json(stream, c, view.memory, snap.cycles, true);
+        stream << "}}";
+    }
     stream
-        << ",\"tiles_total\":" << tiles << ",\"tiles_completed\":" << s.completed_tiles
-        << ",\"panels_total\":" << npu::checked_mul(tiles, npu::reduction_blocks(c))
+        << "],\"tiles_total\":" << tiles << ",\"tiles_completed\":" << s.completed_tiles
+        << ",\"panels_total\":" << npu::checked_mul(tiles, blocks)
         << ",\"panels_completed\":" << s.computed_panels << ",\"loaded_panels\":" << s.loaded_panels
         << ",\"modeled_latency_ns\":" << static_cast<double>(snap.cycles) * 1000.0 / c.arch.frequency_mhz
         << ",\"active_stages\":[";
@@ -459,8 +501,75 @@ void live_commands(const npu::Config& c, const npu::Problem& problem,
     }
 }
 
+// Speedup inputs: the makespan, the MAC imbalance (largest core over the mean)
+// and the DRAM floor, then both splits' predictions and every core's counters.
+void cluster_json(std::ostream& stream, const npu::Config& c, const npu::Accelerator& model,
+                  const npu::Statistics& total) {
+    const auto& memory = c.arch.memory;
+    const bool axi = memory.model == npu::MemoryModel::Axi;
+    const auto dram = model.memory().dram_bytes;
+    std::uint64_t largest = 0;
+    for (std::uint64_t core = 0; core < model.cores(); ++core)
+        largest = std::max(largest, model.statistics(core).macs);
+    stream << ",\n\"cluster\":";
+    plan_json(stream, model.plan());
+    stream << ",\"makespan_cycles\":" << total.cycles << ",\"imbalance\":"
+           << fraction(npu::checked_mul(largest, model.cores()), total.macs)
+           << ",\"dram_bound_cycles\":"
+           << (axi && memory.dram_bytes_per_cycle ?
+                   npu::ceil_div(dram, memory.dram_bytes_per_cycle) : 0)
+           << ",\"predicted\":{";
+    for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
+        const auto& estimate = model.estimate(partition);
+        stream << (partition == npu::Partition::M ? "" : ",") << '"'
+               << npu::to_string(partition) << "\":{\"read_bytes\":" << estimate.read_bytes
+               << ",\"write_bytes\":" << estimate.write_bytes
+               << ",\"bound_cycles\":" << estimate.bound_cycles << '}';
+    }
+    stream << "}},\n\"cores\":[";
+    const auto& plan = model.plan();
+    for (std::uint64_t core = 0; core < model.cores(); ++core) {
+        const auto s = model.statistics(core);
+        stream << (core ? ",\n" : "\n") << "{\"core\":" << core
+               << ",\"first_unit\":" << plan.first_unit(core)
+               << ",\"units\":" << plan.unit_count(core)
+               << ",\"tiles\":" << model.core_tiles(core) << ",\"cycles\":" << s.cycles
+               << ",\"macs\":" << s.macs << ",\"executed_macs\":" << s.executed_macs
+               << ",\"compute_busy_cycles\":" << s.compute_busy_cycles
+               << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
+               << ",\"compute_utilization\":" << fraction(s.compute_busy_cycles, total.cycles)
+               << ",\"memory_utilization\":" << fraction(s.dma_busy_cycles, total.cycles)
+               << ",\"slot_wait_cycles\":" << s.slot_wait_cycles
+               << ",\"panel_wait_cycles\":" << s.panel_wait_cycles
+               << ",\"peak_inflight_tiles\":" << s.peak_inflight_tiles
+               << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
+               << ",\"weight_read_bytes\":" << s.weight_read_bytes
+               << ",\"weight_cache_hits\":" << s.weight_cache_hits
+               << ",\"weight_cache_misses\":" << s.weight_cache_misses << ",\"memory\":{";
+        const auto port = model.memory(core);
+        channels_json(stream, c, port, total.cycles, false);
+        if (axi) stream << ",\"dram_bytes\":" << port.dram_bytes;
+        stream << "}}";
+    }
+    stream << "\n]";
+}
+
 void report(const npu::Config& c, const npu::Accelerator& model, double seconds, bool dump) {
     const auto s = model.statistics();
+    const auto cores = model.cores();
+    // Utilizations are the mean over cores; the peak rates are the cluster's.
+    const auto core_cycles = static_cast<double>(npu::checked_mul(s.cycles, cores));
+    const auto peak_macs = npu::checked_mul(npu::peak_macs_per_cycle(c), cores);
+    // Each core's busiest resource, and the DRAM floor all cores share.
+    std::uint64_t lower_bound = 0;
+    for (std::uint64_t core = 0; core < cores; ++core) {
+        const auto each = model.statistics(core);
+        lower_bound = std::max({lower_bound, each.compute_busy_cycles, each.dma_busy_cycles});
+    }
+    const auto& memory = c.arch.memory;
+    if (memory.model == npu::MemoryModel::Axi && memory.dram_bytes_per_cycle)
+        lower_bound = std::max(lower_bound, npu::ceil_div(model.memory().dram_bytes,
+                                                          memory.dram_bytes_per_cycle));
     std::cout << std::setprecision(17) << std::boolalpha;
     std::cout << "{\n\"schema_version\":1,\n\"config\":";
     npu::write_config_json(std::cout, c);
@@ -479,7 +588,7 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << ",\n\"slot_wait_cycles\":" << s.slot_wait_cycles
         << ",\n\"panel_wait_cycles\":" << s.panel_wait_cycles
         << ",\n\"reduction_blocks\":" << npu::reduction_blocks(c)
-        << ",\n\"effective_macs_per_cycle\":" << npu::peak_macs_per_cycle(c)
+        << ",\n\"effective_macs_per_cycle\":" << peak_macs
         << ",\n\"peak_memory_bytes_per_cycle\":" << npu::peak_memory_bytes_per_cycle(c)
         << ",\n\"dma_requests\":" << s.dma_requests << ",\n\"dma_bursts\":" << s.dma_bursts
         << ",\n\"weight_cache_hits\":" << s.weight_cache_hits
@@ -493,19 +602,20 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
                    << ",\n\"numerical_match\":true";
     std::cout
         << ",\n\"simulation_wall_seconds\":" << seconds
-        << ",\n\"compute_utilization\":" << static_cast<double>(s.compute_busy_cycles) / static_cast<double>(s.cycles)
-        << ",\n\"memory_utilization\":" << static_cast<double>(s.dma_busy_cycles) / static_cast<double>(s.cycles)
+        << ",\n\"compute_utilization\":" << static_cast<double>(s.compute_busy_cycles) / core_cycles
+        << ",\n\"memory_utilization\":" << static_cast<double>(s.dma_busy_cycles) / core_cycles
         << ",\n\"mac_utilization\":" << static_cast<double>(s.executed_macs) /
-            (static_cast<double>(npu::peak_macs_per_cycle(c)) * static_cast<double>(s.cycles))
+            (static_cast<double>(peak_macs) * static_cast<double>(s.cycles))
         << ",\n\"dma_payload_utilization\":" << static_cast<double>(s.read_bytes + s.write_bytes) /
             (static_cast<double>(npu::peak_memory_bytes_per_cycle(c)) *
              static_cast<double>(s.cycles))
         << ",\n\"arithmetic_intensity_macs_per_byte\":" << static_cast<double>(s.macs) /
             static_cast<double>(s.read_bytes + s.write_bytes)
-        << ",\n\"resource_lower_bound_cycles\":" << std::max(s.compute_busy_cycles, s.dma_busy_cycles)
+        << ",\n\"resource_lower_bound_cycles\":" << lower_bound
         << ",\n\"modeled_latency_ns\":"
         << static_cast<double>(s.cycles) * 1000.0 / c.arch.frequency_mhz << ",\n\"memory\":";
     memory_json(std::cout, c, model.memory(), s.cycles, false);
+    cluster_json(std::cout, c, model, s);
     if (dump) {
         std::cout << ",\n\"accumulators\":"; array_json(model.output().accumulators);
         std::cout << ",\n\"outputs\":"; array_json(model.output().quantized);

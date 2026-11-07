@@ -3,17 +3,18 @@
 #include "npu/core.hpp"
 #include "npu/memory.hpp"
 #include <systemc>
-#include <list>
+#include <array>
 #include <memory>
 #include <ostream>
-#include <unordered_map>
+#include <string>
+#include <vector>
 
 namespace npu {
 
 struct Span {
     std::string stage;
     std::uint64_t tile_id = 0, start = 0, end = 0, bytes = 0;
-    std::uint64_t block_id = 0;
+    std::uint64_t block_id = 0, core = 0;
 };
 
 struct Statistics {
@@ -31,14 +32,14 @@ struct Statistics {
     std::uint64_t encoded_weight_storage_bytes = 0, dense_weight_storage_bytes = 0;
 };
 
-// A point-in-time view of the running SystemC model. Resource identifiers are
-// meaningful only while their corresponding busy flag is set. Traffic/MAC
+// A point-in-time view of one core's pipeline, or of the cluster. Resource
+// identifiers are meaningful only while their busy flag is set. Traffic and MAC
 // counters commit at operation completion; busy-cycle counters include the
-// elapsed portion of an operation currently in flight. dma_busy is set while
-// either memory channel has a request in flight and dma_write while the write
-// channel has; dma_read gives the direction of dma_tile_id, the read when both
-// are busy. The serial model runs one request at a time.
-struct LiveSnapshot {
+// elapsed portion of an operation in flight. dma_busy is set while either
+// memory channel has a request in flight and dma_write while the write channel
+// has; dma_read gives the direction of dma_tile_id, the read when both are busy.
+// The serial model runs one request at a time.
+struct PipelineView {
     std::uint64_t cycles = 0;
     bool completed = false, dma_busy = false, compute_busy = false, dma_read = false;
     bool dma_write = false;
@@ -50,95 +51,67 @@ struct LiveSnapshot {
     MemoryView memory;
 };
 
-// All state is owned by this module or immutable references whose owners
-// outlive sc_start(). Each issuing thread owns its memory request as a member,
-// so a simulation stopped while a transfer is in flight releases it with the
-// module.
+// The cluster, then each core. Cluster counters add the cores' and its memory
+// combines their ports; cycles is the makespan once every core completes;
+// peak_inflight_tiles and peak_cached_weight_bytes are the largest core's, as
+// slots and caches are per core; resource identifiers come from the
+// lowest-numbered busy core, else core 0. Tile ids are global.
+struct LiveSnapshot : PipelineView {
+    std::vector<PipelineView> cores;
+};
+
+class Core;
+
+// A cluster of arch.cores core pipelines splitting the output tiles by
+// plan() and sharing one memory module. Each core owns its slots, panel
+// buffers, weight cache and memory request objects; the cores write disjoint
+// tiles of one output tensor. All state is owned by this module or immutable
+// references whose owners outlive sc_start(), so a simulation stopped while a
+// transfer is in flight releases it with the module.
 class Accelerator final : public sc_core::sc_module {
 public:
     Accelerator(sc_core::sc_module_name name, const Config& config,
                 const Problem& problem);
+    ~Accelerator() override;
     const Output& output() const { return output_; }
+    const ClusterPlan& plan() const { return plan_; }
+    // Prediction of the plan of partition M or N.
+    const ClusterEstimate& estimate(Partition partition) const;
+    std::uint64_t cores() const { return static_cast<std::uint64_t>(cores_.size()); }
+    std::uint64_t core_tiles(std::uint64_t core) const;
     // Memory traffic and DMA counters come from the memory module.
     Statistics statistics() const;
-    MemoryView memory() const { return memory_->view(); }
-    // Completed load, compute and store intervals, recorded only when
-    // sim.trace_path is set. Not named trace(), which would hide
+    Statistics statistics(std::uint64_t core) const;
+    MemoryView memory() const;
+    MemoryView memory(std::uint64_t core) const;
+    // Completed load, compute and store intervals of every core, recorded only
+    // when sim.trace_path is set. Not named trace(), which would hide
     // sc_object::trace(sc_trace_file*).
-    const std::vector<Span>& spans() const { return spans_; }
-    bool completed() const { return completed_; }
+    std::vector<Span> spans() const;
+    bool completed() const;
     LiveSnapshot snapshot() const;
     // Register before the first sc_start(). The caller owns and closes file.
+    // One core traces as <name>.<signal>; a cluster as <name>.core<i>.<signal>.
     void trace_signals(sc_core::sc_trace_file* file) const;
 
 private:
     const Config& config_;
-    const Problem& problem_;
     std::vector<EncodedWeightPanel> encoded_weights_;
     // Offset of each encoded panel from weight_base, in encoded_weights_ order.
     std::vector<std::uint64_t> weight_offsets_;
-    std::vector<Tile> tiles_;
-    bool record_spans_;
-    std::uint64_t panel_buffers_;
+    std::uint64_t encoded_storage_bytes_ = 0, dense_storage_bytes_ = 0;
+    ClusterPlan plan_;
+    std::array<ClusterEstimate, 2> estimates_;
     // Empty in a --timing-only run.
     Output output_;
-    Statistics stats_;
-    std::vector<Span> spans_;
-    sc_core::sc_fifo<std::uint64_t> free_slots_;
-    sc_core::sc_fifo<std::uint64_t> loaded_;
-    sc_core::sc_fifo<std::uint64_t> computed_;
-    sc_core::sc_event panel_consumed_;
-    struct WeightLine { std::uint64_t key, bytes; };
-    std::list<WeightLine> weight_lru_;
-    std::unordered_map<std::uint64_t, std::list<WeightLine>::iterator> weight_lines_;
-    std::uint64_t cached_bytes_ = 0;
-    std::uint64_t inflight_ = 0;
-    bool completed_ = false, compute_busy_ = false;
-    std::uint64_t compute_start_ = 0, compute_duration_ = 0;
-    std::uint64_t compute_tile_id_ = 0, compute_block_id_ = 0;
     sc_core::sc_event state_changed_;
-    // Created after the stage threads, where the DMA thread was, so process
-    // creation order is unchanged.
+    // Declared before the cores so that the cores, and the requests they own,
+    // are destroyed first.
     std::unique_ptr<MemoryPort> memory_;
-    MemRequest load_request_, store_request_;
-    // A single passive SC_METHOD owns every signal write. The scheduling
-    // threads retain plain state, so simultaneous resource updates are safe.
-    sc_core::sc_signal<bool> done_signal_{"done"};
-    sc_core::sc_signal<bool> dma_busy_signal_{"dma_busy"};
-    sc_core::sc_signal<bool> compute_busy_signal_{"compute_busy"};
-    sc_core::sc_signal<bool> dma_read_signal_{"dma_read"};
-    sc_core::sc_signal<bool> dma_write_signal_{"dma_write"};
-    using CounterSignal = sc_core::sc_signal<sc_dt::sc_uint<64>>;
-    CounterSignal cycles_signal_{"cycles"};
-    CounterSignal inflight_signal_{"inflight_tiles"};
-    CounterSignal loaded_signal_{"loaded_tiles_count"};
-    CounterSignal computed_signal_{"computed_tiles_count"};
-    CounterSignal read_queue_signal_{"read_queue_depth"};
-    CounterSignal write_queue_signal_{"write_queue_depth"};
-    CounterSignal read_bytes_signal_{"read_bytes"};
-    CounterSignal write_bytes_signal_{"write_bytes"};
-    CounterSignal macs_signal_{"macs"};
-    CounterSignal dma_tile_signal_{"dma_tile_id"};
-    CounterSignal dma_block_signal_{"dma_block_id"};
-    CounterSignal compute_tile_signal_{"compute_tile_id"};
-    CounterSignal compute_block_signal_{"compute_block_id"};
-    CounterSignal dma_cycles_signal_{"dma_busy_cycles"};
-    CounterSignal compute_cycles_signal_{"compute_busy_cycles"};
-    CounterSignal dma_requests_signal_{"dma_requests"};
-    CounterSignal dma_bursts_signal_{"dma_bursts"};
-    CounterSignal executed_macs_signal_{"executed_macs"};
-    CounterSignal skipped_macs_signal_{"skipped_macs"};
-    CounterSignal decode_cycles_signal_{"weight_decode_cycles"};
+    std::vector<std::unique_ptr<Core>> cores_;
 
+    // A single passive SC_METHOD drives every signal of every core.
     void observe();
-    void changed();
-    void load();
-    void compute();
-    void store();
-    void transfer(const Tile& tile, bool read, std::uint64_t block = 0);
-    bool weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes);
-    void advance(std::uint64_t cycles);
-    static std::uint64_t now();
 };
 
 void write_trace(std::ostream& stream, const std::vector<Span>& spans);

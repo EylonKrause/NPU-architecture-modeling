@@ -420,8 +420,11 @@ void check_echo() {
             "top-level groups in table order");
     require(defaults.items[3].keys == std::vector<std::string>{"compute", "memory", "sram_bytes",
                                                                "weight_cache_bytes",
-                                                               "frequency_mhz"},
+                                                               "frequency_mhz", "cores"},
             "arch nests compute and memory");
+    require(defaults.items[4].keys.back() == "partition" &&
+                defaults.items[4].items.back().text == "auto",
+            "mapping ends with the cluster partition, auto by default");
     std::vector<std::string> leaves;
     collect_leaves(defaults, "", leaves);
     const auto& table = npu::config_options();
@@ -441,7 +444,8 @@ void check_echo() {
     c.arch.sram_bytes = 1000000;
     c.arch.weight_cache_bytes = 4096;
     c.arch.frequency_mhz = 933.3333333333334;
-    c.mapping = {3, 4, 5, 6, 1};
+    c.arch.cores = 64;
+    c.mapping = {3, 4, 5, 6, 1, npu::Partition::M};
     c.weights = {4, npu::WeightEncoding::Sparse, 2, 16};
     c.quant.input_zero = -128;
     c.quant.weight_zero = 7;
@@ -472,7 +476,8 @@ void check_echo() {
                 r.sim.trace_path == c.sim.trace_path &&
                 r.arch.memory.model == npu::MemoryModel::Axi &&
                 r.arch.memory.dram_bytes_per_cycle == 24 && r.arch.memory.axi.data_bytes == 64 &&
-                r.arch.memory.axi.write_latency == 1000000000,
+                r.arch.memory.axi.write_latency == 1000000000 && r.arch.cores == 64 &&
+                r.mapping.partition == npu::Partition::M,
             "echoed values are exact");
 }
 

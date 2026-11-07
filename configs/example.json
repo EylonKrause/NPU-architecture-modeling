@@ -7,9 +7,11 @@
     "memory": {"model": "serial", "bytes_per_cycle": 32, "latency": 40, "burst_bytes": 256},
     "sram_bytes": 524288,
     "weight_cache_bytes": 65536,
-    "frequency_mhz": 1000
+    "frequency_mhz": 1000,
+    "cores": 1
   },
-  "mapping": {"tile_m": 32, "tile_n": 32, "tile_k": 64, "buffer_slots": 2, "panel_buffers": 2},
+  "mapping": {"tile_m": 32, "tile_n": 32, "tile_k": 64, "buffer_slots": 2, "panel_buffers": 2,
+              "partition": "auto"},
   "weights": {"bits": 8, "encoding": "dense"},
   "quant": {
     "input_zero": 0,

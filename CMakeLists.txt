@@ -129,6 +129,10 @@ if(BUILD_TESTING)
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/memory_model_tests.py
             --binary $<TARGET_FILE:npu-sim>)
   set_tests_properties(memory-model PROPERTIES TIMEOUT 180)
+  add_test(NAME cluster
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/cluster_tests.py
+            --binary $<TARGET_FILE:npu-sim>)
+  set_tests_properties(cluster PROPERTIES TIMEOUT 180)
   add_test(NAME architecture-contract
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/architecture_tests.py
             --binary $<TARGET_FILE:npu-sim>)

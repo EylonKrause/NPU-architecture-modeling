@@ -93,6 +93,10 @@ const std::vector<ConfigOption> option_table = {
      "LRU weight-panel cache capacity; 0 disables it", NPU_FIELD(arch.weight_cache_bytes)},
     {"--frequency-mhz", "arch.frequency_mhz", "X",
      "clock used to convert cycles to modeled time", NPU_FIELD(arch.frequency_mhz)},
+    {"--cores", "arch.cores", "",
+     "core pipelines, 1..64, each with its own slots, SRAM, weight cache and AXI port; all "
+     "share one DRAM timeline, so more than one needs --memory-model axi",
+     NPU_FIELD(arch.cores)},
 
     {"--tile-m", "mapping.tile_m", "", "output tile rows", NPU_FIELD(mapping.tile_m)},
     {"--tile-n", "mapping.tile_n", "", "output tile columns", NPU_FIELD(mapping.tile_n)},
@@ -103,6 +107,11 @@ const std::vector<ConfigOption> option_table = {
     {"--panel-buffers", "mapping.panel_buffers", "1|2",
      "reduction-panel buffers per slot; with 2 the DMA loads panel b+1 while compute reads "
      "panel b", NPU_FIELD(mapping.panel_buffers)},
+    {"--partition", "mapping.partition", "",
+     "cluster work split: m gives each core a band of output-row tiles and n a band of "
+     "output-column tiles; whole groups go to cores when groups >= cores; auto takes the "
+     "smaller predicted makespan bound, then fewer predicted DRAM bytes, then n",
+     NPU_FIELD(mapping.partition)},
 
     {"--weight-bits", "weights.bits", "4|8", "signed weight precision", NPU_FIELD(weights.bits)},
     {"--weight-encoding", "weights.encoding", "", "lossless weight storage format",
