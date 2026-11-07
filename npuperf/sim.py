@@ -137,6 +137,11 @@ CONFIG_PATHS = {
     "weight_bits": "weights.bits", "weight_encoding": "weights.encoding",
     "palette_bits": "weights.palette_bits", "sparse_block": "weights.sparse_block",
     "timing": "sim.timing", "timing_only": "sim.timing_only",
+    "depthwise_macs_per_cycle": "arch.compute.depthwise_macs_per_cycle",
+    "activation_cache_bytes": "arch.activation_cache_bytes",
+    **{f"conv_{leaf}": f"shape.conv.{leaf}" for leaf in (
+        "input_h", "input_w", "input_c", "kernel_h", "kernel_w", "stride_h", "stride_w",
+        "dilation_h", "dilation_w", "pad_top", "pad_left", "pad_bottom", "pad_right")},
 }
 FLAT_KEYS = {path: key for key, path in CONFIG_PATHS.items()}
 
