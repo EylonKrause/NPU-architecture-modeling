@@ -539,6 +539,8 @@ class AnalyticSimulatorTests(unittest.TestCase):
         if not supports("--memory-model", "axi"):
             self.skipTest("npu-sim has no AXI memory model")
         for flags in itertools.islice(dense_configs(), 0, 648, 13):
+            # npu-sim rejects the serial DMA's bandwidth flag under the AXI model.
+            flags = {k: v for k, v in flags.items() if k != "memory_bytes_per_cycle"}
             result = run({**flags, "memory_model": "axi"})
             try:
                 design = analytic.Design.from_result(result)
