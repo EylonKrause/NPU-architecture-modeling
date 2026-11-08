@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Independent black-box arithmetic and architecture-contract checks.
+"""npu-sim GEMM outputs, traffic and timing against a standard-library Python oracle.
 
-Uses only Python's standard library.  It never imports simulator implementation
-code: fixture generation, quantization, traffic, and serial timing are derived
-from docs/numerics.md and docs/architecture.md with unbounded Python integers.
+Fixture generation, quantization, traffic and serial timing follow docs/numerics.md and
+docs/architecture.md in arbitrary-precision Python integers; nothing here imports simulator
+code. architecture_tests.py and design_point_tests.py reuse these oracles.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ def groups(c: dict) -> int:
 
 
 def fixtures(c: dict) -> tuple[list[int], list[int], list[int]]:
-    """Portable fixture stream, without C/C++ random libraries.
+    """The simulator's synthetic tensor stream: a 32-bit LCG, independent of any C++ library.
 
     Activations are M x (G*K) row-major, weights G blocks of K x N, bias G*N.
     """
@@ -516,8 +516,7 @@ class SimulatorIntegration(unittest.TestCase):
                     event_trace, cycle_trace = Path(temp) / f"event{index}.trace", Path(temp) / f"cycle{index}.trace"
                     event, _ = invoke(c, timing="event", trace=event_trace)
                     cycle, _ = invoke(c, timing="cycle", trace=cycle_trace)
-                    # The host stepping mode and the trace path are run options,
-                    # not architecture outcomes; they legitimately differ here.
+                    # Timing mode and trace path are run options; the comparison drops them.
                     def architecture_result(value: dict) -> dict:
                         copy = json.loads(json.dumps(value))
                         copy.pop("simulation_wall_seconds", None)
@@ -606,17 +605,17 @@ class SimulatorIntegration(unittest.TestCase):
             with self.subTest(slots=slots):
                 single = {**c, "buffer_slots": slots, "panel_buffers": 1}
                 double = {**c, "buffer_slots": slots}
-                serialised, _ = invoke(single, dump=False)
+                serialized, _ = invoke(single, dump=False)
                 overlapped, _ = invoke(double, dump=False)
-                for config, result in ((single, serialised), (double, overlapped)):
+                for config, result in ((single, serialized), (double, overlapped)):
                     oracle = timing_oracle(config)
                     for key in ORACLE_KEYS:
                         self.assertEqual(result[key], oracle[key], key)
                 bound = overlapped["resource_lower_bound_cycles"]
-                self.assertEqual(bound, serialised["resource_lower_bound_cycles"])
+                self.assertEqual(bound, serialized["resource_lower_bound_cycles"])
                 self.assertLessEqual(overlapped["cycles"], bound + slack)
-                self.assertGreater(serialised["cycles"], bound + slack)
-                self.assertEqual(overlapped["scratchpad_bytes"] - serialised["scratchpad_bytes"],
+                self.assertGreater(serialized["cycles"], bound + slack)
+                self.assertEqual(overlapped["scratchpad_bytes"] - serialized["scratchpad_bytes"],
                                  slots * (32 * 128 + 128 * 32))
 
     def test_panel_buffers_reserve_sram_and_reject_bad_counts(self):
@@ -925,8 +924,8 @@ class SimulatorIntegration(unittest.TestCase):
             "NPU1 1 1 1 0 -129 0", "NPU1 1 1 1 0 0 2147483648",
             "NPU1 1 1 1 0 0 0 unexpected", "NPU1 1 1 1 x 0 0",
             "NPU1 18446744073709551615 18446744073709551615 2",
-            # Long zero-padded values are numerically tiny: this checks token
-            # length limits independently of ordinary integer-overflow checks.
+            # Long zero-padded values are small numbers: they exercise the token length
+            # limit separately from the integer-overflow check.
             "NPU1 " + "0" * 40 + "1 1 1 0 0 0",
             "NPU1 1 1 1 " + "0" * 40 + " 0 0",
             "NPU1 1 1 1 0 " + "0" * 40 + " 0",
@@ -950,7 +949,7 @@ class SimulatorIntegration(unittest.TestCase):
             proc = subprocess.run([str(BINARY), "--input", str(path), "--m", "1"], capture_output=True, text=True, timeout=15)
             self.assert_rejected(proc, "ambiguous input and CLI dimensions must be rejected without crashing")
 
-    def test_empty_explicit_paths_are_rejected(self):
+    def test_empty_path_arguments_are_rejected(self):
         for arguments in [
             ["--input", ""],
             ["--input", "", "--m", "1", "--n", "1", "--k", "1"],
@@ -958,9 +957,9 @@ class SimulatorIntegration(unittest.TestCase):
         ]:
             with self.subTest(arguments=arguments):
                 proc = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True, timeout=5)
-                self.assert_rejected(proc, "an explicit empty path must not be silently skipped")
+                self.assert_rejected(proc, "an empty path argument must be rejected")
 
-    def test_cycle_step_budget_rejects_huge_wait_event_mode_remains_usable(self):
+    def test_cycle_mode_step_budget_rejects_a_wait_that_event_mode_runs(self):
         c = {
             **DEFAULTS, "m": 1, "n": 1, "k": 1, "tile_m": 1, "tile_n": 1,
             "buffer_slots": 1, "memory_latency": 50000000, "pipeline_cycles": 0,
@@ -968,8 +967,7 @@ class SimulatorIntegration(unittest.TestCase):
         }
         proc = subprocess.run(command(c, timing="cycle", dump=False), capture_output=True, text=True, timeout=5)
         self.assert_rejected(proc, "cycle mode must reject excessive host stepping work before simulation")
-        # Event mode takes a handful of scheduling events despite the large
-        # physical cycle count.  No trace, input file or output dump is needed.
+        # Event mode schedules a few events whatever the cycle count.
         event, _ = invoke(c, timing="event", dump=False)
         self.assertEqual(event["cycles"], 100000008)
         self.assertIs(event["numerical_match"], True)

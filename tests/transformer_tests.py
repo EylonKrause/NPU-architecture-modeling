@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
-"""Independent scalar decoder oracle and black-box SystemC contract tests."""
+"""npu-transformer-demo: outputs against an independent scalar decoder in each storage
+precision; cycles, traffic and SRAM against the stage schedule; KV-cache lifecycle,
+progress events and CLI errors."""
 
 from __future__ import annotations
 
@@ -15,7 +17,8 @@ import tempfile
 import unittest
 
 BINARY: Path
-# SystemC prints its banner on stderr before sc_main; keep stderr to our own lines.
+# SystemC prints its banner on stderr before sc_main; suppressing it leaves only the demo's
+# diagnostics on stderr.
 ENV = {**os.environ, 'SYSTEMC_DISABLE_COPYRIGHT_MESSAGE': '1'}
 
 
@@ -40,8 +43,8 @@ def stored(value: float, precision: str) -> float:
             return struct.unpack('<e', struct.pack('<e', value))[0]
         except OverflowError:
             return math.copysign(math.inf, value)
-    # Independent nearest-neighbour definition, rather than the C++ bit-add
-    # implementation. Float64 can represent all binary32/bfloat16 distances.
+    # bfloat16 by nearest-neighbor search with ties to even, independent of the C++
+    # bit-add rounding. Float64 holds every binary32-to-bfloat16 distance exactly.
     if not math.isfinite(value) or value == 0:
         return value
     sign = -1 if value < 0 else 1
@@ -70,9 +73,9 @@ def reference(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, tokens=6, see
               precision='fp16') -> list[list[float]]:
     """Full-sequence tensor path; all K/V of a layer computed before a causal masked read.
 
-    The simulator instead runs the prompt as one batch and each decode token
-    against an incremental cache. Every reduction and materialization has an
-    explicit binary32/storage cast.
+    The simulator runs the prompt as one batch and each decode token against an
+    incremental cache. Every reduction result and materialized tensor passes through
+    a binary32 or storage-format cast.
     """
     cast = lambda x: stored(x, precision)
     head_dim, kv_dim = dim // heads, dim // heads * kv_heads
@@ -130,7 +133,7 @@ def reference(*, dim=16, heads=4, kv_heads=2, ff_dim=32, layers=1, tokens=6, see
             for head in range(heads):
                 kv_head = head // (heads // kv_heads)
                 scores = []
-                for past in range(position + 1):  # Explicit causal mask over full tensors.
+                for past in range(position + 1):  # causal mask over the full tensors
                     score = 0.0
                     for lane in range(head_dim):
                         score = add(score, mul(query[head * head_dim + lane],
@@ -375,7 +378,7 @@ class TransformerTests(unittest.TestCase):
         prefix = run('--prefill', '2', '--decode', '0', '--dump-output')
         self.assertEqual(prefix['outputs'], whole['outputs'][:2])
 
-    def test_bounded_cache_atomic_rejection_and_reset_replay(self):
+    def test_full_kv_cache_rejects_atomically_and_replays_after_reset(self):
         result = run('--context', '6', '--verify-lifecycle', '--dump-output')
         self.assertTrue(result['lifecycle_verified'])
         self.assertEqual(result['cache_resets'], 1)
@@ -445,7 +448,7 @@ class TransformerTests(unittest.TestCase):
         self.assertEqual(report['weight_buffer_bytes'], d * f * width)
         self.assertEqual(report['reserved_sram_bytes'], sum(report[field] for field in (
             'activation_buffer_bytes', 'score_buffer_bytes', 'kv_buffer_bytes', 'weight_buffer_bytes')))
-        # KV fields are DRAM traffic and capacity; the earlier on-chip names are gone.
+        # KV traffic and capacity are DRAM quantities, reported as kv_dram_*.
         for stale in ('kv_read_bytes', 'kv_write_bytes', 'kv_capacity_bytes'):
             self.assertNotIn(stale, report)
         fp32 = run('--layers', str(layers), '--prefill', str(prefill), '--decode', str(decode),
@@ -651,7 +654,7 @@ class TransformerTests(unittest.TestCase):
                     else:
                         expected = source if precision == 'fp32' else word(stored(number, precision))
                         self.assertEqual(result, expected, (hex(source), precision))
-        # The inline form is kept for short probes.
+        # A short list can also be passed inline on the command line.
         inline = run('--precision', 'bf16', '--round-f32-bits', f'{0x3f808000},{0x3f818000}')
         self.assertEqual(inline['rounded_f32_bits'], [0x3f800000, 0x3f820000])
 

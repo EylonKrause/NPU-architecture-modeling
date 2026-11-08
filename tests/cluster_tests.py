@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Black-box checks of the multi-core cluster (--cores, --partition).
+"""The multi-core cluster (--cores, --partition) against an independent oracle.
 
-The oracle is written from the cluster description (SPEC section 5), not from
-the C++: it splits the output tiles into contiguous per-core bands of units,
+The oracle follows the cluster description in docs/architecture.md and shares no
+code with src/: it splits the output tiles into contiguous per-core bands of units,
 replays every core's load, compute and store pipeline with its own LRU weight
 cache and AXI port, and shares one DRAM reservation timeline granted in core
 order, read before write. Bursts, channels and the DRAM gap search are the

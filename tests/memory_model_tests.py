@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Black-box checks of the axi memory model against an independent oracle.
+"""The axi memory model (src/memory.cpp) against an independent oracle.
 
-The oracle below is written from the memory-system description (SPEC section
-4.3), not from the C++: it walks beats to form bursts, finds DRAM gaps by
-fixpoint iteration over every reservation ever made, and replays the load,
-compute and store pipeline as a timestamp simulation. Closed forms check
-single-burst latency, steady-state bandwidth, 4 KiB splitting, misaligned
-beats and the DRAM cap independently of the oracle.
+The oracle follows the memory-system description in docs/architecture.md and shares
+no code with src/: it walks beats to form bursts, finds DRAM gaps by fixpoint
+iteration over every reservation made, and replays the load, compute and store
+pipeline as a timestamp simulation. Closed forms check single-burst latency,
+steady-state bandwidth, 4 KiB splitting, misaligned beats and the DRAM cap
+independently of the oracle.
 """
 
 from __future__ import annotations
@@ -540,9 +540,8 @@ class AxiMemoryModel(unittest.TestCase):
         self.assertEqual(final["dram"], batch["memory"]["dram"])
 
     def test_paused_live_session_exits_cleanly(self):
-        # A transfer in flight when stdin closes belongs to the accelerator,
-        # not to a coroutine stack, so the process exits 0 (and leak-free
-        # under LeakSanitizer).
+        # An in-flight transfer is a member of its issuing module (include/npu/memory.hpp),
+        # so closing stdin mid-transfer exits 0 and LeakSanitizer finds no leak.
         for model in ("serial", "axi"):
             process = subprocess.run(
                 [str(BINARY), "--m", "8", "--n", "8", "--k", "32", "--tile-k", "8",

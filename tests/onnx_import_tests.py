@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Optional ONNX Runtime full-output differential checks and rejection tests."""
+"""npuperf.onnx_import: full graph outputs against ONNX Runtime, and rejection of unsupported
+models. Needs the packages in requirements-onnx.txt."""
 
 import argparse
 import json
@@ -168,7 +169,7 @@ class OnnxImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="onnx-external-reject-") as directory:
             path = Path(directory) / "external.onnx"
             path.write_bytes(model.SerializeToString())
-            loaded = onnx_import.load_model(path)  # succeeds without looking for external weights
+            loaded = onnx_import.load_model(path)  # loads without resolving external data
             with patch.object(onnx.numpy_helper, "to_array") as decoder:
                 with self.assertRaisesRegex(ValueError, "external ONNX tensor data"):
                     onnx_import.import_model(loaded, input_specs({"x": np.asarray([[1]], np.int8)}))

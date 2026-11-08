@@ -148,7 +148,7 @@ class ConfigFile(unittest.TestCase):
                 proc = run("--config", path)
                 self.assert_rejected(proc, fragment)
                 self.assertIn(f"{path}:", proc.stderr)
-        # Well-formed files still pass validate() before anything runs.
+        # A well-formed file still goes through validate() before the run.
         sram = self.write("sram.json", '{"arch": {"sram_bytes": 1}}')
         self.assert_rejected(run("--config", sram), "tile buffers exceed configured SRAM capacity")
         self.assert_rejected(run("--config", Path(self.directory.name) / "absent.json"),
@@ -218,7 +218,7 @@ class ConfigFile(unittest.TestCase):
                       ".", "+", "5e", "1.2.3"):
             with self.subTest(value=value):
                 self.assert_rejected(run("--frequency-mhz", value), "--frequency-mhz: ")
-        # The strtod forms the flag took before the option table still parse.
+        # The flag accepts every strtod decimal form.
         for value, mhz in (("1.5e3", 1500), (".5", 0.5), ("5.", 5), ("+5", 5), ("007", 7),
                            ("+.25E+3", 250)):
             with self.subTest(value=value):
@@ -264,7 +264,7 @@ class ConfigFile(unittest.TestCase):
                                      "output path conflicts with an input file: " + output)
         for path, text in files.items():
             self.assertEqual(path.read_text(encoding="utf-8"), text, path)
-        # A trace next to the config file is fine.
+        # A trace beside the config file is accepted.
         trace = directory / "trace.csv"
         self.result("--config", plain, "--trace", trace)
         self.assertTrue(trace.read_text(encoding="utf-8").startswith("stage,"))

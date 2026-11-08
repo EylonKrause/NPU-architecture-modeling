@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise the dashboard against the compiled npu-sim binary."""
+"""npuperf.live dashboard against a built npu-sim: controller state machine, slices and
+timeline, machine summary, page field usage, HTTP surface and CLI errors."""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +45,7 @@ class DashboardTests(unittest.TestCase):
             if state["error"]:
                 self.fail(state["error"])
             time.sleep(0.01)
-        self.fail("Model failed to reach the expected state before the deadline.")
+        self.fail("controller did not reach the expected state within the timeout")
 
     def test_pause_step_resume_stop(self):
         state = self.controller.control({"action": "start", "profile": "balanced"})
@@ -103,8 +104,8 @@ class DashboardTests(unittest.TestCase):
             self.assertEqual(state["jobs_completed"], 1, profile)
             result = state["recent_jobs"][0]["telemetry"]
             self.assertTrue(result["validated"], profile)
-            # A schema_version 2 snapshot echoes the complete design, so the machine panel
-            # describes what actually ran rather than the profile's flags.
+            # A schema_version 2 snapshot echoes the complete design; the machine panel is
+            # built from it.
             self.assertEqual(state["machine"]["source"], "snapshot", profile)
             self.assertEqual(state["machine"]["cores"],
                              result["config"]["arch"]["cores"], profile)
@@ -150,7 +151,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(workload, {"m": 64, "n": 64, "k": 128, "weight_bits": 8,
                                     "weight_encoding": "palette", "frequency_mhz": 200})
 
-    def test_slice_utilisation_is_the_last_advance(self):
+    def test_slice_utilization_is_the_last_advance(self):
         state = self.controller.control({"action": "reset", "profile": "balanced"})
         self.assertIsNone(state["slice"])
         before = state["telemetry"]
@@ -165,7 +166,7 @@ class DashboardTests(unittest.TestCase):
                 self.assertEqual(state["slice"][f"{name}_busy_fraction"],
                                  expected[f"{name}_busy_cycles"] / cycles)
             before = after
-        # Paused: every poll returns the last step's slice, not the whole job so far.
+        # While paused, every poll repeats the last step's slice.
         time.sleep(0.05)
         self.assertEqual(self.controller.snapshot()["slice"], state["slice"])
         whole_job = after["compute_busy_cycles"] / after["cycles"]
@@ -341,7 +342,7 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual((design.panel_buffers, design.m), (2, 32))
         self.assertEqual(dashboard.profile_design("balanced").panel_buffers, 1)
 
-    def test_bounded_commands_and_state_transitions(self):
+    def test_invalid_commands_are_rejected_and_state_stays_idle(self):
         for value in ({}, [], {"action": []}, {"action": "shell"},
                       {"action": "start", "profile": "../arbitrary"},
                       {"action": "start", "profile": []},
@@ -356,9 +357,9 @@ class DashboardTests(unittest.TestCase):
         self.assertEqual(self.controller.snapshot()["state"], "idle")
 
     def test_http_assets_control_and_browser_boundaries(self):
-        # Startup must work even if the machine's reverse resolver is broken.
-        # HTTPServer's default bind performs this unnecessary lookup and can
-        # otherwise hang before the launcher can announce its loopback URL.
+        # HTTPServer.server_bind calls socket.getfqdn, a reverse DNS lookup that can hang
+        # on a host with a broken resolver before the launcher prints its URL.
+        # DashboardServer skips the lookup.
         with mock.patch("socket.getfqdn", side_effect=OSError("DNS unavailable")) as reverse_dns:
             server = dashboard.DashboardServer(("127.0.0.1", 0), self.controller)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -386,11 +387,11 @@ class DashboardTests(unittest.TestCase):
                 self.assertNotIn("Access-Control-Allow-Origin", headers)
                 self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
                 if not path.startswith("/api/"):
-                    # No CDNs, fonts or other hosts: the page works offline. The SVG
-                    # namespace is an identifier, not a fetch.
+                    # The page loads nothing from other hosts. The SVG namespace URI is
+                    # an identifier and is excluded.
                     local = content.replace(b"http://www.w3.org/2000/svg", b"")
                     self.assertIsNone(re.search(rb"https?://", local), path)
-            # The profile list comes from /api/profiles, not from options in the page.
+            # The page's profile <select> is empty; app.js fills it from /api/profiles.
             profiles = json.loads(request("GET", "/api/profiles")[2])
             self.assertEqual(list(profiles), list(dashboard.PROFILES))
             for name, info in profiles.items():

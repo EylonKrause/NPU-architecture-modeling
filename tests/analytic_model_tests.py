@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """npuperf.analytic against npu-sim: the request-level schedule, the closed form and the
-result parser, on seeded random configurations and on known simulator facts.
+result parser, on seeded random configurations and on pinned simulator cycle counts.
 
 schedule() replays every request, so it must equal npu-sim cycle for cycle; analyze() must
 be exact in traffic, request counts, compute busy cycles and both caches' hits, its lower
@@ -310,7 +310,7 @@ class ClosedFormTests(unittest.TestCase):
 
 
 class KnownFactTests(unittest.TestCase):
-    """Facts the core engineers measured on npu-sim."""
+    """npu-sim on a 4096 x 4096 INT4 GEMV: pinned cycle counts, their closed form, scaling."""
 
     GEMV = {"m": 1, "n": 4096, "k": 4096, "weight_bits": 4, "memory_model": "axi",
             "macs_per_cycle": 512, "axi_data_bytes": 16, "axi_burst_beats": 16,

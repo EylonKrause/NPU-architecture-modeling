@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""npuperf unit tests, and the analytic model and quantisation oracle checked against npu-sim.
+"""npuperf unit tests, and the analytic model and quantization oracle checked against npu-sim.
 
-Tests for simulator options that a build does not have yet (probed with --help) are
-skipped, so the suite runs against older and newer npu-sim builds alike.
+Tests of simulator options the npu-sim build lacks (probed with --help) are skipped.
 """
 from __future__ import annotations
 
@@ -203,7 +202,8 @@ class FlagTests(unittest.TestCase):
             sim.config_value(nested, "missing")
 
     def test_config_lookup_renamed_option_table_leaves(self):
-        # SPEC 1.1 renames leaves (weight_bits -> weights.bits); flat names still resolve.
+        # Option-table leaves differ from the flat names (weight_bits is weights.bits);
+        # both resolve.
         nested = {"weights": {"bits": 4, "encoding": "palette", "palette_bits": 2},
                   "arch": {"memory": {"bytes_per_cycle": 16, "latency": 12, "burst_bytes": 32},
                            "frequency_mhz": 400}}
@@ -280,7 +280,7 @@ class CliTests(unittest.TestCase):
         self.assertEqual(len(result.stderr.strip().splitlines()), 1)
 
 
-# ----------------------------------------------------------------------------- quantisation
+# ----------------------------------------------------------------------------- quantization
 def tosa_apply_scale_32(value, multiplier, shift, double_round=False):
     """TOSA 1.0.2 scale_helpers.tosac apply_scale_32, transcribed for the cross-check."""
     assert multiplier >= 0 and 2 <= shift <= 62
@@ -293,7 +293,7 @@ def tosa_apply_scale_32(value, multiplier, shift, double_round=False):
 
 class QuantOracleTests(unittest.TestCase):
     def test_golden_vectors(self):
-        # quant_semantics.md section 5: (x, multiplier, TFLite shift, single, double)
+        # Golden vectors of docs/numerics.md: (x, multiplier, TFLite shift, single, double).
         for x, multiplier, tfl_shift, single, double in (
                 (3, 1861152495, -1, 1, 2), (-6, 1073741824, -1, -1, -2),
                 (-3, 1073741824, 0, -1, -1), (5038971, 2062684434, -2, 1209998, 1209999)):
@@ -368,7 +368,7 @@ class QuantOracleTests(unittest.TestCase):
 
 
 class QuantSimulatorTests(unittest.TestCase):
-    """The simulator's requantised outputs against the Python oracle, per channel."""
+    """The simulator's requantized outputs against the Python oracle, per channel."""
 
     def check(self, lanes, rounding="away", rescale=None, small=False, seed=5):
         rng = random.Random(seed)
@@ -600,7 +600,7 @@ class AnalyticSimulatorTests(unittest.TestCase):
 
 
 class AnalyticUnitTests(unittest.TestCase):
-    def test_spec_array_formulas(self):
+    def test_array_dataflow_formulas(self):
         os_design = analytic.Design(array_rows=4, array_cols=8, pipeline_cycles=3, dataflow="os")
         # OS: ceil(10/4)*ceil(12/8) waves x K + (A_r + A_c - 2) + pipeline
         self.assertEqual(analytic.panel_compute_cycles(os_design, 10, 12, 20), 3 * 2 * 20 + 10 + 3)
@@ -633,7 +633,7 @@ class AnalyticUnitTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             analytic.axi_bounds(analytic.Design(memory_model="axi"))
 
-    # Config echoed by an option-table npu-sim (SPEC 1.1 paths) and by an older flat build.
+    # The same result config in the nested option-table layout and the flat layout.
     NESTED = {"name": "", "description": "",
               "shape": {"m": 16, "n": 16, "k": 32, "groups": 1, "seed": 1},
               "arch": {"compute": {"macs_per_cycle": 64, "array_rows": 0, "array_cols": 0,
@@ -827,7 +827,7 @@ class ExperimentScriptTests(unittest.TestCase):
                                    "--output-dir", folder, "--format", "json", env=environment)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertTrue((Path(folder) / "summary.json").is_file())
-        # A build directory without the demos fails; it does not borrow them from another build.
+        # A build directory without the demos fails, even when another build has them.
         with tempfile.TemporaryDirectory() as folder:
             # resolve() expands Windows 8.3 short names (RUNNER~1) to match the tool's message.
             lone = Path(folder).resolve() / "build"
@@ -865,7 +865,8 @@ class RooflineAndTraceTests(unittest.TestCase):
                                           "did you mean 'macs_per_cycle'?\n")
 
     def test_roofline_simulate_on_a_small_workload(self):
-        # A depthwise layer (grouped) and a dense layer taller than the 4096-row legacy limit.
+        # A depthwise layer (grouped) and a dense layer with M = 5000, above the 4096-row
+        # limit of builds without --timing-only.
         layers = [
             {"name": "dw", "op": "depthwise_conv2d", "in_c": 8, "out_c": 8, "groups": 8,
              "kernel_h": 3, "kernel_w": 3, "out_h": 6, "out_w": 6, "repeat": 1,

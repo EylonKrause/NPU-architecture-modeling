@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Independent arithmetic and timed multicore/power contracts for SystemC."""
+"""npu-mobile-demo: job outputs against a Python oracle, bus arbitration and timing, scheduling,
+the weight cache, DVFS and power-state energy accounting."""
 
 from __future__ import annotations
 
@@ -13,7 +14,8 @@ import tempfile
 import unittest
 
 BINARY: Path
-# SystemC prints its banner on stderr before sc_main; keep stderr to our own lines.
+# SystemC prints its banner on stderr before sc_main; suppressing it leaves only the demo's
+# diagnostics on stderr.
 ENV = {**os.environ, 'SYSTEMC_DISABLE_COPYRIGHT_MESSAGE': '1'}
 
 
@@ -39,7 +41,7 @@ def oracle(seed: int, job: int, model: int, m: int, n: int, k: int) -> tuple[lis
 
 
 class MobilePlatformTests(unittest.TestCase):
-    def test_real_arithmetic_full_outputs_and_repeated_determinism(self):
+    def test_full_outputs_match_the_oracle_and_repeat_exactly(self):
         flags = ('--cores', '3', '--jobs', '7', '--models', '3', '--m', '3',
                  '--n', '7', '--k', '13', '--seed', '4294967295', '--dump-output')
         report = run(*flags)
@@ -59,7 +61,7 @@ class MobilePlatformTests(unittest.TestCase):
         tiny = run('--jobs', '1', '--m', '1', '--n', '1', '--k', '1', '--seed', '0', '--dump-output')
         self.assertEqual((tiny['jobs'][0]['accumulators'], tiny['jobs'][0]['outputs']), oracle(0, 0, 0, 1, 1, 1))
 
-    def test_bus_serialization_exact_durations_and_real_byte_counts(self):
+    def test_bus_serializes_transfers_with_exact_durations_and_byte_counts(self):
         report = run('--cores', '4', '--jobs', '8', '--models', '2', '--bus-bytes-per-ns', '7', '--bus-latency-ns', '13')
         transactions = report['bus_transactions']
         self.assertEqual(len(transactions), 16)
@@ -136,7 +138,7 @@ class MobilePlatformTests(unittest.TestCase):
         # Core 2's write frees the bus at 760 ns and moves the pointer to core 3,
         # whose compute ends at 760 ns. Its write request, raised in that
         # timestep's first delta, is in the decision and beats core 1's read,
-        # waiting since 742 ns; it used to be deferred behind core 1 and core 2.
+        # waiting since 742 ns.
         report = run('--cores', '4', '--jobs', '12', '--models', '1', '--bus-latency-ns', '8',
                      '--bus-bytes-per-ns', '16', '--macs-per-cycle', '4', '--priorities', '0')
         self.assertEqual(report['jobs'][3]['compute_end_ns'], 760)
@@ -235,7 +237,7 @@ class MobilePlatformTests(unittest.TestCase):
         job = fractional['jobs'][0]
         self.assertAlmostEqual(job['compute_end_ns'] - job['compute_begin_ns'], 36000 / 333, delta=0.000501)
 
-    def test_deadline_governor_and_truthful_missed_deadlines(self):
+    def test_deadline_governor_and_missed_deadline_count(self):
         common = ('--cores', '1', '--jobs', '1', '--governor', 'deadline')
         relaxed = run(*common, '--deadline-ns', '1000')
         urgent = run(*common, '--deadline-ns', '100')

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""npuperf.autotune: candidate search under an SRAM limit, the latency and SRAM objectives, the
+Pareto front, and the scripts/autotune.py CLI."""
 import argparse
 import itertools
 import json

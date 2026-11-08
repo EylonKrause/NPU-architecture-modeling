@@ -2,13 +2,13 @@
 """Black-box checks of implicit-convolution traffic, the depthwise datapath and the
 activation cache against independent oracles.
 
-The oracles are written from the model description, not from the C++. The input footprint
-enumerates every kernel tap of every output pixel in a panel and takes, per input row, the
-hull of the columns read; padding reads nothing. Its runs follow the NHWC layout: one per
-input row when the panel holds every channel, else one per pixel of the hull. Bursts walk
-the AXI beat slots. Numerics come from a direct convolution over the NHWC tensor, never an
-im2col matrix. The caches are replayed as LRUs over their lines in each core's load order,
-which the stage trace gives.
+The oracles follow the model description in docs/architecture.md and share no code with
+src/. The input footprint enumerates every kernel tap of every output pixel in a panel and
+takes, per input row, the hull of the columns read; padding reads nothing. Its runs follow
+the NHWC layout: one per input row when the panel holds every channel, else one per pixel of
+the hull. Bursts walk the AXI beat slots. Numerics come from a direct convolution over the
+NHWC tensor without an im2col matrix. The caches are replayed as LRUs over their lines in
+each core's load order, which the stage trace gives.
 """
 
 from __future__ import annotations

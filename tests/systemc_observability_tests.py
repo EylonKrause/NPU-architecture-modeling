@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Black-box checks of real SystemC signal traces and passive instrumentation.
+"""npu-sim --vcd: signal set and widths, final counters equal to the untraced run's result,
+monotonic counters, and occupancy within the slot and panel-buffer limits.
 
-The VCD reader uses only the standard library. Expected final counters come
-from a separate untraced simulator invocation; arithmetic/timing oracles are
-covered by the existing integration and architecture-contract suites.
+The VCD reader uses only the standard library. Arithmetic and timing oracles live in
+integration.py and architecture_tests.py.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class SystemCObservability(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertNotIn("NPU/invariant", process.stderr)
         self.assertNotIn("multiple drivers", process.stderr)
-        # Waveform setup messages must not corrupt the single result object.
+        # VCD setup messages must leave stdout as one JSON object.
         result = json.loads(process.stdout)
         self.assertTrue(result["numerical_match"])
         return result
@@ -112,7 +112,7 @@ class SystemCObservability(unittest.TestCase):
                          result["peak_inflight_tiles"])
         return changes
 
-    def test_event_waveform_is_passive_and_contains_real_activity(self):
+    def test_event_waveform_leaves_the_result_unchanged_and_records_activity(self):
         arguments = ["--m", "4", "--n", "5", "--k", "7", "--tile-m", "2",
                      "--tile-n", "3", "--tile-k", "3", "--buffer-slots", "2",
                      "--dma-burst-bytes", "5", "--weight-cache-bytes", "256",
@@ -145,7 +145,7 @@ class SystemCObservability(unittest.TestCase):
             if key not in {"simulation_wall_seconds", "config"}:
                 self.assertEqual(results[0][key], results[1][key], key)
 
-    def test_compressed_waveforms_match_real_decoder_and_skipped_work(self):
+    def test_compressed_waveforms_record_decoder_and_skipped_work(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "weights.npu"
             source.write_text("NPU1 2 3 4\n1 2 3 4 5 6 7 8\n"
@@ -188,7 +188,7 @@ class SystemCObservability(unittest.TestCase):
                         self.assertEqual(state["dma_tile_id"], state["compute_tile_id"])
                         self.assertEqual(state["dma_block_id"], state["compute_block_id"] + 1)
 
-    def test_vcd_in_unwritable_directory_fails_without_false_success(self):
+    def test_vcd_in_missing_directory_fails_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "does-not-exist" / "accelerator.vcd"
             process = subprocess.run([str(BINARY), "--vcd", str(path)],

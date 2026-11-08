@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Independent unit arithmetic, malformed-input and CLI energy checks."""
+"""npuperf.energy: component energies against hand-computed values, input validation, and the
+scripts/energy_report.py CLI."""
 
 import argparse
 import json
@@ -33,7 +34,7 @@ def nested_fixture():
 
 class EnergyTests(unittest.TestCase):
     def test_hand_calculated_units(self):
-        # Illustrative arithmetic coefficients, not hardware energy data.
+        # Small integer coefficients make every component an exact integer.
         result = energy.estimate(fixture(), mac_pj=2, dram_byte_pj=3, static_mw=4)
         self.assertEqual(result["component_pj"], {"mac": 20, "dram_read": 21,
                                                 "dram_write": 9, "static": 400})
@@ -124,7 +125,7 @@ class EnergyTests(unittest.TestCase):
         for result in (flat_v2, nested_v1):
             with self.subTest(result=result):
                 self.assertEqual(energy.estimate(result, 2, 3, 4), expected)
-        # A config without a clock in either layout is still rejected.
+        # A config with no clock in either layout is rejected.
         for config in ({"arch": 200}, {"arch": {}}, {"shape": {"m": 1}}, {}):
             result = {**nested_fixture(), "config": config}
             with self.subTest(config=config), self.assertRaises(ValueError):

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Black-box architecture checks derived from integer formulas and trace ordering.
+"""Memory-hierarchy traffic and timing from integer formulas, checked against npu-sim traces.
 
-The serial oracle does not copy SystemC thread code. It independently sums each
-panel's memory/compute duration with one tile slot and one panel buffer. Other
-mappings run the per-panel durations derived here through the timestamp
-scheduler of integration.py, which shares no code with the simulator, and check
-causal ordering, resource exclusion and timing-mode equality.
+derive() computes each panel's traffic and DMA and compute cycles, the LRU weight cache and
+the SRAM footprint from the configuration alone. With one tile slot and one panel buffer the
+run is serial and its cycles are the sum of those durations. Other mappings feed the same
+durations to the timestamp scheduler of integration.py, which shares no code with src/, and
+the trace is checked for causal order, resource exclusion and equality of the event and
+cycle timing modes.
 """
 
 from __future__ import annotations
@@ -259,9 +260,9 @@ class ArchitectureChecks(unittest.TestCase):
                  array_rows=2, array_cols=2, pipeline_cycles=2, dma_burst_bytes=5)
         plain, plain_trace = invoke(c)
         channels, channels_trace = invoke(c, per_channel=True)
-        self.assertEqual(plain['read_bytes'], 21)  # 3*(1A+ceil(3/2)W)+12bias
-        self.assertEqual(channels['read_bytes'], 57)  # +3*4*3 channel metadata
-        self.assertEqual(plain['compute_busy_cycles'], 18)  # 3*(2 waves*1 K + 2 skew + 2 pipeline)
+        self.assertEqual(plain['read_bytes'], 21)  # 3 * (1 A + ceil(3 * 4 / 8) W) + 12 bias
+        self.assertEqual(channels['read_bytes'], 57)  # + 3 channels * 3 INT32 vectors
+        self.assertEqual(plain['compute_busy_cycles'], 18)  # 3 * (2 waves * 1 + 2 skew + 2 pipe)
         self.assertEqual(channels['compute_busy_cycles'], 18)
         for actual, trace, quant in [(plain, plain_trace, False), (channels, channels_trace, True)]:
             expected = derive(c, quant)

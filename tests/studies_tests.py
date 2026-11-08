@@ -101,16 +101,17 @@ class ReproduceTests(unittest.TestCase):
 
     def test_sizing_rules(self):
         """S9 takes the smallest rate within 5% of the array-wide rate's latency; S10 the
-        smallest SRAM at which a network reaches 90% of its best utilisation."""
+        smallest SRAM at which a network reaches 90% of its best utilization."""
         latency = {8: 2.0, 16: 1.2, 32: 1.06, 64: 1.04, 128: 1.0}
         self.assertEqual(studies.s9_pick(latency), 64)
         self.assertEqual(studies.s9_pick({8: 1.0, 16: 1.0}), 8)
-        utilisation = {64: 0.10, 128: 0.17, 256: 0.19, 512: 0.20, 1024: 0.18}
-        self.assertEqual(studies.s10_pick(utilisation), 256)
+        utilization = {64: 0.10, 128: 0.17, 256: 0.19, 512: 0.20, 1024: 0.18}
+        self.assertEqual(studies.s10_pick(utilization), 256)
         self.assertEqual(studies.s10_pick({64: 0.5, 128: 0.4}), 64)
         points = {point.name: point for point in studies.design_points()}
         self.assertEqual(studies.s9_sweep(points["edge-256"]), [1, 2, 4, 8, 16, 32, 64, 128, 256])
-        # The configured Arm-model rate runs beside the sweep; the rule picks from the sweep.
+        # The configured rate runs beside the sweep as a reference; the rule picks from the
+        # sweep alone.
         self.assertEqual(studies.s9_rates(points["edge-256"]),
                          [0, 1, 2, 4, 8, 16, 24, 32, 64, 128, 256])
         self.assertEqual(studies.s9_source(points["edge-256"]), (24, "Vela 5.2.0 3x3 rate"))

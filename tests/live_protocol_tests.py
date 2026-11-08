@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Exercise the live SystemC child process, not a replay or a mocked backend."""
+"""npu-sim --live-stdio: command protocol, pause and step semantics against the SystemC
+kernel, output files, and a final state equal to the batch run's result."""
 
 from __future__ import annotations
 
@@ -20,7 +21,8 @@ WORKLOAD = ["--m", "4", "--n", "5", "--k", "7", "--tile-m", "2",
 
 
 class LiveChild:
-    """Bounded response waits that also work with Windows anonymous pipes."""
+    """npu-sim --live-stdio child with timed reads; a reader thread makes the timeout work on
+    Windows anonymous pipes."""
     def __init__(self, arguments: list[str]):
         self.error_file = tempfile.TemporaryFile(mode="w+t")
         self.process = subprocess.Popen([str(BINARY), *WORKLOAD, *arguments, "--live-stdio"],
@@ -81,7 +83,7 @@ class LiveProtocolChecks(unittest.TestCase):
     def test_output_paths_cannot_alias_other_outputs_or_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "same.vcd"
-            destination.write_text("preserve this evidence\n", encoding="utf-8")
+            destination.write_text("existing contents\n", encoding="utf-8")
             combinations = [
                 ["--vcd", destination, "--progress-jsonl", destination],
                 ["--vcd", destination, "--trace", destination],
@@ -98,7 +100,7 @@ class LiveProtocolChecks(unittest.TestCase):
                                          text=True, capture_output=True, timeout=10)
                     self.assertNotEqual(run.returncode, 0)
                     self.assertIn("conflict", run.stderr)
-                    self.assertEqual(destination.read_text(), "preserve this evidence\n")
+                    self.assertEqual(destination.read_text(), "existing contents\n")
 
     def batch(self, arguments: list[str] | None = None) -> dict:
         process = subprocess.run([str(BINARY), *WORKLOAD, "--dump-output", *(arguments or [])],
@@ -122,7 +124,7 @@ class LiveProtocolChecks(unittest.TestCase):
                      "compute_busy_cycles", "dma_busy_cycles"):
             self.assertEqual(current[name], batch[name], name)
 
-    def test_pause_step_and_completion_are_actual_kernel_state(self):
+    def test_pause_step_and_completion_follow_the_kernel(self):
         batch = self.batch()
         with LiveChild([]) as child:
             initial = child.read()
@@ -145,7 +147,7 @@ class LiveProtocolChecks(unittest.TestCase):
             deadline = time.monotonic() + 15
             previous = current
             while not current["completed"]:
-                self.assertLess(time.monotonic(), deadline, "bounded live completion deadline")
+                self.assertLess(time.monotonic(), deadline, "live run did not complete in 15 s")
                 current = child.command("advance 3")
                 self.assertGreaterEqual(current["cycles"], previous["cycles"])
                 for name in ("macs", "read_bytes", "write_bytes", "tiles_completed",
@@ -172,7 +174,7 @@ class LiveProtocolChecks(unittest.TestCase):
 
     def test_single_panel_buffer_steps_to_its_batch_result(self):
         single, double = self.batch(["--panel-buffers", "1"]), self.batch()
-        # K = 7 in panels of 3: one buffer serialises each panel load behind
+        # K = 7 in panels of 3: one buffer serializes each panel load behind
         # the previous panel's compute.
         self.assertGreater(single["cycles"], double["cycles"])
         self.assertGreater(single["panel_wait_cycles"], 0)
@@ -181,7 +183,7 @@ class LiveProtocolChecks(unittest.TestCase):
             self.assertEqual(current["config"]["mapping"]["panel_buffers"], 1)
             deadline = time.monotonic() + 15
             while not current["completed"]:
-                self.assertLess(time.monotonic(), deadline, "bounded live completion deadline")
+                self.assertLess(time.monotonic(), deadline, "live run did not complete in 15 s")
                 current = child.command("advance 5")
                 self.assertLessEqual(current["loaded_panels"] - current["panels_completed"],
                                      current["inflight_tiles"])

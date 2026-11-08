@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """The design points in configs/: derivation, sizing rules, simulator agreement, numerics.
 
-The derivation arithmetic of docs/design-points.md is written out here from the public
-figures, not read back from the config files: peak MAC/cycle, TOP/s at two operations per
-MAC, DRAM bytes per cycle and GB/s, SRAM. The sizing rules in npuperf.designs must reproduce
-every tile, burst and weight-cache field; npu-sim must report the same peaks, fill the SRAM
-exactly with full tiles, reject the next larger tile, and accept every layer of every bundled
+The derivation arithmetic of docs/design-points.md is recomputed here from the public
+figures, independently of the config files: peak MAC/cycle, TOP/s at two operations per MAC,
+DRAM bytes per cycle and GB/s, SRAM. The sizing rules in npuperf.designs must reproduce every
+tile, burst and weight-cache field; npu-sim must report the same peaks, fill the SRAM exactly
+with full tiles, reject the next larger tile, and accept every layer of every bundled
 workload. One small GEMM per point is checked bit-exact against the integration oracle.
-The two points sized from Arm parts take the 3x3 depthwise rate of Arm's performance model
-of the part, derived here from its output microblock. The clusters' depthwise rate and SRAM
-have no public figure: studies S9 and S10 size them, fail when a config disagrees with their
-rule, and SIZED below holds their picks.
+The two points sized from Ethos-U public data take the 3x3 depthwise rate of Vela 5.2.0's
+performance model, derived here from the output microblock. The clusters' depthwise rate and
+SRAM have no public figure: studies S9 and S10 size them, fail when a config disagrees with
+their rule, and SIZED below holds their picks.
 """
 
 from __future__ import annotations
@@ -188,7 +188,7 @@ class DesignPoints(unittest.TestCase):
                 self.assertAlmostEqual(row.ridge_macs_per_byte, macs / want["dram"], places=9)
 
     def test_depthwise_rates_and_sized_fields(self):
-        # The Arm-model rates: 32 and 256 MAC/cycle peaks, three quarters of each for 3x3.
+        # Vela's rates: microblocks of 32 and 256 MACs, three quarters of each for a 3x3 kernel.
         self.assertEqual(EXPECTED["edge-256"]["depthwise"], 24)
         self.assertEqual(EXPECTED["mobile-2k"]["depthwise"], 192)
         for name in designs.DESIGN_POINTS:

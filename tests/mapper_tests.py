@@ -101,7 +101,7 @@ class MapperTests(unittest.TestCase):
 
     def test_activation_cache_takes_the_largest_row_tile(self):
         """With several column tiles the mapper also tries the activation cache sized to
-        the largest row tile's panels; it is only worth it when they hit."""
+        the largest row tile's panels; that split helps only when those panels hit."""
         design, min_depth, _ = point("mobile-2k")
         trial = design.replace(m=196, n=1024, k=512, tile_m=128, tile_n=64, tile_k=128,
                                buffer_slots=1)
@@ -146,7 +146,7 @@ class MapperTests(unittest.TestCase):
         on a tie, which npu-sim reproduces. Every candidate's lower bound is at most its
         replay, so the candidates the mapper skips cannot beat the pick. On the Llama decode
         gate_proj GEMV most candidates share the DRAM-bound estimate and the fastest replay
-        ranks below the first four, the most the mapper used to replay."""
+        ranks fifth or lower, so replaying only the top four candidates would miss it."""
         design, min_depth, config = point("client-16c")
         layers = {"conv": design.replace(m=196, n=256, k=2304),
                   "gemv": design.replace(m=1, n=8192, k=2048, depthwise_macs_per_cycle=0)}

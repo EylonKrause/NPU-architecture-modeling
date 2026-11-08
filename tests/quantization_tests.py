@@ -4,8 +4,8 @@ and grouped GEMM.
 
 The TOSA rescale modes are checked against TFLite MultiplyByQuantizedMultiplier
 and CMSIS-NN arm_nn_requantize, each written here from its own source (TFLite
-common.cc, gemmlowp fixedpoint.h, CMSIS-NN arm_nnsupportfunctions.h), not from
-TOSA apply_scale_32. A TFLite shift is a left-shift exponent; the simulator takes
+common.cc, gemmlowp fixedpoint.h, CMSIS-NN arm_nnsupportfunctions.h) independently
+of TOSA apply_scale_32. A TFLite shift is a left-shift exponent; the simulator takes
 the TOSA right shift, tosa_shift = 31 - tflite_shift.
 """
 
@@ -153,7 +153,7 @@ def run_tensor(a, w, bias, m, n, k, *, zeros, multipliers, shifts, groups=1,
         path.write_text("NPU1 " + " ".join(map(str, (m, n, k))) + "\n" +
                         "\n".join(" ".join(map(str, values)) for values in (a, w, bias)) + "\n")
         quant_path = Path(temporary) / "quantization.npuq"
-        # Keep malformed lengths malformed: the CLI must reject truncated files.
+        # The vectors are written as given, so short ones exercise the truncation check.
         quant_path.write_text(f"NPUQ1 {groups * n}\n" + "\n".join(
             " ".join(map(str, row)) for row in zip(zeros, multipliers, shifts)) + "\n")
         command = [str(BINARY), "--input", str(path), "--dump-output", "--weight-bits", str(bits),
@@ -173,7 +173,7 @@ def run_rescale(accumulators, multipliers, shifts, mode, *, output_zero=0, relu=
                       relu=relu, rescale_mode=mode, extra=["--tile-n", "256"])
 
 
-# quant_semantics.md section 5: x, multiplier, TFLite shift, single, double.
+# Golden vectors of docs/numerics.md: x, multiplier, TFLite shift, single and double rounding.
 PUBLISHED_VECTORS = [
     (3, 1861152495, -1, 1, 2),
     (-6, 1073741824, -1, -1, -2),

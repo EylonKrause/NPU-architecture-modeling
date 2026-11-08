@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Independent compression, zero skipping, traffic and SystemC timing checks."""
+"""Palette and sparse weight compression against an independent Python encoder: encoded
+storage, zero skipping, traffic and SystemC timing."""
 from __future__ import annotations
 
 import argparse
@@ -123,7 +124,7 @@ class CompressionChecks(unittest.TestCase):
             record, = encoded_sizes(w, [0] * n, n, k, n, 0, codec, palette_bits=1,
                                      sparse_block=8, decode_rate=5)
             size, nonzero, retained, decode, _ = record
-            # Input quantization-file carries three INT32 vectors plus bias.
+            # 16 bytes per output channel: INT32 bias, weight zero point, multiplier and shift.
             read = k + size + 16 * n
             # The decoder overlaps the MACs: the panel takes the longer of the two.
             compute = max(((n * k if codec == "palette" else nonzero) + 7) // 8, decode)
@@ -134,7 +135,7 @@ class CompressionChecks(unittest.TestCase):
 
     def test_decoder_overlaps_mac_work(self):
         # Every panel takes max(MAC cycles, decode cycles) + pipeline. A slow
-        # decoder bounds the panel; a fast one costs nothing over dense.
+        # decoder sets the panel time; a fast one adds nothing over dense.
         rng = random.Random(77)
         m, n, k, tile_m, tile_n, tile_k = 5, 7, 11, 2, 3, 4
         a = [rng.randint(-128, 127) for _ in range(m * k)]
@@ -230,9 +231,9 @@ class CompressionChecks(unittest.TestCase):
                     if live.poll() is None:
                         live.kill(); live.communicate()
 
-    def test_compression_can_expand_and_must_not_fake_speedups(self):
-        # Eight distinct INT8 weights have no redundancy. LUT overhead expands
-        # palette storage, and decoder cycles are explicitly visible.
+    def test_incompressible_weights_expand_and_cost_decode_cycles(self):
+        # Eight distinct INT8 weights: the 8-bit palette's header and LUT make the
+        # encoded panel larger than dense, and decoding still costs cycles.
         result = self.run_case([1] * 8, list(range(8)), [0], 1, 1, 8,
                                codec="palette", palette_bits=8, tile_n=1, tile_k=0)
         self.assertGreater(result["encoded_weight_storage_bytes"], result["dense_weight_storage_bytes"])

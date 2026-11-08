@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Verify actual fused SystemC results and rewrites that must be refused."""
+"""npuperf.graph_optimize ReLU fusion: fused graphs reproduce the unfused npu-sim outputs with
+no host traffic, and rewrites that would change an observable tensor are refused."""
 import argparse
 from copy import deepcopy
 import json
@@ -30,7 +31,7 @@ def fixture(op="Dense", zero=-3, rounding="away"):
 
 
 class OptimizerTests(unittest.TestCase):
-    def test_real_dense_matmul_conv_depthwise_outputs_and_eliminated_host_accesses(self):
+    def test_dense_matmul_conv_depthwise_fusion_matches_and_removes_host_traffic(self):
         for op in ("Dense", "MatMul", "Conv2D", "DepthwiseConv2D"):
             for rounding in ("away", "even"):
                 with self.subTest(op=op, rounding=rounding):
@@ -46,7 +47,8 @@ class OptimizerTests(unittest.TestCase):
                     self.assertEqual(result["compiled"]["host_read_bytes"], 0)
                     self.assertEqual(result["compiled"]["host_write_bytes"], 0)
                     self.assertEqual(result["compiled"]["cpu_fallback_nodes"], [])
-                    # ReLU already costs no extra engine cycles in this contract.
+                    # The output stage applies ReLU as a clamp at no cycle cost
+                    # (src/core.cpp), so fusion leaves NPU cycles and writes unchanged.
                     self.assertEqual(result["original"]["npu_cycles"], result["compiled"]["npu_cycles"])
                     self.assertEqual(result["original"]["npu_write_bytes"], result["compiled"]["npu_write_bytes"])
 
@@ -77,7 +79,7 @@ class OptimizerTests(unittest.TestCase):
         self.assertEqual(twice, compiled)
         self.assertEqual(second["fused_nodes"], 0)
 
-    def test_invalid_original_attributes_are_not_hidden(self):
+    def test_invalid_attributes_are_rejected(self):
         for invalid in (0, 1, "false", None):
             graph = fixture()
             graph["nodes"][0]["quant"]["relu"] = invalid

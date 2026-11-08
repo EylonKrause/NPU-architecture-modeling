@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Graph contract and end-to-end operator tests, using only unittest."""
+"""npuperf.graph: schema and attribute validation, scheduling and tensor liveness, and every
+operator end to end against hand-computed outputs."""
 
 import argparse
 import json
@@ -41,7 +42,7 @@ class GraphRuntimeTests(unittest.TestCase):
     def example(self, name):
         return json.loads((ROOT / "examples" / name).read_text())
 
-    def test_cnn_hand_calculated_output_and_actual_mac_counts(self):
+    def test_cnn_hand_calculated_output_and_mac_counts(self):
         report = self.execute(self.example("cnn.json"))
         self.assertEqual(report["outputs"]["logits"]["data"], [21, -17])
         self.assertEqual(report["macs"], 44)
@@ -157,7 +158,7 @@ class GraphRuntimeTests(unittest.TestCase):
         self.assertEqual(fused["outputs"], separate["outputs"])
         self.assertEqual(fused["sum_npu_cycles"], separate["sum_npu_cycles"])
 
-    def test_int4_reduction_tiling_and_array_geometry_preserve_real_graph_outputs(self):
+    def test_int4_reduction_tiling_and_array_geometry_preserve_graph_outputs(self):
         document = self.example("cnn.json")
         baseline = self.execute(document)
         candidate = self.execute(document, architecture={"weight_bits": 4, "tile_k": 2,
@@ -254,7 +255,7 @@ class GraphRuntimeTests(unittest.TestCase):
                 self.execute(document)
             simulator.assert_not_called()
 
-    def test_python_reference_checks_full_arrays_not_only_cpp_match_flag(self):
+    def test_python_reference_checks_every_output_element(self):
         document = single("MatMul", {"a": tensor([1, 1], [2]), "w": tensor([1, 1], [3])},
                           ["a", "w"], [6], quant=quant())
         original = sim.run

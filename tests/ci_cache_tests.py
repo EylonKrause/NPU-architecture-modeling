@@ -2,8 +2,8 @@
 """The CI SystemC prefix is cached as soon as it is built, whatever the job's later steps do.
 
 actions/cache saves in a post step that runs only when the whole job succeeds, so a leg whose
-build or tests fail would rebuild SystemC on every run. The composite action restores with
-actions/cache/restore and saves with actions/cache/save right after building instead.
+build or tests fail would rebuild SystemC on every run. The composite action therefore restores
+with actions/cache/restore and saves with actions/cache/save in the step after the build.
 """
 
 import re
