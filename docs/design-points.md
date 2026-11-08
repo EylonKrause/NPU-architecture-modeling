@@ -1,21 +1,22 @@
 # Design points
 
-Four hypothetical configurations in [`configs/`](../configs), sized from public data. None is a
-model of a vendor product: each takes the public figures named below (MAC count, internal
-SRAM, interface width, clock, memory rate, latencies) and derives every other field by the
-shared rules. The two points sized from Arm parts take their depthwise datapath's rate from
-Arm's own performance model of the part. The cluster core has no public figure for its
-depthwise rate or its SRAM; studies S9 and S10 of [results.md](results.md) size them by a
-stated rule, and S9 also reports its rule beside the Arm-model rates. Run one with
+This document derives the four hypothetical configurations in [`configs/`](../configs). Each is
+sized from public data: it takes the figures named in its section (MAC count, internal SRAM,
+interface width, clock, memory rate, latencies) from the cited sources and derives every other
+field by the shared rules of section 1. The two points sized from Arm parts take their
+depthwise datapath's rate from Arm's performance model of the part. The cluster core has no
+public figure for its depthwise rate or its SRAM; studies S9 and S10 of
+[results](results.md) size them by stated rules, and S9 reports its rule beside the Arm-model
+rates. A run loads a point with `--config`; later flags override the file:
 
 ```sh
 npu-sim --config configs/mobile-2k.json --m 196 --n 256 --k 2304
 ```
 
-Later flags override the file. `python -m npuperf.designs` prints the table below from the
-config files; `sim.design-points` (tests/design_point_tests.py) checks the table, the
-derivations and the sizing rules against the files and the simulator, accepts every layer of
-every bundled workload on every point, and runs one GEMM per point bit-exact.
+`python -m npuperf.designs` prints the table below from the config files.
+`sim.design-points` (`tests/design_point_tests.py`) checks the table, the derivations and the
+sizing rules against the files and the simulator, accepts every layer of every bundled workload
+on every point, and runs one GEMM per point bit-exact.
 
 <!-- table: python -m npuperf.designs -->
 | Design point | MAC/cycle | Array | Cores | Clock | Peak TOP/s | SRAM | Depthwise MAC/cycle | AXI | DRAM B/cycle | DRAM GB/s | Ridge MAC/B |
@@ -26,22 +27,19 @@ every bundled workload on every point, and runs one GEMM per point bit-exact.
 | `workstation-32c` | 32768 | 32x32 | 32 | 1200 MHz | 78.6432 | 32 x 256 KiB | 32 x 128 | 32 x 256-bit | 667 | 800.4 | 49.13 |
 <!-- end table -->
 
-- MAC/cycle counts every core. Peak TOP/s = 2 x MAC/cycle x clock: one INT8 MAC is two
-  operations, the convention of Arm's figures (2048 MACs, 4 TOP/s at 1 GHz). The clusters
-  apply the same convention to Apple's operations-per-second figure, whose precision and
-  operation count Apple does not state.
-- SRAM, depthwise MAC/cycle and AXI are per core. Each core has its own SRAM, slots,
-  weight and activation caches, depthwise datapath and AXI port (read and write channels);
-  all cores share one DRAM timeline.
-- DRAM GB/s = DRAM B/cycle x clock. Every point holds every tensor in DRAM.
-- Ridge = MAC/cycle / memory roof, the roof being min(DRAM B/cycle, 2 x cores x AXI bytes),
-  which npu-sim reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all
-  four points.
-- KB in Arm's documents is 1024 B: the Ethos-U55-256 has 48 SHRAM banks of 1024 B plus a
-  2048 B LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product brief
-  states as 50 KB.
+| Column | Definition |
+|---|---|
+| MAC/cycle | Every core's array MACs per cycle, summed |
+| Peak TOP/s | 2 x MAC/cycle x clock: one INT8 MAC is two operations, the convention of Arm's figures (2048 MACs, 4 TOP/s at 1 GHz). The clusters apply the same convention to Apple's operations-per-second figure, whose precision and operation count Apple does not state |
+| SRAM, depthwise MAC/cycle, AXI | Per core. Each core has its own SRAM, slots, weight and activation caches, depthwise datapath and AXI port (read and write channels); all cores share one DRAM timeline |
+| DRAM GB/s | DRAM B/cycle x clock. Every point holds every tensor in DRAM |
+| Ridge | MAC/cycle over the memory roof min(DRAM B/cycle, 2 x cores x AXI bytes), which npu-sim reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all four points |
 
-## Shared rules
+KB in Arm's documents is 1024 B: the Ethos-U55-256 has 48 SHRAM banks of 1024 B plus a 2048 B
+LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product brief states as
+50 KB.
+
+## 1 Shared rules
 
 | Field | Rule |
 |---|---|
@@ -57,16 +55,16 @@ every bundled workload on every point, and runs one GEMM per point bit-exact.
 | `pipeline_cycles` | 4, the simulator default; no public figure |
 
 A slot reserves 4T B of bias, two panel buffers of T x `tile_k` activation and `tile_k` x T
-weight bytes, and 5 B per output (INT32 partial sum and INT8 result). Partial tiles at the
-matrix edges and single-panel tiles reserve less, so every layer fits once full tiles do.
-`sim.design-points` checks that full tiles fill each point's SRAM exactly and that npu-sim
-rejects the next larger T or `tile_k`.
+weight bytes, and 5 B per output (INT32 partial sum and INT8 result), equation 4.3 of
+[architecture](architecture.md). Partial tiles at the matrix edges and single-panel tiles
+reserve less, so every layer fits once full tiles do. `sim.design-points` checks that full
+tiles fill each point's SRAM exactly and that npu-sim rejects the next larger T or `tile_k`.
 
 `npuperf.designs` implements the rules (`tile_rule`, `burst_rule`, `cache_rule`);
 `npuperf.studies` implements the S9 and S10 rules (`s9_pick`, `s10_pick`), and
 `python -m npuperf.reproduce` stops when a config file disagrees with them.
 
-## edge-256
+## 2 edge-256
 
 Microcontroller-class point sized from the Ethos-U55 top configuration.
 
@@ -83,16 +81,16 @@ Microcontroller-class point sized from the Ethos-U55 top configuration.
 | Burst | Up to 64 beats (512 B) | 12 x 64 >= 500 + 64; 12 x 32 < 500 + 32 |
 | Tiles | 32x32x128 | Minimum depth 128 B (`Dram_burst_length`). T = 64 needs 107,008 B at depth 128; at T = 32, depth 256 needs 76,032 B |
 | Weight cache | 7,936 B | 51,200 - 2 x 21,632 |
-| Depthwise datapath | 24 MAC/cycle | Vela runs the U55-256's depthwise on its 2x2x8 output microblock ([vela-arch]): 32 MAC/cycle, 24 for a 3x3 kernel. The S9 rule's pick sits beside it in [results.md](results.md#s9-depthwise-datapath-rate) |
+| Depthwise datapath | 24 MAC/cycle | Vela runs the U55-256's depthwise on its 2x2x8 output microblock ([vela-arch]): 32 MAC/cycle, 24 for a 3x3 kernel. The S9 rule's pick sits beside it in [results](results.md#s9-depthwise-datapath-rate) |
 
 Every tensor sits in DRAM because no workload's weights fit a microcontroller's SRAM: Arm's
 Corstone-300 reference platform for the Ethos-U55 has 2 MiB of SRAM and places the model and
 tensor arena in DDR by default ([`platform.ld`][corstone]). Vela's own U55 systems attach the
 second AXI port to off-chip flash, where its `Shared_Sram` memory mode places the constants
-([vela-ini]); the model has one port per core, so it takes the DRAM-class system Vela
-pairs with the U65 rather than a flash port that cannot take the activations' writes.
+([vela-ini]). The model has one port per core, which must also take the activations' writes, so
+the point takes the DRAM-class system Vela pairs with the U65.
 
-## mobile-2k
+## 3 mobile-2k
 
 Mobile point sized from the Ethos-U85 top configuration.
 
@@ -110,7 +108,7 @@ Mobile point sized from the Ethos-U85 top configuration.
 | Weight cache | 100,864 B | 273,408 - 2 x 86,272 |
 | Depthwise datapath | 192 MAC/cycle | Regor runs the U85-2048's 8-bit depthwise on its 4x4x16 output microblock only ([`ethos_u85.cpp`][regor]): 256 MAC/cycle, 192 for a 3x3 kernel |
 
-## client-16c
+## 4 client-16c
 
 Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 
@@ -119,7 +117,7 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 | Cores, array | 16 x 32x32, 16,384 MAC/cycle | M4's Neural Engine: "16-core design", "capable of 38 trillion operations per second" ([Apple, May 2024][m4]). Apple does not state the precision; this model's MACs are INT8. 38 T ops/s over 16 cores of 1024 MACs at 2 ops/MAC is 1.16 GHz |
 | Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (npu-sim takes integer bytes per cycle). Peak 2 x 16,384 x 1.2 GHz = 39.3216 TOP/s, 3.5% above 38 |
 | DRAM rate | 100 B/cycle, 120 GB/s | M4 "has higher memory bandwidth of 120GB/s" ([Apple, Oct 2024][m4-pro]). That is the SoC's rate, shared with the CPU and GPU; Apple publishes no rate attainable by the Neural Engine |
-| SRAM | 262,144 B (256 KiB) per core | Apple publishes no Neural Engine SRAM size. The S10 rule ([results.md](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilisation in the sweep, taken on this point and on `workstation-32c`, which shares the core |
+| SRAM | 262,144 B (256 KiB) per core | Apple publishes no Neural Engine SRAM size. The S10 rule ([results](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilization in the sweep, taken on this point and on `workstation-32c`, which shares the core |
 | AXI | One 256-bit port per core | One core design serves both clusters: the narrowest AXI width whose read channels, one per core, carry `workstation-32c`'s 667 B/cycle. 32 x 16 B = 512 falls short; 32 x 32 B = 1024 does not. Here 16 x 32 B = 512 B/cycle against 100 |
 | Latency, outstanding | 500/250, 64/32 | `Ethos_U85_SYS_DRAM_High` ([vela-ini]), in cycles at 1.2 GHz |
 | Burst | Up to 8 beats (256 B) | As `mobile-2k` |
@@ -128,13 +126,13 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 | Depthwise datapath | 128 MAC/cycle per core | The S9 rule; Apple publishes no Neural Engine microarchitecture to take a rate from |
 | Partition | `auto` | npu-sim picks the m or n split per GEMM |
 
-## workstation-32c
+## 5 workstation-32c
 
 Two-die point: two `client-16c` dies on one DRAM, 32 cores.
 
 | Field | Value | Derivation |
 |---|---|---|
-| Cores | 32 | M3 Ultra: "A powerful 32-core Neural Engine" ([Apple, March 2025][m3-ultra]). Apple states no operations-per-second figure for it; the peak follows from the core count and the `client-16c` clock |
+| Cores | 32 | M3 Ultra: a "32-core Neural Engine" ([Apple, March 2025][m3-ultra]). Apple states no operations-per-second figure for it; the peak follows from the core count and the `client-16c` clock |
 | Core, clock | 32x32 array, 1200 MHz | `client-16c`'s; peak 2 x 32,768 x 1.2 GHz = 78.6432 TOP/s |
 | DRAM rate | 667 B/cycle, 800.4 GB/s | "over 800GB/s of memory bandwidth" ([m3-ultra]): the smallest integer rate at 1.2 GHz that reaches 800 GB/s (666 B/cycle gives 799.2 GB/s). Shared with the CPU and GPU |
 | Per-core fields | As `client-16c` | SRAM 256 KiB, 256-bit port, Vela latencies and limits, 8-beat bursts, 64x64x256 tiles, 89,600 B weight cache, 128 MAC/cycle depthwise datapath (the S9 rule picks it on this point too), `auto` partition |
@@ -147,22 +145,22 @@ operations per second" ([Apple, November 2020][m1]), 1.6 x 11 = 17.6 T ops/s per
 35.2 per 32, against this point's 78.6432 TOP/s. The point pairs M4-class cores with the
 M3 Ultra's core count and memory rate.
 
-## Reading the points
+## 6 Reading the points
 
-An a x b tile of a GEMM moves (a + b) x `tile_k` bytes per panel for a x b x `tile_k` MACs:
-ab/(a + b) MAC per byte before cache hits and the output store. With the config files' 2-slot
-T x T tiles that is T/2, 16 on `edge-256` and 32 on the others. All four ridges lie above it,
-so under that default mapping a GEMM whose operands the caches do not hold is DRAM-bound on
-every point: the SRAM sets T, and no point's SRAM holds the two slots of a tile wide enough
-to reach its ridge. A convolution on its input footprint reads an input pixel once per
-reduction panel whose kernel rows touch it, where the im2col matrix holds it once per kernel
-tap, and the activation cache lets the column tiles of a row tile share its panels. With
-them some of `npuperf.mapper`'s tilings, which the results use, are compute-bound: the
-busiest core computes for longer than it waits on memory, the count in the S1 table's
-compute-bound column of [results.md](results.md). On the clusters some of those layers have
-fewer work units than cores, so their MAC utilisation stays low.
+An $a \times b$ tile of a GEMM moves $(a + b)$ `tile_k` bytes per panel for $ab$ `tile_k` MACs:
+$ab/(a + b)$ MAC per byte before cache hits and the output store. With the config files' 2-slot
+$T \times T$ tiles that is $T/2$, 16 on `edge-256` and 32 on the others. All four ridges lie
+above it, so under that mapping a GEMM whose operands the caches do not hold is DRAM-bound on
+every point: the SRAM sets $T$, and no point's SRAM holds the two slots of a tile wide enough to
+reach its ridge. A convolution on its input footprint reads an input pixel once per reduction
+panel whose kernel rows touch it, where the im2col matrix holds it once per kernel tap, and the
+activation cache lets the column tiles of a row tile share its panels. With both, some of the
+`npuperf.mapper` tilings that the results use are compute-bound: the busiest core computes for
+longer than it waits on memory, the count in the compute-bound column of S1 in
+[results](results.md). On the clusters some of those layers have fewer work units than cores,
+so their MAC utilization stays low.
 
-## Sources
+## 7 Sources
 
 - Arm, *Ethos-U Processor Series Product Brief*: <https://armkeil.blob.core.windows.net/developer/Files/pdf/datasheets/arm-ethos-u-processor-series-product-brief.pdf>
 - Arm Newsroom, Ethos-U85 announcement, 2024-04-09: <https://newsroom.arm.com/blog/ethos-u85>
