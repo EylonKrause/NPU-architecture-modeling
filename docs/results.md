@@ -71,7 +71,7 @@ table above:
 | `client-16c` | 120 GB/s | 71% | 69% | 74% |
 | `workstation-32c` | 800.4 GB/s | 32% | 40% | 58% |
 
-On the single-core points the memory-bound layers use 39% to 61% of the DRAM rate. A core's
+On the single-core points the networks sustain 39% to 61% of the DRAM rate. A core's
 load process holds one panel request at a time ([architecture](architecture.md) section 5.2),
 so every panel load pays the 500-cycle read latency before its first beat; S3 isolates the
 effect. The 16 cores of `client-16c` hold up to 16 read requests in flight and run the networks
@@ -80,13 +80,13 @@ the 5x DRAM rate where the peak MAC rate grows 9.6x. From `client-16c` to `works
 DRAM rate grows 6.7x and the core count 2x; latency falls 2.2x to 2.6x, and the share of the
 DRAM rate used drops to 32% to 58%.
 
-Traffic grows where SRAM shrinks or cores multiply. `edge-256` moves 186 MB per ResNet-50
-inference, 7.3x the 25.5 MB of weights, where `mobile-2k`, with 5.3x the SRAM, moves 62.7 MB:
-smaller tiles re-read each operand more often (the traffic table of
-[architecture](architecture.md) section 4.3). `workstation-32c` moves 130 MB against 76.3 MB
-on `client-16c`: a cluster split re-reads a group's weights on every core that holds its row
-tiles, or its activations on every core that holds its column tiles (architecture section
-6.2), and twice the cores re-read more.
+`edge-256` moves 186 MB per ResNet-50 inference, 7.3x the 25.5 MB of weights, where
+`mobile-2k`, with 5.3x the SRAM, moves 62.7 MB: smaller tiles re-read each operand more often
+(the traffic table of [architecture](architecture.md) section 4.3). `workstation-32c` moves
+130 MB against 76.3 MB on `client-16c`: a cluster split re-reads a group's weights on every
+core that holds its row tiles, or its activations on every core that holds its column tiles
+(architecture section 6.2), and with 32 cores each shared operand is read by more cores than
+with 16.
 
 ### S1.2 Depthwise layers
 
@@ -112,10 +112,7 @@ them.
 
 ### S1.3 Llama-3.2-1B
 
-Decode at KV length 129 and prefill at $S = 128$, batch 1. The study stops on either of two
-mapping checks: INT8 decode slower with the full SRAM than with half of it (every half-SRAM
-tiling also fits the full SRAM), or an INT4 decode speedup above 2x (INT4 halves only the
-weight bytes).
+Decode at KV length 129 and prefill at $S = 128$, batch 1.
 
 <!-- generated:s1-llm -->
 | Design point | Decode tokens/s INT8 | Decode tokens/s INT4 | INT4 speedup | Decode DRAM MB/token INT8 | Decode DRAM rate used INT8 | Prefill TTFT INT8 (ms) | Prefill TTFT INT4 (ms) | Prefill MAC utilization INT8 |
@@ -142,19 +139,17 @@ the weight bytes set the prefill time, and 1.16x on `workstation-32c` (5.02 to 4
 
 ## S2 Roofline per design point
 
-Every GEMM layer of the five workloads as achieved MAC/cycle against MAC/B of DRAM traffic,
-with the S1 mappings and INT8 weights. Bytes are whole AXI beats. The solid roofs are the
-array's peak and the DRAM rate; the dotted line is the depthwise datapath's peak, the compute
-roof of the depthwise layers. The study checks each mark against the roof of the datapath it
-ran on.
+Each mark is a GEMM layer of the five workloads, with the S1 mappings and INT8 weights. Bytes
+are whole AXI beats. The solid roofs are the array's peak and the DRAM rate; the dotted line
+is the depthwise datapath's peak, the compute roof of the depthwise layers.
 
 ![edge-256 roofline](figures/s2-roofline-edge-256.svg)
 ![mobile-2k roofline](figures/s2-roofline-mobile-2k.svg)
 ![client-16c roofline](figures/s2-roofline-client-16c.svg)
 ![workstation-32c roofline](figures/s2-roofline-workstation-32c.svg)
 
-*Figure S2. Rooflines of `edge-256`, `mobile-2k`, `client-16c` and `workstation-32c`: every
-GEMM layer of the five workloads as achieved MAC/cycle against MAC/B of DRAM traffic.*
+*Figure S2. Rooflines of `edge-256`, `mobile-2k`, `client-16c` and `workstation-32c`: achieved
+MAC/cycle against MAC/B of DRAM traffic per GEMM layer.*
 
 A mark's vertical gap to the lower roof at its intensity is time the layer spends outside both
 rates: the read latency of each panel request (S3), the pipeline charge per panel, array waves
@@ -291,7 +286,7 @@ the MACs, so weight-stationary leads on pointwise (92.8% against 86.2%) and 3x3 
 against 89.1%); output-stationary leads on the 7x7 stem. End to end the gap narrows, to 80.1%
 against 76.4% on pointwise layers, as memory time fills part of both schedules.
 
-## S6 Analytic model against npu-sim
+## S6 Analytic model against `npu-sim`
 
 `npuperf.analytic` against `npu-sim` on seeded random configurations and on the distinct S1 layer
 runs of each design point. The random dense set draws read latencies up to 300 cycles, at most
@@ -361,11 +356,12 @@ ahead of the array, so a panel takes the longer of its decode and MAC times (equ
 [architecture](architecture.md)). Decode hides behind the memory time once $V$ reaches the rate
 at which DRAM delivers indices to a core, two per byte, $2R / N_c$ values per cycle: 16 on
 `edge-256`, 48 on `mobile-2k`, 12.5 on `client-16c` and 41.7 on `workstation-32c`. The palette
-reaches its dense-INT4 rate at the first swept $V$ at or above that threshold on `edge-256`,
-`mobile-2k` and `workstation-32c` (16, 64 and 64), and at 32 on `client-16c`, where 16 values
-per cycle give 95% of it. Below the threshold tokens/s scale with $V$: `edge-256` and
-`mobile-2k` both give 3.23 tokens/s at 4 values per cycle, one core decoding 1,236 M weights per
-token at 1 GHz. At full decoder rate the palette runs within 0.6% of dense INT4 on every point.
+reaches its dense-INT4 rate at the first swept $V$ at or above that threshold on `edge-256` and
+`mobile-2k` (16 and 64), and at 32 on `client-16c` and `workstation-32c`, where 16 values per
+cycle give 95% and 61% of it. `workstation-32c` decode does not reach the full DRAM rate
+(70.2% at INT8, S1.3), so its cores receive fewer indices per cycle than the threshold
+assumes. Below the threshold tokens/s scale with $V$: `edge-256` and `mobile-2k` both give
+3.23 tokens/s at 4 values per cycle, one core decoding 1,236 M weights per token at 1 GHz. At full decoder rate the palette runs within 0.6% of dense INT4 on every point.
 
 ## S8 Mapping search Pareto front
 
@@ -415,23 +411,17 @@ the end of the front at 87.0%.
 
 ## S9 Depthwise datapath rate
 
-Arm's performance models give the depthwise rate of the parts `edge-256` and `mobile-2k` are
-sized from. Vela 5.2.0 runs the Ethos-U55-256's depthwise on its 2x2x8 output microblock, and
-its Regor compiler the Ethos-U85-2048's on its 4x4x16 one; both take 4 cycles per microblock
-for each step of 4 kernel taps ([`npu_performance.py`][vela-perf],
-[`ethos_u85_performance.cpp`][regor-perf]). That is 32 and 256 MAC/cycle, and 24 and 192 for a
-3x3 kernel, whose 9 taps take 3 steps. The two points take the 3x3 rates: `npu-sim`'s datapath has
-no kernel step, and every depthwise layer of the workloads is 3x3. Apple publishes no Neural
-Engine microarchitecture, so this study sizes the clusters' rate by a latency rule and reports
-the same rule on the Arm-sized points beside their Arm-model rate.
+`edge-256` and `mobile-2k` take the 3x3 depthwise rates of Arm's performance models of their
+parts, 24 and 192 MAC/cycle ([design points](design-points.md) sections 1 to 3). Apple
+publishes no Neural Engine microarchitecture, so this study sizes the clusters' rate by a
+latency rule and reports the same rule on the Arm-sized points.
 
 MobileNetV2 runs on each point with the rate swept over powers of two from 1 MAC/cycle per core
 to the core's array MACs, and at the configured rate, with tiles from the mapper at every rate.
 The first row runs the depthwise layers as grouped GEMMs on the array on their im2col operand.
 The rule picks the smallest swept rate at which MobileNetV2 runs within 5% of its latency at the
 array-wide rate. The configs set the Arm-model rate where there is one and the rule's rate on the
-clusters, and the study stops when one disagrees. Cells give latency in ms and, in brackets,
-the depthwise layers' share of cycles.
+clusters. Cells give latency in ms and, in brackets, the depthwise layers' share of cycles.
 
 ![depthwise rate](figures/s9-depthwise.svg)
 
@@ -485,8 +475,8 @@ Apple publishes no Neural Engine SRAM size, so this study sizes the SRAM of the 
 per-core SRAM swept over powers of two from 64 KiB to 4 MiB, tiles and cache split from the
 mapper at every size. The rule: on each point, the smallest size at which both networks reach
 90% of their highest MAC utilization in the sweep; the points share one core design, so both
-take the larger of the two picks. The configs set it, and the study stops when one disagrees.
-Cells give MAC utilization and, in brackets, latency.
+take the larger of the two picks. The configs set it. Cells give MAC utilization and, in
+brackets, latency.
 
 ![SRAM](figures/s10-sram.svg)
 
@@ -519,6 +509,3 @@ points up to 4 MiB: 256 KiB is the first size at or above 90% of the highest, 21
 the tiles by the SRAM, and a tile's operand intensity $ab/(a + b)$ grows with its edge
 ([design points](design-points.md) section 6).
 MobileNetV2 stays between 5.0% and 5.7% at every size, and its picks are 128 and 64 KiB.
-
-[vela-perf]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-vela/-/blob/5.2.0/ethosu/vela/npu_performance.py
-[regor-perf]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-vela/-/blob/5.2.0/ethosu/regor/architecture/ethosu85/ethos_u85_performance.cpp

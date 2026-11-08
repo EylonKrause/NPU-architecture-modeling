@@ -1,8 +1,8 @@
 # Methodology
 
-This document defines how the repository models an NPU, how the model is checked, what it
-covers, which hardware measurements would calibrate its timing parameters, and how it relates
-to other accelerator models.
+This document defines the modeling approach of `npu-sim`, its validation, the fidelity of each
+mechanism, the calibration plan for its timing parameters and its relation to other
+accelerator models.
 
 <a id="modeling-approach"></a>
 
@@ -92,16 +92,13 @@ the run (`tests/config_file_tests.py`).
 
 ## 2 Validation
 
-### 2.1 Evidence map
+### 2.1 Verification matrix
 
-Sections 2.2 to 2.8 give the evidence for numerical and schedule correctness; accuracy against
-hardware depends on the calibration of section 4.
-
-| Property | Evidence | Tests (CTest name) |
+| Property | Check | Tests (CTest name) |
 |---|---|---|
-| Outputs are bit-exact | Every functional run compares the tiled datapath with a scalar reference; independent Python oracles, including a direct convolution over the NHWC input; ONNX Runtime | `core.arithmetic`, `sim.gemm-oracle`, `sim.quantization`, `sim.weight-compression`, `sim.conv-traffic`, `onnx.ort-differential` |
+| Outputs are bit-exact | Every functional run compares the tiled datapath with a scalar reference; Python oracles, including a direct convolution over the NHWC input; ONNX Runtime | `core.arithmetic`, `sim.gemm-oracle`, `sim.quantization`, `sim.weight-compression`, `sim.conv-traffic`, `onnx.ort-differential` |
 | Requantization matches published definitions | TOSA 1.0.2, TFLite, gemmlowp and CMSIS-NN formulations, published golden vectors | `core.arithmetic`, `sim.quantization`, `tools.npuperf` |
-| The schedule follows the stated rules | Independent timestamp schedulers in Python predict cycles, wait counters and complete stage traces; footprint, run and cache oracles predict convolution traffic | `sim.gemm-oracle`, `sim.memory-hierarchy`, `sim.memory-model`, `sim.cluster`, `sim.conv-traffic` |
+| The schedule follows the stated rules | Timestamp schedulers in Python predict cycles, wait counters and complete stage traces; footprint, run and cache oracles predict convolution traffic | `sim.gemm-oracle`, `sim.memory-hierarchy`, `sim.memory-model`, `sim.cluster`, `sim.conv-traffic` |
 | Two implementations of the rules agree | `npuperf.analytic.schedule()` against `npu-sim`, cycle for cycle | `tools.analytic-model`, study S6 |
 | Instrumentation is passive | Traced, untraced, stepped and batch runs give identical results | `sim.observability`, `live.protocol` |
 | The C++ runs without memory errors, leaks or undefined behavior on the test inputs | ASan, UBSan with the vptr check, LeakSanitizer | CI job `linux-x64-asan-ubsan` |
@@ -132,7 +129,7 @@ encoded sizes, decode cycles and skipped MACs in Python and compares complete ou
 the integer oracle, and `tests/mobile_compression_core_tests.cpp` shows that outputs come
 from the stored encoding (mutating it changes the result) and that corrupted headers are
 rejected. The other executables have their own oracles: `tests/transformer_tests.py`
-recomputes the decoder block in FP32, FP16 and BF16 with independent rounding,
+recomputes the decoder block in FP32, FP16 and BF16 with its own rounding,
 `tests/mobile_platform_tests.py` and `tests/tlm_platform_tests.py` recompute every job's
 integer output, and `npuperf.graph` checks each accelerator node against a scalar Python
 reference before the next node runs.
@@ -313,7 +310,7 @@ compute core outward, so each step holds the previously fitted terms fixed.
 
 | Parameter | Config path | Measurement on the target | Fit |
 |---|---|---|---|
-| NPU clock | `arch.frequency_mhz` | Clock at the operating point | Read directly |
+| NPU clock | `arch.frequency_mhz` | Clock at the operating point | Direct |
 | MAC throughput | `arch.compute.macs_per_cycle`, `array_rows`, `array_cols` | Cycles of a compute-bound GEMM with operands resident, swept over $M$, $N$, $K$ well beyond the array | Slope of cycles against MACs |
 | Array quantization, fill and drain | `arch.compute.dataflow` | Single-panel tiles with $M_t$ at 1, $A_r$ and $A_r + 1$ and $N_t$ at 1, $A_c$ and $A_c + 1$ | Step positions and the intercept $A_r + A_c - 2$ |
 | Weight-stationary preload exposure | `arch.compute.dataflow` = `ws` | $K_p$ swept across multiples of $A_r$, with $M_t$ below and above $A_r$ | The $\max(M_t, A_r)$ term |
@@ -350,7 +347,7 @@ Every calibrated run keeps the `config` echo of its result, the model revision
 | [Arm Vela performance estimator][vela-perf] | Part of the Ethos-U compiler; estimates each operation of the compiled schedule | Per operation, the maximum of the cycles required for computing (microblock counts, pipeline stalls) and the cycles required for bandwidth | A fixed latency per block plus bytes over each memory area's bandwidth, scaled by a burst-efficiency factor; no outstanding-transaction or queueing model | None in the estimator | The design points take Vela's reference system configurations (latencies, outstanding limits, burst lengths, clock scales, [design points](design-points.md)). This model replaces the per-operation maximum with an event schedule over AXI channels with outstanding limits and a shared DRAM timeline, and has no Ethos-U operator coverage or command stream. |
 | [SCALE-Sim v2][scalesim2] and [v3][scalesim3] | Systolic-array simulator for GEMM and convolution as im2col | Analytical compute cycles, with cycle-level SRAM and DRAM traces; output-, weight- and input-stationary dataflows | Double-buffered SRAM per operand; DRAM bandwidth computed for stall-free operation or given; v3 adds a Ramulator DRAM model, multiple cores, sparsity and Accelergy energy | None | The array closed forms of [architecture](architecture.md) sections 3.3 and 3.4 play the role of SCALE-Sim's compute model for output- and weight-stationary dataflows. This model times DRAM traffic at burst granularity through AXI outstanding windows and checks numerics bit-exact; it has no input-stationary dataflow and no DRAM bank model. |
 | [Timeloop][timeloop] with [Accelergy][accelergy] | Mapping-space exploration for tensor algebra on hierarchical buffer architectures; Accelergy estimates energy and area from component action counts | Analytical per-level data movement and throughput over loop-nest mappings; a mapper searches the mapping space | Buffer hierarchy with per-level capacity and bandwidth | None | `npuperf.analytic` and `npuperf.mapper` cover a narrower mapping space (one loop order, tile and slot choice) and are checked against the transaction model. `npuperf.energy` uses action counts times coefficients without component plug-ins. |
-| [Gemmini][gemmini] | Chisel generator of systolic-array accelerator RTL, integrated with RISC-V cores in Chipyard | Cycle-exact RTL in software simulation or FireSim FPGA-accelerated simulation; output- and weight-stationary | Scratchpad and accumulator SRAM, DMA through the SoC memory system | Bit-exact RTL | One microarchitecture per generated instance, simulated at RTL cost. This model is parametric at transaction level and configured from one file. A Gemmini instance is a calibration reference for section 4. |
+| [Gemmini][gemmini] | Chisel generator of systolic-array accelerator RTL, integrated with RISC-V cores in Chipyard | Cycle-exact RTL in software simulation or FireSim FPGA-accelerated simulation; output- and weight-stationary | Scratchpad and accumulator SRAM, DMA through the SoC memory system | Bit-exact RTL | One microarchitecture per generated instance, simulated at RTL cost; this model is parametric at transaction level. A Gemmini instance is a calibration reference for section 4. |
 | [NVDLA][nvdla] | Open accelerator RTL with separate convolution, activation and pooling engines, a C model and a register-accurate SystemC/TLM [virtual platform][nvdla-vp] with QEMU | RTL; the virtual platform targets software bring-up | Convolution buffer, configurable memory interfaces, weight compression | Bit-exact RTL | `npu-tlm-demo` models a register-level host interface (MMIO, interrupt, reset) for a fixed GEMM; `npu-sim` models the performance parameters the NVDLA virtual platform does not time. NVDLA RTL is a calibration reference for section 4. |
 | [gem5][gem5], with [gem5-Aladdin][gem5-aladdin] and [gem5-SALAM][gem5-salam] for accelerators | Full-system simulator | Cycle-level CPU models; accelerators from datapath models built from LLVM IR | Coherent caches, interconnect and DRAM controller models | Functional execution of the host program | gem5 models the host, coherence, interconnect and DRAM controller that section 3 lists as not modeled. This model has no CPU, operating system or coherent memory system and simulates accelerator-internal scheduling at transaction level. |
 

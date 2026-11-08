@@ -236,7 +236,7 @@ the shift, which lies within each path's documented input range.
 | CMSIS-NN default against TFLite default | 0 |
 | TFLite single rounding against TFLite default | 256,543 (1.28%) |
 
-The repository's tests repeat the comparison against the model (section 6.2).
+`sim.quantization` repeats the comparison through `npu-sim` (section 6.2).
 
 ### 2.5 Tie behavior
 

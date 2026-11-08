@@ -256,7 +256,7 @@ The DRAM target applies these checks on both sockets.
 | 1 | Command other than read or write | `TLM_COMMAND_ERROR_RESPONSE` |
 | 2 | Byte-enable pointer present | `TLM_BYTE_ENABLE_ERROR_RESPONSE` |
 | 3 | Null data pointer, data length 0 or above 64, or streaming width below the data length | `TLM_BURST_ERROR_RESPONSE` |
-| 4 | Address at or above 65536, or address plus length above 65536 | `TLM_ADDRESS_ERROR_RESPONSE` |
+| 4 | Address at or above `0x10000`, or address plus length above `0x10000` | `TLM_ADDRESS_ERROR_RESPONSE` |
 
 A rejected access changes no state, adds no delay, reserves no DRAM time and increments its
 target's error counter. Every target refuses DMI: `get_direct_mem_ptr` returns false and every
@@ -797,7 +797,7 @@ exits. [Numerics](numerics.md) section 5 defines the floating-point path.
 
 Every run replays the workload one row at a time without timing and requires bit-identical
 outputs (`partition_match`); a mismatch exits 2. `tests/transformer_tests.py` checks every output
-against an independent Python oracle that computes full Q, K and V tensors with a causal mask.
+against a Python oracle that computes full Q, K and V tensors with a causal mask.
 
 ### 3.10 Limits
 
@@ -834,7 +834,7 @@ with their sum and budget. `--dump-output` adds every output row. `--vcd BASENAM
 cache occupancy and cumulative work and traffic counters. A VCD path that resolves to the progress
 file is refused before either file is opened.
 
-## 4 Energy estimate for npu-sim results
+## 4 Energy estimate for `npu-sim` results
 
 ### 4.1 Model
 
@@ -888,7 +888,7 @@ reads, must not be combined with a separate charge for that term.
 
 | CTest | Script | Checks |
 |---|---|---|
-| `soc.tlm` | `tests/tlm_platform_tests.py` | Full outputs against an independent integer oracle, traffic counts, persistent engine across seeds and jobs, `START` in the reset-release timestep, VCD signals, CLI errors |
+| `soc.tlm` | `tests/tlm_platform_tests.py` | Full outputs against a Python integer oracle, traffic counts, persistent engine across seeds and jobs, `START` in the reset-release timestep, VCD signals, CLI errors |
 | `soc.multicore` | `tests/mobile_platform_tests.py` | Full outputs, exact bus durations and byte counts, round-robin grants including a request raised as the channel frees, non-preemptive priority dispatch, LRU traffic, OPP period and voltage scaling, deadline governor and misses, gating intervals and energy units, idle accounting of unused cores, VCD signals |
-| `soc.transformer` | `tests/transformer_tests.py` | Independent float oracle for every precision and head grouping, stacked layers, prefill partitions and causal independence, closed-form work, traffic and SRAM, weights streamed once per layer per request, per-token KV reads, panel streaming at the largest dimensions, atomic rejection, VCD and progress events, exhaustive FP16 round trip |
+| `soc.transformer` | `tests/transformer_tests.py` | Python float oracle for every precision and head grouping, stacked layers, prefill partitions and causal independence, closed-form work, traffic and SRAM, weights streamed once per layer per request, per-token KV reads, panel streaming at the largest dimensions, atomic rejection, VCD and progress events, exhaustive FP16 round trip |
 | `tools.energy` | `tests/energy_tests.py` | Hand-calculated units, executed versus logical MACs, latency and frequency agreement, schema versions, malformed input |

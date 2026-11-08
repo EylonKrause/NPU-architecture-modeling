@@ -120,7 +120,7 @@ Test names are `<area>.<subject>`. The area is a CTest label; C++ executables ad
 | Area | Coverage |
 |---|---|
 | `core` | Arithmetic, weight codec and option table (C++ unit tests) |
-| `sim` | `npu-sim` against independent oracles: GEMM, quantization, memory hierarchy, compression, observability, config files, memory model, cluster, design points, convolution traffic |
+| `sim` | `npu-sim` against Python oracles: GEMM, quantization, memory hierarchy, compression, observability, config files, memory model, cluster, design points, convolution traffic |
 | `graph` | Graph runtime and fusion |
 | `soc` | TLM, transformer and multi-core platforms |
 | `live` | Live stdio protocol and dashboard |
@@ -637,11 +637,11 @@ A snapshot is the state of the model at the current cycle (`PipelineView` in
 | `macs`, `executed_macs`, `skipped_macs`, `read_bytes`, `write_bytes`, `weight_read_bytes` | Counters as in a result |
 | `weight_decode_cycles`, `decoded_weight_values`, `encoded_weight_storage_bytes`, `dense_weight_storage_bytes` | Counters as in a result |
 | `compute_busy_cycles`, `dma_busy_cycles`, `compute_utilization`, `memory_utilization` | Busy cycles and their mean over cores |
-| `inflight_tiles`, `read_queue_depth`, `write_queue_depth` | Pipeline occupancy now |
-| `dma_busy`, `dma_read`, `dma_write`, `compute_busy` | Resource state now. `dma_busy` is set while either channel has a request in flight; `dma_read` gives the direction of `dma_tile_id`, the read when both are busy |
+| `inflight_tiles`, `read_queue_depth`, `write_queue_depth` | Pipeline occupancy at the snapshot cycle |
+| `dma_busy`, `dma_read`, `dma_write`, `compute_busy` | Resource state at the snapshot cycle. `dma_busy` is set while either channel has a request in flight; `dma_read` gives the direction of `dma_tile_id`, the read when both are busy |
 | `dma_tile_id`, `dma_block_id`, `compute_tile_id`, `compute_block_id` | Tile and panel each resource serves; meaningful while its busy flag is set; from the lowest-numbered busy core |
 | `tiles_total`, `tiles_completed`, `panels_total`, `panels_completed`, `loaded_panels` | Progress |
-| `active_stages` | Subset of `load`, `store`, `compute` active now |
+| `active_stages` | Subset of `load`, `store`, `compute` active at the snapshot cycle |
 | `memory` | As in a result, with three more fields per channel: `active`, `outstanding` and `queued` |
 | `cluster` | `cores`, `partition`, `split`, `units` |
 | `cores` | Per core: `core`, `completed`, `cycles`, `tiles_total`, `tiles_completed`, `panels_total`, `panels_completed`, `loaded_panels`, the resource state and counters above, and `memory` with live channel fields |
@@ -881,7 +881,7 @@ in `docs/figures/`, and the raw records in `results/studies/<study>.json` (not c
 | S3 | AXI outstanding transactions | yes |
 | S4 | Multi-core scaling | yes |
 | S5 | Dataflow | yes |
-| S6 | Analytic model against npu-sim | yes |
+| S6 | Analytic model against `npu-sim` | yes |
 | S7 | Weight compression for LLM decode | |
 | S8 | Mapping search Pareto front | yes |
 | S9 | Depthwise datapath rate | |

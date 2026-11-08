@@ -98,7 +98,7 @@ builds the model and opens the live dashboard.
 |---|---|
 | [architecture](docs/architecture.md) | Datapaths, tiling and loop nest, SRAM budget, caches, address map, serial DMA and AXI models, cluster, scheduling, observability |
 | [numerics](docs/numerics.md) | Integer datapath, requantization and its TOSA, TFLite and CMSIS-NN equivalences, file formats, weight compression, floating point |
-| [soc-integration](docs/soc-integration.md) | TLM-2.0 coprocessor, multi-core QoS and DVFS platform, transformer engine, energy estimate |
+| [SoC integration](docs/soc-integration.md) | TLM-2.0 coprocessor, multi-core QoS and DVFS platform, transformer engine, energy estimate |
 | [design points](docs/design-points.md) | Derivation of the four configurations and their sources |
 | [results](docs/results.md) | Studies S1 to S10 with analysis |
 | [methodology](docs/methodology.md) | Modeling approach, validation, model fidelity, calibration plan, related work |

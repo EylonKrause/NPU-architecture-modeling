@@ -6,8 +6,8 @@ interface width, clock, memory rate, latencies) from the cited sources and deriv
 field by the shared rules of section 1. The two points sized from Arm parts take their
 depthwise datapath's rate from Arm's performance model of the part. The cluster core has no
 public figure for its depthwise rate or its SRAM; studies S9 and S10 of
-[results](results.md) size them by stated rules, and S9 reports its rule beside the Arm-model
-rates. A run loads a point with `--config`; later flags override the file:
+[results](results.md) size them. A run loads a point with `--config`; later flags override the
+file:
 
 ```sh
 npu-sim --config configs/mobile-2k.json --m 196 --n 256 --k 2304
@@ -114,16 +114,16 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 
 | Field | Value | Derivation |
 |---|---|---|
-| Cores, array | 16 x 32x32, 16,384 MAC/cycle | M4's Neural Engine: "16-core design", "capable of 38 trillion operations per second" ([Apple, May 2024][m4]). Apple does not state the precision; this model's MACs are INT8. 38 TOP/s over 16 cores of 1,024 MACs at 2 operations per MAC gives 1.16 GHz |
+| Cores, array | 16 x 32x32, 16,384 MAC/cycle | M4's Neural Engine: "16-core design", "capable of 38 trillion operations per second" ([Apple, May 2024][m4]). 38 TOP/s over 16 cores of 1,024 INT8 MACs at 2 operations per MAC gives 1.16 GHz |
 | Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (`npu-sim` takes integer bytes per cycle). Peak $2 \times 16{,}384 \times 1.2\ \text{GHz} = 39.3216$ TOP/s, 3.5% above 38 |
 | DRAM rate | 100 B/cycle, 120 GB/s | M4 "has higher memory bandwidth of 120GB/s" ([Apple, Oct 2024][m4-pro]). That is the SoC's rate, shared with the CPU and GPU; Apple publishes no rate attainable by the Neural Engine |
-| SRAM | 262,144 B (256 KiB) per core | Apple publishes no Neural Engine SRAM size. The S10 rule ([results](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilization in the sweep, taken on this point and on `workstation-32c`, which shares the core |
+| SRAM | 262,144 B (256 KiB) per core | The S10 rule ([results](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilization in the sweep, taken on this point and on `workstation-32c`, which shares the core |
 | AXI | One 256-bit port per core | One core design serves both clusters: the narrowest AXI width whose read channels, one per core, carry `workstation-32c`'s 667 B/cycle. $32 \times 16 = 512$ B falls short; $32 \times 32 = 1{,}024$ B does not. Here $16 \times 32 = 512$ B/cycle against 100 |
 | Latency, outstanding | 500/250, 64/32 | `Ethos_U85_SYS_DRAM_High` ([vela-ini]), in cycles at 1.2 GHz |
 | Burst | Up to 8 beats (256 B) | As `mobile-2k` |
 | Tiles | 64x64x256 | Minimum depth 128 B. T = 128 needs 295,936 B at depth 128; at T = 64, depth 512 needs 303,616 B |
 | Weight cache | 89,600 B per core | $262{,}144 - 2 \times 86{,}272$ |
-| Depthwise datapath | 128 MAC/cycle per core | The S9 rule; Apple publishes no Neural Engine microarchitecture to take a rate from |
+| Depthwise datapath | 128 MAC/cycle per core | The S9 rule |
 | Partition | `auto` | `npu-sim` picks the m or n split per GEMM |
 
 ## 5 workstation-32c
