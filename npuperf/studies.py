@@ -130,7 +130,7 @@ class Context:
 @dataclass(frozen=True)
 class Point:
     """A design point: its config file, the analytic.Design it describes and the memory
-    behind its port ("DRAM" or "system SRAM")."""
+    behind its port."""
 
     name: str
     path: Path
@@ -144,8 +144,7 @@ class Point:
 
     @property
     def runs_llm(self) -> bool:
-        """A billion-parameter model's weights fit no microcontroller-class system SRAM,
-        so the LLM workloads run only on points that stream from DRAM."""
+        """The LLM workloads run only on points that stream their weights from DRAM."""
         return self.memory == "DRAM"
 
     def flags(self, **extra: Any) -> dict[str, Any]:
@@ -730,7 +729,7 @@ def s2_roofline(ctx: Context) -> StudyOutput:
             width=1,
             text_anchor="start",
         )
-        fig.x.label = f"arithmetic intensity (MAC per {point.memory} byte moved)"
+        fig.x.label = f"arithmetic intensity (MAC/B of {point.memory} traffic)"
         fig.legend_position = "right"
         out.figures[f"s2-roofline-{point.name}"] = fig
     out.raw["points"] = raw
@@ -773,7 +772,7 @@ def s3_outstanding(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         480,
-        title="Read bandwidth vs outstanding AXI reads",
+        title="Read bandwidth against outstanding AXI reads",
         subtitle="INT4 GEMV 1x4096x4096 streaming weights; 16 B beats, 16-beat "
         "bursts, DRAM unlimited",
         x_label="read transactions outstanding (N)",
@@ -827,9 +826,12 @@ def s3_outstanding(ctx: Context) -> StudyOutput:
         )
     fig.hline(bus, f"bus {bus} B/cycle", color=svg.INK_MUTED)
     out.figures["s3-outstanding"] = fig
-    headers = ["Outstanding N"]
+    headers = ["$N_r$"]
     for latency in S3_LATENCIES:
-        headers += [f"L={latency} npu-sim (B/cycle)", f"L={latency} formula (B/cycle)"]
+        headers += [
+            f"`npu-sim`, $L_r$ = {latency} (B/cycle)",
+            f"Formula, $L_r$ = {latency} (B/cycle)",
+        ]
     out.tables["s3-outstanding"] = markdown_table(headers, list(rows.values()))
     out.raw["runs"] = raw
     return out
@@ -1375,7 +1377,7 @@ def s6_analytic(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         600,
-        title="Closed-form cycle estimate against npu-sim",
+        title="Analytic-model cycle estimate against npu-sim",
         subtitle=f"{dense_count} random dense and {conv_count} random conv "
         f"configurations (seed {S6_SEED}) and the distinct S1 layer runs "
         "of each design point; 1 = exact",
@@ -1607,7 +1609,7 @@ def s7_compression(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         500,
-        title="Llama-3.2-1B decode: 4-bit palette vs dense INT4 weights",
+        title="Llama-3.2-1B decode: 4-bit palette against dense INT4 weights",
         subtitle=f"every weight GEMM in the same pieces for all three formats; "
         f"dense INT8 runs at {min(int8):.2f} to {max(int8):.2f} of dense "
         "INT4; KV-cache matmuls stay INT8",
@@ -1712,6 +1714,7 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         legend="upper right",
         id_prefix="s8",
     )
+    fig.y.tick_format = lambda v: f"{v:,.0f}"
     fig.scatter(
         [r["scratchpad_bytes"] / 1024 for r in feasible],
         [r["cycles"] for r in feasible],
@@ -1985,9 +1988,8 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         500,
-        title="MobileNetV2 latency vs depthwise datapath rate",
-        subtitle="MobileNetV2 latency relative to an array-wide depthwise datapath; "
-        "rings: the S9 rule's pick; open down-triangles: the configured Arm-model rate",
+        title="MobileNetV2 latency against depthwise datapath rate",
+        subtitle="MobileNetV2 on every design point; tiles from npuperf.mapper at every rate",
         x_label="depthwise MAC/cycle per core",
         y_label="latency relative to the array-wide rate",
         x_scale="log",
@@ -2041,6 +2043,8 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
                 size=9,
                 hollow=True,
             )
+    for label, marker in (("S9 rule's pick", "circle"), ("configured Arm-model rate", "down")):
+        fig.scatter([], [], label=label, color=svg.INK_SECONDARY, marker=marker, hollow=True)
     out.figures["s9-depthwise"] = fig
     out.raw["runs"] = raw
     out.raw["choice"] = choice
@@ -2138,7 +2142,7 @@ def s10_sram(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         500,
-        title="MAC utilization vs per-core SRAM",
+        title="MAC utilization against per-core SRAM",
         subtitle="cores of client-16c and workstation-32c; tiles and cache split "
         "from npuperf.mapper per size",
         x_label="SRAM per core (KiB)",

@@ -10,11 +10,11 @@ AXI memory system on a shared DRAM timeline, and generated studies on four desig
 *NPU cluster ([architecture](docs/architecture.md) figure 1).*
 
 Each core runs load, compute and store processes over tile slots and double-buffered reduction
-panels; a systolic array (output- or weight-stationary), a vector datapath or a depthwise
-datapath computes; weight and activation caches sit in the per-core SRAM; AXI read and write
-channels with outstanding limits reach one DRAM shared by every core. Every functional run
-checks its INT32 accumulators and INT8 outputs against a scalar reference
-([architecture](docs/architecture.md), [numerics](docs/numerics.md)).
+panels. Its MAC engine is a systolic array (output- or weight-stationary) or a vector datapath,
+and a depthwise datapath, when configured, runs depthwise layers. Weight and activation caches
+share the per-core SRAM, and AXI read and write channels with outstanding limits connect every
+core to one shared DRAM. Every functional run checks its INT32 accumulators and INT8 outputs
+against a scalar reference ([architecture](docs/architecture.md), [numerics](docs/numerics.md)).
 
 ## Design points
 
@@ -58,8 +58,8 @@ Batch 1, INT8 unless stated, tiles per layer from `npuperf.mapper`; numbers from
    and 1.68x on `workstation-32c`, where a batch-1 GEMV keeps one of 32 array rows busy and
    caps decode at 988 tokens/s ([S1.3](docs/results.md#s13-llama-32-1b)).
 2. On 32 cores at 667 B/cycle the ResNet-50 res3 3x3 convolution reaches 3.78x with the n
-   split, which has 4 column tiles, and 12.36x with the m split; the INT4 decode GEMV reaches
-   27.12x against a DRAM ceiling of 42.37 ([S4](docs/results.md#s4-multi-core-scaling)).
+   split, which has four column tiles, and 12.36x with the m split; the INT4 decode GEMV reaches
+   27.12x against a DRAM ceiling of 42.37x ([S4](docs/results.md#s4-multi-core-scaling)).
 3. As grouped GEMMs on the array, MobileNetV2's depthwise layers take 88% to 96% of the
    network's cycles; a depthwise datapath at the Arm-model 3x3 rate cuts MobileNetV2 latency
    13.2x on `edge-256` and 15.9x on `mobile-2k`, and the 6.9% of MACs in depthwise layers
@@ -107,9 +107,10 @@ builds the model and opens the live dashboard.
 
 ## Model scope
 
-[Model fidelity](docs/methodology.md#model-fidelity) lists what the model simulates, what it
-approximates and what it omits, and the [calibration plan](docs/methodology.md#calibration-plan)
-maps each timing parameter to the measurement that fits it.
+[Model fidelity](docs/methodology.md#model-fidelity) gives the status of each mechanism
+(modeled, approximated, not modeled), and the
+[calibration plan](docs/methodology.md#calibration-plan) maps each timing parameter to a
+measurement.
 
 ## License
 

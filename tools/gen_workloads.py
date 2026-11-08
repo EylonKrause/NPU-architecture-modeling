@@ -5,7 +5,8 @@
     python tools/gen_workloads.py --check    exit 1 if the committed files differ
 
 Conventions (also written into every file):
-- batch 1, NHWC, INT8 weights (1 byte each), INT32 bias reported separately, BN folded.
+- batch 1, NHWC, INT8 weights (1 byte each), INT32 bias reported separately; in the CNNs
+  batch normalization is folded into the weights.
 - conv MACs = out_h * out_w * out_c * kernel_h * kernel_w * (in_c / groups).
 - "lowered" is the npu-sim call that runs the layer: an M x N x K GEMM per group, G groups
   (--groups G), repeated "calls" times. Convolutions lower by im2col: M = out_h * out_w,
@@ -377,8 +378,7 @@ def llama(m, kv_len, phase):
             + (
                 ""
                 if m == 1
-                else "; logits for the last position only, the one that samples the next "
-                f"token; the Hugging Face default computes all {m} positions"
+                else f"; logits for the last position only (Hugging Face computes all {m})"
             ),
         )
     )
@@ -656,7 +656,7 @@ def build():
             ],
             "notes": "One BERT-base encoder layer at sequence 128, batch 1: hidden 768, 12 heads "
             "x 64, FFN 3072, GELU, post-LN, biases on every projection. The full encoder "
-            "is this layer x12 (totals.encoder_x12). Attention is bidirectional.",
+            "is this layer x12 (totals.encoder_x12).",
             "layers": L,
             "vector_ops": V,
             "totals": t,

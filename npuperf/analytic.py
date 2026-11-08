@@ -53,8 +53,8 @@ fixed arbitration order, the cluster split and each core's two LRU caches. It re
 cycle count and the counters npu-sim reports.
 
 ``observed()`` reads the same quantities from an npu-sim result (schema_version 2:
-"memory", "cluster" and "cores"), and ``observed_bound()`` classifies it as ``bound``
-classifies a model.
+"memory", "cluster" and "cores"), and ``observed_bound()`` gives its bound class (compute,
+bandwidth or latency) by the rule of ``Analysis.bound``.
 """
 
 from __future__ import annotations

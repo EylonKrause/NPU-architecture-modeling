@@ -21,9 +21,8 @@
 #include <vector>
 
 namespace {
-// Layout version of the result and snapshot JSON. Version 2 nests "config" by
-// option-table path (shape.m, arch.frequency_mhz, ...); version 1 results
-// carried flat keys (m, frequency_mhz, ...).
+// Result and snapshot JSON layout. 2: "config" nested by option-table path
+// (shape.m, arch.frequency_mhz, ...). 1: flat config keys (m, frequency_mhz, ...).
 constexpr int schema_version = 2;
 
 void diagnostic_report(const sc_core::sc_report& report, const sc_core::sc_actions& actions) {

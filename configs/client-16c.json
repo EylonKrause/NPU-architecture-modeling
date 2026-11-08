@@ -1,6 +1,6 @@
 {
   "name": "client-16c",
-  "description": "Hypothetical 16-core client-SoC NPU sized from Apple's published M4 Neural Engine figures (16 cores, 38 trillion operations per second, 120 GB/s): 32x32 output-stationary arrays at 1.2 GHz (39.32 TOP/s), 100 B/cycle DRAM shared with the CPU and GPU. Per core: SRAM 256 KiB, one 256-bit AXI port, Vela 5.2.0 Ethos-U85 DRAM latencies and outstanding limits, depthwise datapath 128 MAC/cycle. Derivation: docs/design-points.md, section 4.",
+  "description": "Hypothetical 16-core client-SoC NPU sized from Apple's published M4 Neural Engine figures (16 cores, 38 TOP/s, 120 GB/s): 32x32 output-stationary arrays at 1.2 GHz (39.32 TOP/s), 100 B/cycle DRAM shared with the CPU and GPU. Per core: SRAM 256 KiB, one 256-bit AXI port, Vela 5.2.0 Ethos-U85 DRAM latencies and outstanding limits, depthwise datapath 128 MAC/cycle. Derivation: docs/design-points.md, section 4.",
   "arch": {
     "compute": {"array_rows": 32, "array_cols": 32, "dataflow": "os", "pipeline_cycles": 4,
                 "depthwise_macs_per_cycle": 128},

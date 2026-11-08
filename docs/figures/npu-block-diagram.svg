@@ -51,9 +51,9 @@
 <rect x="40" y="342" width="826" height="438" rx="4" fill="#ffffff" stroke="#3a3a3a" stroke-width="1.3"/>
 <text x="56" y="366" font-size="14" font-weight="600" fill="#1a1a1a">Core 0</text>
 
-<!-- DMA / AXI master -->
+<!-- DMA / AXI manager -->
 <rect x="56" y="380" width="478" height="94" rx="3" fill="#f3ecdd" stroke="#8a6d3b" stroke-width="1.2"/>
-<text x="70" y="400" font-size="13" font-weight="600" fill="#1a1a1a">DMA and AXI master</text>
+<text x="70" y="400" font-size="13" font-weight="600" fill="#1a1a1a">DMA and AXI manager</text>
 <text x="226" y="400" font-size="12" fill="#3a3a3a">one MemRequest per panel load or tile store</text>
 <rect x="70" y="410" width="222" height="52" rx="3" fill="#ffffff" stroke="#8a6d3b"/>
 <text x="82" y="431" font-size="13" fill="#1a1a1a">Read channel AR, R</text>

@@ -937,7 +937,7 @@ void check_memory_map() {
     burst(0, 0x10000, 4096, 256, "256 beats of 16 bytes fill a 4 KiB page");
     axi.data_bytes = 64;
     burst(0x20, 0x5000, 0xFE0, 64, "the page ends before 256 beats of 64 bytes");
-    rejects_with([&] { npu::next_burst(axi, 5, 5); }, "a burst starts inside its run");
+    rejects_with([&] { npu::next_burst(axi, 5, 5); }, "burst address is outside its run");
     std::uint64_t state = 12345;
     const auto next = [&state](std::uint64_t bound) {
         state = state * 6364136223846793005ULL + 1442695040888963407ULL;
@@ -1211,7 +1211,7 @@ void check_cluster_plan() {
         std::vector<npu::EncodedWeightPanel> panels;
         if (r.weights.encoding != npu::WeightEncoding::Dense) {
             auto problem = npu::make_problem(r);
-            // Sparse rounds zero three weights in four so whole blocks drop.
+            // Sparse: set three weights in four to the weight zero point so whole blocks drop.
             if (r.weights.encoding == npu::WeightEncoding::Sparse)
                 for (auto& weight : problem.weights)
                     if (draw(0, 3)) weight = static_cast<std::int8_t>(r.quant.weight_zero);

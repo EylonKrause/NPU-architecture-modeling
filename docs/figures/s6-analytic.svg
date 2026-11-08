@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="600" viewBox="0 0 820 600" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>Closed-form cycle estimate against npu-sim</title>
+<title>Analytic-model cycle estimate against npu-sim</title>
 <rect width="820" height="600" fill="#ffffff"/>
 <defs><clipPath id="s6-plot"><rect x="62.04" y="58" width="457.32" height="488"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Closed-form cycle estimate against npu-sim</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Analytic-model cycle estimate against npu-sim</text>
 <text x="14" y="52" font-size="12" fill="#52514e">240 random dense and 80 random conv configurations (seed 20261107) and the distinct S1 layer runs of each design point; 1 = exact</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="62.04" y1="485.25" x2="517.36" y2="485.25"/>

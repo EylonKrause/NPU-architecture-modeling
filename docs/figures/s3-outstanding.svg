@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="480" viewBox="0 0 820 480" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>Read bandwidth vs outstanding AXI reads</title>
+<title>Read bandwidth against outstanding AXI reads</title>
 <rect width="820" height="480" fill="#ffffff"/>
 <defs><clipPath id="s3-plot"><rect x="58.44" y="58" width="739.56" height="368"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Read bandwidth vs outstanding AXI reads</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Read bandwidth against outstanding AXI reads</text>
 <text x="14" y="52" font-size="12" fill="#52514e">INT4 GEMV 1x4096x4096 streaming weights; 16 B beats, 16-beat bursts, DRAM unlimited</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="58.44" y1="426" x2="796" y2="426"/>

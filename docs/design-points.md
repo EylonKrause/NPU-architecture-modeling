@@ -29,15 +29,15 @@ on every point, and runs one GEMM per point bit-exact.
 
 | Column | Definition |
 |---|---|
-| MAC/cycle | Every core's array MACs per cycle, summed |
-| Peak TOP/s | 2 x MAC/cycle x clock: one INT8 MAC is two operations, the convention of Arm's figures (2048 MACs, 4 TOP/s at 1 GHz). The clusters apply the same convention to Apple's operations-per-second figure, whose precision and operation count Apple does not state |
+| MAC/cycle | Every core's array MAC/cycle, summed |
+| Peak TOP/s | $2 \times \text{MAC/cycle} \times \text{clock}$: one INT8 MAC is two operations, the convention of Arm's figures (2,048 MACs, 4 TOP/s at 1 GHz). The clusters apply the same convention to Apple's operations-per-second figure, whose precision and operation count Apple does not state |
 | SRAM, depthwise MAC/cycle, AXI | Per core. Each core has its own SRAM, slots, weight and activation caches, depthwise datapath and AXI port (read and write channels); all cores share one DRAM timeline |
-| DRAM GB/s | DRAM B/cycle x clock. Every point holds every tensor in DRAM |
-| Ridge | MAC/cycle over the memory roof min(DRAM B/cycle, 2 x cores x AXI bytes), which `npu-sim` reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all four points |
+| DRAM GB/s | $\text{DRAM B/cycle} \times \text{clock}$. Every point holds every tensor in DRAM |
+| Ridge | MAC/cycle over the memory roof $\min(\text{DRAM B/cycle}, 2 \times \text{cores} \times \text{AXI bytes})$, which `npu-sim` reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all four points |
 
-KB in Arm's documents is 1024 B: the Ethos-U55-256 has 48 SHRAM banks of 1024 B plus a 2048 B
-LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product brief states as
-50 KB.
+KB in Arm's documents is 1,024 B: the Ethos-U55-256 has 48 SHRAM banks of 1,024 B plus a
+2,048 B LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product brief
+states as 50 KB.
 
 ## 1 Shared rules
 
@@ -71,16 +71,16 @@ Microcontroller-class point sized from the Ethos-U55 top configuration.
 | Field | Value | Derivation |
 |---|---|---|
 | Array | 16x16, 256 MAC/cycle | Ethos-U55 MACs "32, 64, 128, 256" ([product brief][brief]) |
-| Clock | 1000 MHz | The brief quotes performance "at 1 GHz": 2 x 256 x 1 GHz = 512 GOP/s, the top of its "64 to 512 GOP/s" |
-| SRAM | 51,200 B (50 KiB) | Internal SRAM "18 to 50 KB" ([brief]); 48 SHRAM banks x 1024 B + 2048 B LUT for ethos-u55-256 ([vela-arch]) |
+| Clock | 1000 MHz | The brief quotes performance "at 1 GHz": $2 \times 256 \times 1\ \text{GHz} = 512$ GOP/s, the top of its "64 to 512 GOP/s" |
+| SRAM | 51,200 B (50 KiB) | Internal SRAM "18 to 50 KB" ([brief]); $48 \times 1{,}024 + 2{,}048$ B, the SHRAM banks and LUT of ethos-u55-256 ([vela-arch]) |
 | AXI | One 64-bit port, 8 B beats | "Two 64-bit AXI" ([brief]); 8 B/cycle per U55 port ([vela-arch]). The model's one port reaches external DRAM, which holds every tensor; the read-only flash port is not modeled |
 | DRAM | `Ethos_U65_Mid_End` | Vela configures no DRAM for the U55. Its DRAM system for the U65, the U55's DRAM-attached sibling, is `Ethos_U65_Mid_End`, stated as "DRAM (3.75 GB/s)" ([vela-ini]) |
-| DRAM rate | 8 B/cycle, 8 GB/s | Vela's rate per NPU cycle, the U65's 16 B port x `Dram_clock_scale` 0.46875 = 7.5 B/cycle (3.75 GB/s at Vela's 500 MHz), kept in cycles like the latencies; 8 is the smallest integer rate that reaches it |
+| DRAM rate | 8 B/cycle, 8 GB/s | Vela's rate per NPU cycle, the U65's 16 B port times `Dram_clock_scale` 0.46875, $16 \times 0.46875 = 7.5$ B/cycle (3.75 GB/s at Vela's 500 MHz), kept in cycles like the latencies; 8 is the smallest integer rate that reaches it |
 | Latency | 500 read, 250 write | `Dram_read_latency`, `Dram_write_latency` ([vela-ini]) |
 | Outstanding | 12 reads, 6 writes | `Dram_max_reads`, `Dram_max_writes` ([vela-ini]) |
 | Burst | Up to 64 beats (512 B) | $12 \times 64 \ge 500 + 64$; $12 \times 32 < 500 + 32$ |
 | Tiles | 32x32x128 | Minimum depth 128 B (`Dram_burst_length`). T = 64 needs 107,008 B at depth 128; at T = 32, depth 256 needs 76,032 B |
-| Weight cache | 7,936 B | 51,200 - 2 x 21,632 |
+| Weight cache | 7,936 B | $51{,}200 - 2 \times 21{,}632$ |
 | Depthwise datapath | 24 MAC/cycle | Vela runs the U55-256's depthwise on its 2x2x8 output microblock ([vela-arch]): 32 MAC/cycle, 24 for a 3x3 kernel. The S9 rule's pick sits beside it in [results](results.md#s9-depthwise-datapath-rate) |
 
 Every tensor sits in DRAM because no workload's weights fit a microcontroller's SRAM: Arm's
@@ -96,16 +96,16 @@ Mobile point sized from the Ethos-U85 top configuration.
 
 | Field | Value | Derivation |
 |---|---|---|
-| Array | 32x64, 2048 MAC/cycle | "Support for configurations from 128 to 2048 MACs/cycle" ([Arm newsroom][u85-blog]) |
-| Clock | 1000 MHz | "256 GOPS/s to 4 TOP/s at 1GHz" ([u85-blog]): 2 x 2048 x 1 GHz = 4.096 TOP/s |
+| Array | 32x64, 2,048 MAC/cycle | "Support for configurations from 128 to 2048 MACs/cycle" ([Arm newsroom][u85-blog]) |
+| Clock | 1000 MHz | "256 GOPS/s to 4 TOP/s at 1GHz" ([u85-blog]): $2 \times 2{,}048 \times 1\ \text{GHz} = 4.096$ TOP/s |
 | SRAM | 273,408 B (267 KiB) | "Internal SRAM of 29 to 267 KB" ([u85-blog]) |
 | AXI | One 256-bit port, 32 B beats | "up to six 128-bit AXI5 interfaces" ([u85-blog]): for ethos-u85-2048, 4 system-SRAM and 2 external ports ([Regor `ethos_u85.cpp`][regor]); 16 B/cycle per U85 port ([vela-arch]); `Dram_ports_used=2` in `Ethos_U85_SYS_DRAM_High` ([vela-ini]). The two 128-bit DRAM ports are modeled as one 256-bit port. Every tensor is in DRAM; the system-SRAM level is not modeled |
-| DRAM rate | 24 B/cycle, 24 GB/s | 16 B x 2 ports x `Dram_clock_scale` 0.75 ([vela-ini]), stated by Vela as "DRAMx2 (24 GB/s)" |
+| DRAM rate | 24 B/cycle, 24 GB/s | 16 B times 2 ports times `Dram_clock_scale` 0.75, $16 \times 2 \times 0.75 = 24$ B/cycle ([vela-ini]), stated by Vela as "DRAMx2 (24 GB/s)" |
 | Latency | 500 read, 250 write | `Dram_read_latency`, `Dram_write_latency` ([vela-ini]) |
 | Outstanding | 64 reads, 32 writes | `Dram_max_reads`, `Dram_max_writes` ([vela-ini]) |
 | Burst | Up to 8 beats (256 B) | $64 \times 8 \ge 500 + 8$; $64 \times 4 < 500 + 4$ |
 | Tiles | 64x64x256 | Minimum depth 128 B (`Dram_burst_length`). T = 128 needs 295,936 B at depth 128; at T = 64, depth 512 needs 303,616 B |
-| Weight cache | 100,864 B | 273,408 - 2 x 86,272 |
+| Weight cache | 100,864 B | $273{,}408 - 2 \times 86{,}272$ |
 | Depthwise datapath | 192 MAC/cycle | Regor runs the U85-2048's 8-bit depthwise on its 4x4x16 output microblock only ([`ethos_u85.cpp`][regor]): 256 MAC/cycle, 192 for a 3x3 kernel |
 
 ## 4 client-16c
@@ -115,14 +115,14 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 | Field | Value | Derivation |
 |---|---|---|
 | Cores, array | 16 x 32x32, 16,384 MAC/cycle | M4's Neural Engine: "16-core design", "capable of 38 trillion operations per second" ([Apple, May 2024][m4]). Apple does not state the precision; this model's MACs are INT8. 38 TOP/s over 16 cores of 1,024 MACs at 2 operations per MAC gives 1.16 GHz |
-| Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (`npu-sim` takes integer bytes per cycle). Peak 2 x 16,384 x 1.2 GHz = 39.3216 TOP/s, 3.5% above 38 |
+| Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (`npu-sim` takes integer bytes per cycle). Peak $2 \times 16{,}384 \times 1.2\ \text{GHz} = 39.3216$ TOP/s, 3.5% above 38 |
 | DRAM rate | 100 B/cycle, 120 GB/s | M4 "has higher memory bandwidth of 120GB/s" ([Apple, Oct 2024][m4-pro]). That is the SoC's rate, shared with the CPU and GPU; Apple publishes no rate attainable by the Neural Engine |
 | SRAM | 262,144 B (256 KiB) per core | Apple publishes no Neural Engine SRAM size. The S10 rule ([results](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilization in the sweep, taken on this point and on `workstation-32c`, which shares the core |
-| AXI | One 256-bit port per core | One core design serves both clusters: the narrowest AXI width whose read channels, one per core, carry `workstation-32c`'s 667 B/cycle. 32 x 16 B = 512 falls short; 32 x 32 B = 1024 does not. Here 16 x 32 B = 512 B/cycle against 100 |
+| AXI | One 256-bit port per core | One core design serves both clusters: the narrowest AXI width whose read channels, one per core, carry `workstation-32c`'s 667 B/cycle. $32 \times 16 = 512$ B falls short; $32 \times 32 = 1{,}024$ B does not. Here $16 \times 32 = 512$ B/cycle against 100 |
 | Latency, outstanding | 500/250, 64/32 | `Ethos_U85_SYS_DRAM_High` ([vela-ini]), in cycles at 1.2 GHz |
 | Burst | Up to 8 beats (256 B) | As `mobile-2k` |
 | Tiles | 64x64x256 | Minimum depth 128 B. T = 128 needs 295,936 B at depth 128; at T = 64, depth 512 needs 303,616 B |
-| Weight cache | 89,600 B per core | 262,144 - 2 x 86,272 |
+| Weight cache | 89,600 B per core | $262{,}144 - 2 \times 86{,}272$ |
 | Depthwise datapath | 128 MAC/cycle per core | The S9 rule; Apple publishes no Neural Engine microarchitecture to take a rate from |
 | Partition | `auto` | `npu-sim` picks the m or n split per GEMM |
 
@@ -133,7 +133,7 @@ Two-die point: two `client-16c` dies on one DRAM, 32 cores.
 | Field | Value | Derivation |
 |---|---|---|
 | Cores | 32 | M3 Ultra: a "32-core Neural Engine" ([Apple, March 2025][m3-ultra]). Apple states no operations-per-second figure for it; the peak follows from the core count and the `client-16c` clock |
-| Core, clock | 32x32 array, 1200 MHz | `client-16c`'s; peak 2 x 32,768 x 1.2 GHz = 78.6432 TOP/s |
+| Core, clock | 32x32 array, 1200 MHz | `client-16c`'s; peak $2 \times 32{,}768 \times 1.2\ \text{GHz} = 78.6432$ TOP/s |
 | DRAM rate | 667 B/cycle, 800.4 GB/s | "over 800GB/s of memory bandwidth" ([m3-ultra]): the smallest integer rate at 1.2 GHz that reaches 800 GB/s (666 B/cycle gives 799.2 GB/s). Shared with the CPU and GPU |
 | Per-core fields | As `client-16c` | SRAM 256 KiB, 256-bit port, Vela latencies and limits, 8-beat bursts, 64x64x256 tiles, 89,600 B weight cache, 128 MAC/cycle depthwise datapath (the S9 rule picks it on this point too), `auto` partition |
 | Die-to-die link | Not modeled | All 32 cores reach the one DRAM timeline at the same cost |
@@ -141,14 +141,14 @@ Two-die point: two `client-16c` dies on one DRAM, 32 cores.
 The per-core throughput is `client-16c`'s, sized from the M4 generation's figure. Public data
 on the M3 generation implies about half: Apple states the M3-family Neural Engine is "up to
 60 percent faster than in the M1 family" ([Apple, October 2023][m3]) and M1's at "11 trillion
-operations per second" ([Apple, November 2020][m1]), 1.6 x 11 = 17.6 TOP/s per 16 cores and
+operations per second" ([Apple, November 2020][m1]), $1.6 \times 11 = 17.6$ TOP/s per 16 cores and
 35.2 per 32, against this point's 78.6432 TOP/s. The point pairs M4-class cores with the
 M3 Ultra's core count and memory rate.
 
 ## 6 Tile intensity and the ridge
 
 An $a \times b$ tile of a GEMM moves $(a + b)$ `tile_k` bytes per panel for $ab$ `tile_k` MACs:
-$ab/(a + b)$ MAC per byte before cache hits and the output store. With the config files' 2-slot
+$ab/(a + b)$ MAC/B before cache hits and the output store. With the config files' 2-slot
 $T \times T$ tiles that is $T/2$, 16 on `edge-256` and 32 on the others. All four ridges lie
 above it, so under that mapping a GEMM whose operands the caches do not hold is DRAM-bound on
 every point: the SRAM sets $T$, and no point's SRAM holds the two slots of a tile wide enough to

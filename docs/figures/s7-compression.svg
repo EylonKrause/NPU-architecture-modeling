@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="500" viewBox="0 0 820 500" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>Llama-3.2-1B decode: 4-bit palette vs dense INT4 weights</title>
+<title>Llama-3.2-1B decode: 4-bit palette against dense INT4 weights</title>
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="s7-plot"><rect x="62.04" y="58" width="735.96" height="388"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Llama-3.2-1B decode: 4-bit palette vs dense INT4 weights</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Llama-3.2-1B decode: 4-bit palette against dense INT4 weights</text>
 <text x="14" y="52" font-size="12" fill="#52514e">every weight GEMM in the same pieces for all three formats; dense INT8 runs at 0.51 to 0.61 of dense INT4; KV-cache matmuls stay INT8</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="62.04" y1="446" x2="796" y2="446"/>

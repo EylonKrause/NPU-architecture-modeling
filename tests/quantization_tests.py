@@ -517,7 +517,7 @@ class QuantizationChecks(unittest.TestCase):
         for acc, multiplier, shift in cases:
             low, high = tosa_input_range(shift)
             self.assertTrue(low <= acc < high)
-            # The verified equivalences, within the oracle.
+            # TFLite and CMSIS-NN agree in both rounding modes.
             tfl = 31 - shift
             self.assertEqual(
                 tflite_single(acc, multiplier, tfl), cmsis_single(acc, multiplier, tfl)

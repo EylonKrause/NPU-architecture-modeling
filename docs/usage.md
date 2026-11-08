@@ -1,8 +1,7 @@
 # Usage
 
 The mechanisms behind the reported counters are specified in [architecture](architecture.md),
-arithmetic and weight formats in [numerics](numerics.md), and the scope of the model in
-[methodology](methodology.md#model-fidelity) section 3.
+and arithmetic and weight formats in [numerics](numerics.md).
 
 | Section | Content |
 |---|---|
@@ -115,7 +114,7 @@ All four link `npu_core` (`src/core.cpp`, `src/conv.cpp`, `src/json.cpp`, `src/o
 
 ### 1.5 Tests
 
-Test names are `<area>.<what>`. The area is a CTest label; C++ executables add the label
+Test names are `<area>.<subject>`. The area is a CTest label; C++ executables add the label
 `unit` and Python suites `python` (`cmake/NpuTesting.cmake`).
 
 | Area | Coverage |
@@ -251,7 +250,7 @@ switch. Descriptions are the `--help` text.
 | `--k` | `shape.k` | `N` | `32` | reduction depth K per group |
 | `--groups` | `shape.groups` | `N` | `1` | independent GEMMs G sharing M; depthwise convolution is G channels, N 1, K kh\*kw |
 | `--seed` | `shape.seed` | `N` | `1` | synthetic-tensor seed; the low 32 bits are used |
-| `--conv-input-h` | `shape.conv.input_h` | `N` | `0` | implicit convolution: NHWC input height; with -w and -c set, the activation operand is the input's im2col view (M = output pixels, K = kernel_h\*kernel_w\*input_c/groups) and panel loads read the input footprint; 0 is a plain GEMM operand |
+| `--conv-input-h` | `shape.conv.input_h` | `N` | `0` | implicit convolution: NHWC input height; with `--conv-input-w` and `--conv-input-c` set, the activation operand is the input's im2col view (M = output pixels, K = kernel_h\*kernel_w\*input_c/groups) and panel loads read the input footprint; 0 is a plain GEMM operand |
 | `--conv-input-w` | `shape.conv.input_w` | `N` | `0` | implicit convolution: input width |
 | `--conv-input-c` | `shape.conv.input_c` | `N` | `0` | implicit convolution: input channels, a multiple of `--groups` |
 | `--conv-kernel-h` | `shape.conv.kernel_h` | `N` | `1` | implicit convolution: kernel height |
@@ -284,7 +283,7 @@ switch. Descriptions are the `--help` text.
 | `--axi-write-latency` | `arch.memory.axi.write_latency` | `N` | `12` | axi model: cycles from the last W beat to the B response |
 | `--sram-bytes` | `arch.sram_bytes` | `N` | `262144` | SRAM capacity for tile slots plus the weight and activation caches |
 | `--weight-cache-bytes` | `arch.weight_cache_bytes` | `N` | `0` | LRU weight-panel cache capacity; 0 disables it |
-| `--activation-cache-bytes` | `arch.activation_cache_bytes` | `N` | `0` | LRU activation-panel cache capacity, keyed by group or channel tile, row tile and reduction panel, so column tiles of a row tile reuse its panels; 0 disables it |
+| `--activation-cache-bytes` | `arch.activation_cache_bytes` | `N` | `0` | LRU activation-panel cache capacity; 0 disables it |
 | `--frequency-mhz` | `arch.frequency_mhz` | `X` | `200` | clock used to convert cycles to modeled time |
 | `--cores` | `arch.cores` | `N` | `1` | core pipelines, 1..64, each with its own slots, SRAM, weight cache and AXI port; all share one DRAM timeline, so more than one needs `--memory-model` axi |
 | `--tile-m` | `mapping.tile_m` | `N` | `8` | output tile rows |
@@ -372,7 +371,7 @@ A config file holds one JSON object. Each nesting level is one segment of an opt
 | Integers | JSON integers within the field's type; `arch.cores` expects an unsigned 64-bit integer, for example |
 | Enumerations | JSON strings from the closed set (`"os"`, `"axi"`, `"tosa-double"`, ...) |
 | Switches | JSON `true` or `false` |
-| Per-channel vectors | JSON arrays of signed 32-bit integers, one entry per output channel (G·N) |
+| Per-channel vectors | JSON arrays of signed 32-bit integers, one entry per output channel ($GN$) |
 
 ### 4.2 Precedence and the echoed config
 
@@ -390,13 +389,13 @@ npu-sim --tile-k 128 --config configs/mobile-2k.json --describe-config   # tile_
 
 ### 4.3 Shipped configurations
 
-| File | Array | Cores | Memory model | Tiles (M x N x K) |
+| File | Array | Cores | Memory model | Tiles (MxNxK) |
 |---|---|---|---|---|
-| `configs/edge-256.json` | 16x16 OS | 1 | AXI | 32 x 32 x 128 |
-| `configs/mobile-2k.json` | 32x64 OS | 1 | AXI | 64 x 64 x 256 |
-| `configs/client-16c.json` | 32x32 OS | 16 | AXI | 64 x 64 x 256 |
-| `configs/workstation-32c.json` | 32x32 OS | 32 | AXI | 64 x 64 x 256 |
-| `configs/example.json` | 16x16 OS | 1 | serial | 32 x 32 x 64 |
+| `configs/edge-256.json` | 16x16 OS | 1 | AXI | 32x32x128 |
+| `configs/mobile-2k.json` | 32x64 OS | 1 | AXI | 64x64x256 |
+| `configs/client-16c.json` | 32x32 OS | 16 | AXI | 64x64x256 |
+| `configs/workstation-32c.json` | 32x32 OS | 32 | AXI | 64x64x256 |
+| `configs/example.json` | 16x16 OS | 1 | serial | 32x32x64 |
 
 The first four are the design points; [design points](design-points.md) derives every field and
 cites the sources, and `python3 -m npuperf.designs` prints their summary table. A design-point
@@ -413,12 +412,12 @@ mechanisms are specified in [architecture](architecture.md) sections 3.5, 4.4 an
 
 | Config key | Behavior |
 |---|---|
-| `shape.conv` | Convolution geometry: input extents, kernel, stride, dilation and padding. The activation operand is the im2col view of an NHWC input tensor, and each panel load reads the tile's input footprint, halo included; padding is not read. M and K must equal the geometry's output pixels and kernel_h·kernel_w·input_c/groups; `mapping.tile_k` is 0 or a multiple of kernel_w·input_c/groups |
+| `shape.conv` | Convolution geometry: input extents, kernel, stride, dilation and padding. The activation operand is the im2col view of an NHWC input tensor, and each panel load reads the tile's input footprint, halo included; padding is not read. $M$ and $K$ must equal the geometry's output pixels and $k_h k_w C / G$; `mapping.tile_k` is 0 or a multiple of $k_w C / G$ |
 | `arch.compute.depthwise_macs_per_cycle` | Depthwise datapath, used when the rate is above 0, `shape.groups` above 1 and `shape.n` 1. Tiles span `tile_n` channels; dense weights only |
 | `arch.activation_cache_bytes` | Per-core LRU activation-panel cache with the policy of the weight cache; the capacity counts in `scratchpad_bytes` |
 
 A reduction panel on the depthwise datapath takes the cycles of architecture equation 3.5. A 3x3
-depthwise layer of 96 channels with stride 2 on a 56 x 56 input, read from its input
+depthwise layer of 96 channels with stride 2 on a $56 \times 56$ input, read from its input
 footprint on the depthwise datapath of the `mobile-2k` design point:
 
 ```sh
@@ -433,10 +432,9 @@ The run is bit-exact, takes 66,541 cycles and reads 365,280 activation bytes of 
 
 ## 5 Result JSON
 
-A batch run prints one object with `"schema_version": 2` (`src/main.cpp`). Version 2 nests
-`config` by option-table path and adds `memory`, `cluster` and `cores`. `npuperf.sim` reads
-versions 1 and 2; version 1 carried a flat `config` whose keys are the flag names
-(`npuperf/sim.py`, `CONFIG_PATHS`).
+A batch run prints one object with `"schema_version": 2` (`src/main.cpp`). `config` is nested
+by option-table path. `npuperf.sim` also reads version 1 results, whose `config` is flat and
+keyed by flag name (`npuperf/sim.py`, `CONFIG_PATHS`).
 
 ### 5.1 Top level
 
@@ -445,9 +443,9 @@ versions 1 and 2; version 1 carried a flat `config` whose keys are the flag name
 | `schema_version` | integer | 2 |
 | `config` | object | Effective configuration, complete (section 4.2) |
 | `cycles` | integer | Makespan in cycles; for a cluster, the last core's completion |
-| `macs` | integer | Logical MACs of the workload, M·N·K·G |
+| `macs` | integer | Logical MACs of the workload, $GMNK$ |
 | `executed_macs`, `skipped_macs` | integer | MACs the datapath executed and those sparse zero-skipping removed; they sum to `macs` |
-| `reduction_blocks` | integer | Reduction panels per tile, ⌈K / tile_k⌉; 1 when `tile_k` is 0 |
+| `reduction_blocks` | integer | Reduction panels per tile, $\lceil K / K_\pi \rceil$; 1 when `tile_k` is 0 |
 | `read_bytes`, `write_bytes` | integer | DRAM payload bytes read and written, re-reads included |
 | `weight_read_bytes` | integer | Weight bytes read from DRAM, re-reads included |
 | `dense_weight_storage_bytes`, `encoded_weight_storage_bytes` | integer | Weight storage in dense form and in the configured encoding |
@@ -461,31 +459,31 @@ versions 1 and 2; version 1 carried a flat `config` whose keys are the flag name
 | `peak_cached_activation_bytes` | integer | Largest activation-cache occupancy of any core |
 | `depthwise_macs` | integer | MACs run on the depthwise datapath |
 | `depthwise_peak_macs_per_cycle` | integer | `depthwise_macs_per_cycle` times cores |
-| `depthwise_mac_utilization` | number | `depthwise_macs / (depthwise_peak_macs_per_cycle · cycles)`; 0 when the rate is 0 |
+| `depthwise_mac_utilization` | number | `depthwise_macs / (depthwise_peak_macs_per_cycle * cycles)`; 0 when the rate is 0 |
 | `compute_busy_cycles` | integer | Panel durations $C_p$ (architecture equation 3.1) summed over computed panels and cores |
 | `dma_busy_cycles` | integer | Serial: request service durations; AXI: cycles with a request in flight on either channel of a port; summed over cores |
 | `peak_inflight_tiles` | integer | Most tiles holding slots at once in any core |
 | `slot_wait_cycles` | integer | Cycles the loader waited for a free slot |
 | `panel_wait_cycles` | integer | Cycles the loader waited for a panel buffer of the slot it holds |
 | `dma_requests`, `dma_bursts` | integer | Memory requests and the bursts they split into |
-| `effective_macs_per_cycle` | integer | Cluster peak of the engine the job runs on: array rows·columns, `macs_per_cycle`, or on the depthwise datapath `depthwise_macs_per_cycle`, times cores |
-| `peak_memory_bytes_per_cycle` | integer | Serial: `bytes_per_cycle`. AXI: min(2·`data_bytes`·cores, `dram_bytes_per_cycle`), or the bus term when the DRAM rate is 0 |
+| `effective_macs_per_cycle` | integer | Cluster peak of the engine the job runs on: array rows times columns, `macs_per_cycle`, or on the depthwise datapath `depthwise_macs_per_cycle`, times cores |
+| `peak_memory_bytes_per_cycle` | integer | Serial: `bytes_per_cycle`. AXI: $\min(2 D N_c, R)$ with $D$ = `data_bytes` and $R$ = `dram_bytes_per_cycle`, or $2 D N_c$ when the DRAM rate is 0 |
 | `scratchpad_bytes` | integer | SRAM reservation per core: slots, panel buffers and both caches (`scratchpad_bytes` in `src/core.cpp`) |
 | `numerics` | string | `bit-exact`, or `skipped` for `--timing-only` |
 | `output_hash` | integer or null | FNV-1a 64 over the INT32 accumulators (little-endian) and then the INT8 outputs (`output_hash` in `src/core.cpp`); null when numerics are skipped |
 | `numerical_match` | true or null | true after the comparison with the scalar reference; null when skipped |
 | `simulation_wall_seconds` | number | Host time spent in the SystemC kernel |
-| `compute_utilization` | number | `compute_busy_cycles / (cycles · cores)` |
-| `memory_utilization` | number | `dma_busy_cycles / (cycles · cores)` |
-| `mac_utilization` | number | `executed_macs / (effective_macs_per_cycle · cycles)` |
-| `dma_payload_utilization` | number | `(read_bytes + write_bytes) / (peak_memory_bytes_per_cycle · cycles)` |
+| `compute_utilization` | number | `compute_busy_cycles / (cycles * cores)` |
+| `memory_utilization` | number | `dma_busy_cycles / (cycles * cores)` |
+| `mac_utilization` | number | `executed_macs / (effective_macs_per_cycle * cycles)` |
+| `dma_payload_utilization` | number | `(read_bytes + write_bytes) / (peak_memory_bytes_per_cycle * cycles)` |
 | `arithmetic_intensity_macs_per_byte` | number | `macs / (read_bytes + write_bytes)` |
-| `resource_lower_bound_cycles` | integer | Largest per-core `compute_busy_cycles` or `dma_busy_cycles`; under AXI with a DRAM rate, at least ⌈DRAM bytes / `dram_bytes_per_cycle`⌉ |
-| `modeled_latency_ns` | number | `cycles · 1000 / frequency_mhz` |
+| `resource_lower_bound_cycles` | integer | Largest per-core `compute_busy_cycles` or `dma_busy_cycles`; under AXI with a DRAM rate, at least $\lceil \text{DRAM bytes} / R \rceil$, $R$ = `dram_bytes_per_cycle` |
+| `modeled_latency_ns` | number | `cycles * 1000 / frequency_mhz` |
 | `memory` | object | Section 5.2 |
 | `cluster` | object | Section 5.3 |
 | `cores` | array | Section 5.4 |
-| `accumulators`, `outputs` | array | INT32 accumulators and INT8 outputs, row-major M x G·N; with `--dump-output` only |
+| `accumulators`, `outputs` | array | INT32 accumulators and INT8 outputs, row-major $M \times GN$; with `--dump-output` only |
 
 `output_hash` is an unsigned 64-bit integer; a JSON parser that maps numbers to doubles loses
 its low bits. Snapshots (section 7) carry the same hash as a decimal string.
@@ -497,7 +495,7 @@ its low bits. Snapshots (section 7) carry the same hash as a decimal string.
 | `model` | `serial` or `axi` |
 | `peak_bytes_per_cycle` | As `peak_memory_bytes_per_cycle` |
 | `read`, `write` | Channel objects, below; under the serial model they split the one DMA server's traffic by direction |
-| `dram` | AXI only: `bytes_per_cycle` (the configured rate), `bytes` (beats times `data_bytes` over every port) and `utilization` = `bytes / (bytes_per_cycle · cycles)`, 0 when the rate is unlimited |
+| `dram` | AXI only: `bytes_per_cycle` (the configured rate), `bytes` (beats times `data_bytes` over every port) and `utilization` = `bytes / (bytes_per_cycle * cycles)`, 0 when the rate is unlimited |
 
 | Channel field | Definition |
 |---|---|
@@ -505,7 +503,7 @@ its low bits. Snapshots (section 7) carry the same hash as a decimal string.
 | `payload_bytes` | Bytes requested |
 | `busy_cycles` | Cycles the data channel moves beats; under AXI, from each burst's first beat to its last, DRAM throttling included |
 | `mean_latency_cycles`, `max_latency_cycles` | Request arrival to completion |
-| `burst_efficiency` | `payload_bytes / (beats · beat bytes)`; beat bytes are `bytes_per_cycle` (serial) or `axi.data_bytes` |
+| `burst_efficiency` | `payload_bytes / (beats * beat_bytes)`; beat bytes are `bytes_per_cycle` (serial) or `axi.data_bytes` |
 | `achieved_bytes_per_cycle` | `payload_bytes / cycles` |
 | `peak_outstanding` | Most bursts in flight at once |
 
@@ -519,7 +517,7 @@ its low bits. Snapshots (section 7) carry the same hash as a decimal string.
 | `units` | Number of units distributed |
 | `makespan_cycles` | Equal to `cycles` |
 | `imbalance` | Largest core MAC count times cores, over total MACs; 1 is balanced |
-| `dram_bound_cycles` | ⌈DRAM bytes / `dram_bytes_per_cycle`⌉ under AXI with a rate; 0 otherwise |
+| `dram_bound_cycles` | $\lceil \text{DRAM bytes} / R \rceil$, $R$ = `dram_bytes_per_cycle`, under AXI with a rate; 0 otherwise |
 | `predicted` | For `m` and `n`: `read_bytes`, `write_bytes` and `bound_cycles` predicted before the run; `auto` chooses from these |
 
 ### 5.4 `cores`
@@ -570,7 +568,7 @@ datapath (`gantt`).
 ### 6.2 VCD
 
 `--vcd PATH.vcd` records SystemC signals of every core from time zero. The VCD time unit is
-1 ps and one cycle is 1 ns, so cycle c appears at time 1000·c; delta cycles are traced, so
+1 ps and one cycle is 1 ns, so cycle $c$ appears at time $1000c$; delta cycles are traced, so
 updates within one cycle appear at 1 ps offsets. One core traces under scope `SystemC.npu`;
 a cluster traces each core under `SystemC.npu.core<i>` (`Core::trace_signals` in
 `src/model.cpp`).
@@ -654,6 +652,8 @@ A snapshot is the state of the model at the current cycle (`PipelineView` in
 
 ![Live dashboard](images/live-dashboard.png)
 
+*Figure 1. Live dashboard paused during job 6 of the `balanced` profile.*
+
 ### 8.1 Launch
 
 `run.py` (section 2) builds and launches the dashboard. With an existing build:
@@ -683,8 +683,8 @@ flowchart LR
 
 ### 8.2 Profiles
 
-Every profile runs a 64 x 64 x 128 GEMM in 8 x 8 x 32 tiles with two buffer slots
-(`PROFILE_ARGS` in `npuperf/live.py`). The bound column is the class `npuperf.analytic`
+Every profile runs a $64 \times 64 \times 128$ GEMM in $8 \times 8 \times 32$ tiles with two buffer
+slots (`PROFILE_ARGS` in `npuperf/live.py`). The bound column is the class `npuperf.analytic`
 assigns, as `GET /api/profiles` reports it.
 
 | Key | Label | Flags beyond the defaults | Analytic bound |
@@ -695,7 +695,7 @@ assigns, as `GET /api/profiles` reports it.
 | `palette-weights` | 2-bit palette weights | `--weight-encoding palette --palette-bits 2 --input-zero 0 --weight-zero 0 --shift 4`, tensors from an `NPU1` file | null (compressed panel sizes depend on the weight values) |
 
 The `palette-weights` tensors come from a file the controller writes per job: activations
-in $-8$ to $8$, weights from {-3, -1, 1, 3}, bias in $-31$ to $31$, drawn from the job seed.
+in $-8$ to $8$, weights from $\{-3, -1, 1, 3\}$, bias in $-31$ to $31$, drawn from the job seed.
 
 ### 8.3 Controller
 
@@ -804,7 +804,7 @@ python3 scripts/sweep.py --binary build/release/npu-sim      # same tool
 | `npuperf.roofline` | | Roofline points and SVG for workload tables | SVG with `--out` |
 | `npuperf.reproduce` | | Studies of [results](results.md): tables, figures, raw records | `docs/results.md`, `docs/figures/*.svg`, `results/studies/*.json` |
 | `npuperf.energy` | `scripts/energy_report.py` | Energy estimate from one result | report with `--output` |
-| `npuperf.designs` | | Headline table of the design points | stdout |
+| `npuperf.designs` | | Summary table of the design points | stdout |
 | `npuperf.mapper` | | Per-layer tile mapping by the analytic model | stdout |
 | `npuperf.compare_modes` | `scripts/compare_modes.py` | Event against cycle timing: equal results, host time | `compare_modes.json`, `.csv` |
 | `npuperf.mlp_demo` | `scripts/mlp_demo.py` | Two-layer INT8 MLP through `NPU1` files | stdout |
@@ -816,9 +816,9 @@ python3 scripts/sweep.py --binary build/release/npu-sim      # same tool
 
 ### 9.2 sweep
 
-`npuperf.sweep` runs each variant on the shapes 16 x 16 x 32, 17 x 13 x 31 and 64 x 64 x 128
-with 8 x 8 tiles, and requires every variant to reproduce the output hash of the serial
-baseline.
+`npuperf.sweep` runs each variant on the shapes $16 \times 16 \times 32$, $17 \times 13 \times 31$
+and $64 \times 64 \times 128$ with $8 \times 8$ tiles, and requires every variant to reproduce the
+output hash of the serial baseline.
 
 | Variant | Buffer slots | MAC/cycle | B/cycle | Speedup baseline |
 |---|---|---|---|---|
@@ -864,9 +864,9 @@ python3 -m npuperf.roofline --workload resnet50_v1.5_224 \
 | `--label LAYER` | Label a layer on the plot; repeatable |
 
 The x axis is arithmetic intensity in MAC per DRAM byte (MAC/B), re-reads included; the y axis is
-achieved MACs per cycle. The roofs are the peak MAC rate and the peak DRAM rate; under the
-serial memory model a dashed roof marks the bandwidth left after per-request latency. Every
-point satisfies y ≤ min(peak, bandwidth · x), which `tests/npuperf_tests.py` checks.
+achieved MAC/cycle. The roofs are the peak MAC rate and the peak DRAM rate; under the serial memory
+model a dashed roof marks the bandwidth left after per-request latency. Every point satisfies
+$y \le \min(\text{peak}, \text{bandwidth} \cdot x)$, which `tests/npuperf_tests.py` checks.
 
 ### 9.5 reproduce
 
@@ -934,9 +934,9 @@ slot counts and cache splits for one layer on one design point (`npuperf/mapper.
 
 | Tool | Behavior |
 |---|---|
-| `compare_modes` | Runs 17 x 13 x 31, 64 x 64 x 128 and 128 x 128 x 256 under `--timing event` and `--timing cycle`, `--repeats` times each (default 3, order alternated), requires identical cycles, traffic, busy cycles, hash and utilizations, and reports median host time per mode |
-| `mlp_demo` | Runs a 2 x 3 x 4 dense layer with ReLU and a 2 x 2 x 3 dense layer from `NPU1` files and checks the outputs `[1, 0, 5, 1, 3, 0]` and `[4, 3, -1, 3]` |
-| `mobile_suite` | Runs a 17 x 13 x 31 GEMM dense and with 2-bit palette or sparse (block 4) weights against a Python integer reference, the transformer demo at FP32, FP16 and BF16, and the multi-core platform with 1 and 2 cores; writes per-case JSON and `summary.json` to `--output-dir` (default `results/mobile`) |
+| `compare_modes` | Runs 17x13x31, 64x64x128 and 128x128x256 under `--timing event` and `--timing cycle`, `--repeats` times each (default 3, order alternated), requires identical cycles, traffic, busy cycles, hash and utilizations, and reports median host time per mode |
+| `mlp_demo` | Runs a 2x3x4 dense layer with ReLU and a 2x2x3 dense layer from `NPU1` files and checks the outputs `[1, 0, 5, 1, 3, 0]` and `[4, 3, -1, 3]` |
+| `mobile_suite` | Runs a 17x13x31 GEMM dense and with 2-bit palette or sparse (block 4) weights against a Python integer reference, the transformer demo at FP32, FP16 and BF16, and the multi-core platform with 1 and 2 cores; writes per-case JSON and `summary.json` to `--output-dir` (default `results/mobile`) |
 
 ## 10 Graph runtime
 
@@ -1025,12 +1025,12 @@ of $\text{multiplier}/2^{\text{shift}}$, and a bias scale must equal input scale
 | Operator | Operands | Attributes | Executes |
 |---|---|---|---|
 | `Dense`, `MatMul` | activations [M, K], weights [K, N], optional bias [N] | `quant` | One `npu-sim` call |
-| `Conv2D` | NHWC activations, weights [KH, KW, IC, OC], optional bias [OC] | `quant`, `strides`, `dilations`, `padding` | Host im2col, then one call with M = N·OH·OW, K = KH·KW·IC, N = OC |
-| `DepthwiseConv2D` | NHWC activations, weights [KH, KW, IC, multiplier], optional bias [IC·multiplier] | `quant`, `strides`, `dilations`, `padding` | One grouped call (G = IC, K = KH·KW, N = multiplier) |
-| `Add` | two tensors of identical shape, scale and zero point | | Host: saturate(a + b − zero point) |
+| `Conv2D` | NHWC activations, weights [KH, KW, IC, OC], optional bias [OC] | `quant`, `strides`, `dilations`, `padding` | Host im2col, then one call with $M = N \cdot \mathrm{OH} \cdot \mathrm{OW}$, $K = \mathrm{KH} \cdot \mathrm{KW} \cdot \mathrm{IC}$, $N = \mathrm{OC}$ |
+| `DepthwiseConv2D` | NHWC activations, weights [KH, KW, IC, multiplier], optional bias [$\mathrm{IC} \cdot \text{multiplier}$] | `quant`, `strides`, `dilations`, `padding` | One grouped call ($G = \mathrm{IC}$, $K = \mathrm{KH} \cdot \mathrm{KW}$, $N$ = multiplier) |
+| `Add` | two tensors of identical shape, scale and zero point | | Host: $\mathrm{saturate}(a + b - z)$, $z$ the zero point |
 | `ReLU` | one tensor | | Host: max(x, zero point) |
 | `MaxPool2D` | NHWC | `kernel`, `strides`, `dilations`, `padding` | Host; padding never wins the maximum |
-| `AveragePool2D` | NHWC | `kernel`, `strides`, `dilations`, `padding`, `count_include_pad` | Host: mean of (x − zero point), ties away from zero, plus zero point; padding excluded from the count unless `count_include_pad` is true |
+| `AveragePool2D` | NHWC | `kernel`, `strides`, `dilations`, `padding`, `count_include_pad` | Host: mean of $x - z$ for zero point $z$, ties away from zero, plus $z$; padding excluded from the count unless `count_include_pad` is true |
 | `Flatten` | rank 2 or more | | Host: keeps axis 0, flattens the rest |
 
 Host operators preserve the input quantization and take no `quant` object. Depthwise output
@@ -1039,7 +1039,7 @@ channels are ordered input channel first, then channel multiplier.
 | Attribute | Default | Rule |
 |---|---|---|
 | `strides`, `dilations` | `[1, 1]` | Two integers in 1 to 4096 |
-| `padding` | `"VALID"` | `"VALID"`, `"SAME"` (output ⌈H / stride⌉; the odd padding cell goes bottom and right) or `[top, bottom, left, right]` |
+| `padding` | `"VALID"` | `"VALID"`, `"SAME"` (output $\lceil H / \text{stride} \rceil$; the odd padding cell goes bottom and right) or `[top, bottom, left, right]` |
 | `kernel` | `[2, 2]` | Pooling window |
 | `count_include_pad` | false | `AveragePool2D` only |
 
@@ -1067,7 +1067,7 @@ layout work are outside the NPU cycles.
 | Tensor | 1 to 6 dimensions of 1 to 4096, at most 1,000,000 elements |
 | Graph file | 32 MiB |
 | MACs per accelerated node | at most 100,000,000 |
-| Lowered matrices | dimensions at most 4096; M·K + K·N at most 1,000,000 elements |
+| Lowered matrices | dimensions at most 4096; $MK + KN$ at most 1,000,000 elements |
 
 ### 10.5 Report
 
@@ -1177,7 +1177,7 @@ graph.json`). The tests run with `-DNPU_ENABLE_ONNX_TESTS=ON` and `ctest -L onnx
 | Shared activations | Must keep one scale, zero point and layout across consumers |
 
 `tests/onnx_import_tests.py` compares full output arrays with ONNX Runtime's CPU provider.
-Its smallest case is a 4 x 1 `QLinearMatMul` with weight 1 and weight scale 0.5: inputs
+Its smallest case is a $4 \times 1$ `QLinearMatMul` with weight 1 and weight scale 0.5: inputs
 `[1, 3, -1, -3]` give `[0, 2, 0, -2]`, ties rounding to even. Scale ratios such as 1/3, or one
 that needs shift 32, are rejected.
 
@@ -1187,7 +1187,7 @@ that needs shift 32, are rejected.
 
 `--input PATH` reads an `NPU1` tensor file (`input_problem` in `src/main.cpp`; writer
 `npuperf/npufile.py`), whose header, token rules, tensor order and value ranges are specified in
-[numerics](numerics.md) section 3.2. `examples/tiny-dense.npu` is a 1 x 2 x 3 layer:
+[numerics](numerics.md) section 3.2. `examples/tiny-dense.npu` is a $1 \times 2 \times 3$ layer:
 
 ```text
 NPU1 1 2 3
@@ -1209,7 +1209,7 @@ outputs are `[125,0]`.
 ### 13.2 NPUQ1 per-channel quantization file
 
 `--quantization-file PATH` reads an `NPUQ1` file ([numerics](numerics.md) section 3.3): `NPUQ1 C`
-with C equal to G·N, then one `weight_zero multiplier shift` line per output channel. The file
+with C equal to $GN$, then one `weight_zero multiplier shift` line per output channel. The file
 sets `quant.weight_zero_points`, `quant.multipliers` and `quant.shifts` together; a two-channel
 file for `native` rescale:
 
@@ -1243,11 +1243,11 @@ length 129.
 | `macs`, `weight_bytes_int8`, `bias_bytes_int32` | Per instance |
 | `lowered` | The `npu-sim` call: `M`, `N`, `K` per group, `G` groups, `calls` |
 
-Convolutions lower to M = out_h·out_w, N = out_c / G, K = kernel_h·kernel_w·in_c / G and carry
-their geometry as `--conv-*` flags, so a run reads the input footprint (`Gemm.conv_flags`);
-`Gemm.flags(conv=False)` runs the im2col matrix instead. Depthwise layers are G = channels and
-N = 1. `npuperf.workloads.split` cuts a call only when it exceeds a per-call limit of section
-3.4, along groups, then N, then M; a split piece of a convolution is a plain GEMM.
+Convolutions lower to `M = out_h * out_w`, `N = out_c / G`, `K = kernel_h * kernel_w * in_c / G`
+and carry their geometry as `--conv-*` flags, so a run reads the input footprint
+(`Gemm.conv_flags`); `Gemm.flags(conv=False)` runs the im2col matrix instead. Depthwise layers are
+G = channels and N = 1. `npuperf.workloads.split` cuts a call only when it exceeds a per-call limit
+of section 3.4, along groups, then N, then M; a split piece of a convolution is a plain GEMM.
 
 ### 13.4 Format index
 

@@ -1,5 +1,4 @@
-# ruff settings for the Python tools and tests. There is no [project] table: the tools use
-# only the standard library and run from the source tree.
+# ruff configuration for the Python tools and tests.
 [tool.ruff]
 line-length = 100
 target-version = "py310"

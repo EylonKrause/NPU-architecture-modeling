@@ -39,9 +39,10 @@ const std::vector<ConfigOption> option_table = {
     {"--seed", "shape.seed", "", "synthetic-tensor seed; the low 32 bits are used",
      NPU_FIELD(shape.seed)},
     {"--conv-input-h", "shape.conv.input_h", "",
-     "implicit convolution: NHWC input height; with -w and -c set, the activation operand is "
-     "the input's im2col view (M = output pixels, K = kernel_h*kernel_w*input_c/groups) and "
-     "panel loads read the input footprint; 0 is a plain GEMM operand",
+     "implicit convolution: NHWC input height; with --conv-input-w and --conv-input-c set, "
+     "the activation operand is the input's im2col view (M = output pixels, "
+     "K = kernel_h*kernel_w*input_c/groups) and panel loads read the input footprint; 0 is a "
+     "plain GEMM operand",
      NPU_FIELD(shape.conv.input_h)},
     {"--conv-input-w", "shape.conv.input_w", "", "implicit convolution: input width",
      NPU_FIELD(shape.conv.input_w)},
@@ -130,9 +131,7 @@ const std::vector<ConfigOption> option_table = {
     {"--weight-cache-bytes", "arch.weight_cache_bytes", "",
      "LRU weight-panel cache capacity; 0 disables it", NPU_FIELD(arch.weight_cache_bytes)},
     {"--activation-cache-bytes", "arch.activation_cache_bytes", "",
-     "LRU activation-panel cache capacity, keyed by group or channel tile, row tile and "
-     "reduction panel, so column tiles of a row tile reuse its panels; 0 disables it",
-     NPU_FIELD(arch.activation_cache_bytes)},
+     "LRU activation-panel cache capacity; 0 disables it", NPU_FIELD(arch.activation_cache_bytes)},
     {"--frequency-mhz", "arch.frequency_mhz", "X", "clock used to convert cycles to modeled time",
      NPU_FIELD(arch.frequency_mhz)},
     {"--cores", "arch.cores", "",

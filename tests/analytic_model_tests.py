@@ -4,9 +4,11 @@ result parser, on seeded random configurations and on pinned simulator cycle cou
 
 schedule() replays every request, so it must equal npu-sim cycle for cycle; analyze() must
 be exact in traffic, request counts, compute busy cycles and both caches' hits, its lower
-bound must hold, and its estimate must stay within the stated error. The convolution
-configurations add implicit convolution, the depthwise datapath and the activation cache;
-their footprints are also checked against a brute-force enumeration of kernel taps.
+bound must hold, its estimate must stay within 1% at the median and within 15% (serial),
+25% (AXI) or 30% (clusters) at the 95th percentile, and its bound class must match
+npu-sim's on more than 95% of runs. The convolution configurations add implicit
+convolution, the depthwise datapath and the activation cache; their footprints are also
+checked against a brute-force enumeration of kernel taps.
 """
 
 from __future__ import annotations

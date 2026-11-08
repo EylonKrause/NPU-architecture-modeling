@@ -106,8 +106,8 @@
 <text x="66.48" y="160.7" font-size="12" fill="#52514e" text-anchor="end">100</text>
 <text x="66.48" y="64.2" font-size="12" fill="#52514e" text-anchor="end">1,000</text>
 </g>
-<text x="354.68" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">arithmetic intensity (MAC per DRAM byte moved)</text>
-<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">MAC per cycle</text>
+<text x="354.68" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">arithmetic intensity (MAC/B of DRAM traffic)</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">throughput (MAC/cycle)</text>
 <g clip-path="url(#roofline-plot)">
 <path d="M75.48,358.85 L425.2,117.1 L633.88,117.1" fill="none" stroke="#0b0b0b" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <line x1="425.2" y1="60" x2="425.2" y2="446" stroke="#6f6e69" stroke-width="1" stroke-dasharray="2 3"/>

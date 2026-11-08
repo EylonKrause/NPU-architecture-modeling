@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="500" viewBox="0 0 820 500" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>MAC utilization vs per-core SRAM</title>
+<title>MAC utilization against per-core SRAM</title>
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="s10-plot"><rect x="68.76" y="58" width="470.64" height="388"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">MAC utilization vs per-core SRAM</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">MAC utilization against per-core SRAM</text>
 <text x="14" y="52" font-size="12" fill="#52514e">cores of client-16c and workstation-32c; tiles and cache split from npuperf.mapper per size</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="68.76" y1="446" x2="537.4" y2="446"/>

@@ -5,7 +5,6 @@ This document specifies the arithmetic of the integer GEMM engine (`npu-sim`, an
 floating-point transformer engine (`npu-transformer-demo`). It covers operand types,
 accumulation, requantization, per-channel parameters and their file formats, the compressed
 weight formats, the floating-point storage formats, and the oracles that check each of them.
-[Methodology](methodology.md#model-fidelity) section 3 defines the scope of the model.
 
 | Mechanism | Defining source |
 |---|---|
@@ -613,7 +612,7 @@ datapath with the scalar reference.
 | `core.weight-codec` | `tests/mobile_compression_core_tests.cpp` | Reference on unmodified weights | Encoded results unchanged after the expanded weights are overwritten; corrupted headers, lengths, bit widths, offsets and retained counts rejected; a 256-entry INT8 palette |
 | `sim.gemm-oracle` | `tests/integration.py` | Python integers | Fixture generation, accumulation, requantization, saturation and ReLU; external tensor files with extreme operands |
 | `sim.quantization` | `tests/quantization_tests.py` | TFLite (`common.cc`), gemmlowp (`fixedpoint.h`) and CMSIS-NN (`arm_nnsupportfunctions.h`), each transcribed from its source | Golden vectors through all four formulations and `npu-sim`; 2,400 random in-range, tie, extreme and small-shift cases through `npu-sim` in both TOSA modes; TFLite against CMSIS-NN in both roundings; per-channel `NPUQ1` files; INT4; grouped and depthwise GEMMs at three tilings |
-| `sim.weight-compression` | `tests/mobile_compression_tests.py` | Python model of encoded size, $\nu$, $R$ and decode cycles | Every palette width with INT4 and INT8 sources, asymmetric zero points, odd INT4 panels, empty sparse payloads, decoder overlap, cache accounting, timing-mode equivalence, capacity rejection |
+| `sim.weight-compression` | `tests/mobile_compression_tests.py` | Python model of encoded size, $\nu$, $E_r$ and decode cycles | Every palette width with INT4 and INT8 sources, asymmetric zero points, odd INT4 panels, empty sparse payloads, decoder overlap, cache accounting, timing-mode equivalence, capacity rejection |
 | `tools.npuperf` | `tests/npuperf_tests.py` | Transcription of TOSA `apply_scale_32` | The TFLite formulation in `npuperf.quant` against TOSA at the edges of every shift 2 to 62 and on 20,000 random cases; `quantize_multiplier` round trip |
 | `soc.transformer` | `tests/transformer_tests.py` | Python float model: `struct` binary16, bfloat16 by nearest-neighbor search, binary64 operations rounded to binary32 | Full block in all three precisions and head groupings; every finite binary16 encoding round-trips; 22 edge words and 1,800 random binary32 words through the probe |
 

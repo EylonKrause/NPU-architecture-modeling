@@ -6,10 +6,6 @@
 # instrumented together with the project: a project object freed while the SystemC scheduler
 # still references it faults inside kernel code, which ASan only checks when it is
 # instrumented.
-if(NPU_ENABLE_SANITIZERS AND NPU_SANITIZERS STREQUAL "")
-  message(DEPRECATION "NPU_ENABLE_SANITIZERS is deprecated; use -DNPU_SANITIZERS=undefined")
-  set(NPU_SANITIZERS undefined)
-endif()
 if(NOT NPU_SANITIZERS STREQUAL "")
   if(MSVC)
     message(FATAL_ERROR "NPU_SANITIZERS is supported with GCC and Clang only")

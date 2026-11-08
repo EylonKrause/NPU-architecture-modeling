@@ -1,5 +1,5 @@
 """Run an INT8 graph on the NPU model: Dense/MatMul/Conv2D/DepthwiseConv2D on the accelerator
-(convolutions via im2col; depthwise as one grouped call),
+(convolutions via im2col; depthwise as one grouped call when npu-sim has --groups),
 Add/ReLU/pooling/Flatten on the host. Every accelerator result is checked against a scalar
 Python reference before the next node runs.
 """

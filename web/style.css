@@ -1,7 +1,4 @@
-/* npu-sim live. Tokens first; dark values replace them under prefers-color-scheme.
-   Contrast (WCAG 2.2): text tokens reach 4.5:1 on --bg and --panel; chart marks reach 3:1
-   on --panel and on the lanes (--bg); --ink-* is the tile-number color on each stage's bar
-   (4.5:1); white on --accent-fill is 4.5:1. */
+/* npu-sim live. Light tokens first; prefers-color-scheme: dark overrides them. */
 
 :root {
   color-scheme: light;

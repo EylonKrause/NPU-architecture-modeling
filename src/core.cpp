@@ -226,7 +226,7 @@ void validate_compute_rates(const Config& config) {
     const auto& compute = config.arch.compute;
     require(compute.macs_per_cycle >= 1 && compute.macs_per_cycle <= max_timing_value &&
                 compute.pipeline_cycles <= max_timing_value,
-            "compute rate or pipeline timing is outside supported limits");
+            "MACs per cycle must be in 1..1000000000 and pipeline cycles at most 1000000000");
 }
 
 std::uint64_t encoded_weight_bound(const Config& config, std::uint64_t count) {
@@ -1411,10 +1411,10 @@ void tile_store_runs(const Config& config, const Tile& tile, std::vector<Address
 }
 
 Burst next_burst(const AxiConfig& axi, std::uint64_t address, std::uint64_t end) {
-    require(address < end, "a burst starts inside its run");
+    require(address < end, "burst address is outside its run");
     require(
         axi.data_bytes >= 1 && axi_boundary_bytes % axi.data_bytes == 0 && axi.max_burst_beats >= 1,
-        "AXI beats must divide 4 KiB and bursts hold at least one beat");
+        "AXI data bytes must divide 4 KiB and max burst beats must be at least 1");
     const auto first_beat = address / axi.data_bytes;
     const auto boundary = checked_mul(address / axi_boundary_bytes + 1, axi_boundary_bytes);
     const auto beat_limit =

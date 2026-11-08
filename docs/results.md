@@ -1,12 +1,10 @@
 # Results
 
-This document reports the ten studies of `npuperf/studies.py` on the four design points of
+This document reports the ten studies of `npuperf/studies.py` on the four configurations of
 [design points](design-points.md). Every table between `generated` markers and every figure in
 [figures/](figures) is written by `python3 -m npuperf.reproduce` from `npu-sim` runs. The
 tables were generated at tag `v1.0.0`. The CI job `results-drift` regenerates the quick studies
-(S3, S4, S5, S6 and S8) and fails on any difference. The mechanisms the analyses cite are
-specified in [architecture](architecture.md), and [methodology](methodology.md#model-fidelity)
-section 3 defines the scope of the model.
+(S3, S4, S5, S6 and S8) and fails on any difference.
 
 | Convention | Definition |
 |---|---|
@@ -15,19 +13,19 @@ section 3 defines the scope of the model.
 | Convolutions | On the NHWC input footprint ([architecture](architecture.md) section 4.4), or a 1x1 convolution on its plain operand when the mapper finds that faster; depthwise layers on the point's depthwise datapath |
 | Run mode | Bit-exact when a call fits the functional limits and 400,000,000 MACs, `--timing-only` otherwise; dense timing does not depend on tensor values |
 | DRAM bytes | Whole AXI beats, as the DRAM timeline charges them: a partial beat counts in full |
-| MAC utilization | MACs over cycles times the array's peak MACs per cycle, the depthwise layers' MACs included |
+| MAC utilization | MACs over cycles times the array's peak MAC/cycle, the depthwise layers' MACs included |
 | TOP/s | Two operations per MAC |
 | Bound class | `analytic.observed_bound`: compute-bound when the busiest core's compute-busy cycles are at least its memory time; otherwise bandwidth-bound when the data cycles of its busier channel are at least the compute-busy cycles, and latency-bound when they are not. S1 counts bandwidth- and latency-bound layers as memory-bound |
 | Consistency checks | A result above a roof, a utilization above 1, a speedup above the core count or a bandwidth above the bus stops the study (`SanityError`) |
 
-| Study | Question | Figure |
+| Study | Subject | Figure |
 |---|---|---|
 | S1 | Latency, throughput and traffic of five workloads on four points | |
 | S2 | Where each layer sits under its point's roofs | [rooflines](#s2-roofline-per-design-point) |
 | S3 | Read bandwidth against AXI outstanding transactions | [s3-outstanding](figures/s3-outstanding.svg) |
 | S4 | Cluster speedup for the m and n partitions | [s4-scaling-conv](figures/s4-scaling-conv.svg), [s4-scaling-gemv](figures/s4-scaling-gemv.svg) |
 | S5 | Output- against weight-stationary array utilization | [s5-dataflow](figures/s5-dataflow.svg) |
-| S6 | Accuracy of the closed-form model against `npu-sim` | [s6-analytic](figures/s6-analytic.svg) |
+| S6 | Accuracy of the analytic model (`analyze()`) against `npu-sim` | [s6-analytic](figures/s6-analytic.svg) |
 | S7 | LLM decode with palette-compressed weights | [s7-compression](figures/s7-compression.svg) |
 | S8 | Cycles against SRAM over a tiling search | [s8-pareto](figures/s8-pareto.svg) |
 | S9 | Sizing the depthwise datapath | [s9-depthwise](figures/s9-depthwise.svg) |
@@ -58,7 +56,7 @@ Each network runs layer by layer on each point, every tensor in DRAM
 <!-- end:s1-networks -->
 
 Only ResNet-50 has compute-bound layers, 11% to 33% of them; every MobileNetV2 and BERT layer
-is memory-bound on every point. The configured tiles' operand intensity, 16 MAC per byte on
+is memory-bound on every point. The configured tiles' operand intensity, 16 MAC/B on
 `edge-256` and 32 on the other points, lies below every ridge ([design points](design-points.md)
 section 6); only cache hits and the input footprints of convolutions raise a layer's intensity
 above that of its tiles.
@@ -106,8 +104,8 @@ whole-beat bytes of the depthwise layers' AXI traffic.
 
 MobileNetV2's 17 depthwise layers hold 6.9% of its MACs (`workloads/mobilenet_v2_1.0_224.json`)
 and take 27.5% to 35.4% of its cycles and 32.7% to 43.2% of its DRAM bytes. A 3x3 depthwise
-layer performs 9 MACs per output byte and at most 9 per input byte, at most 4.5 MAC per byte
-moved, far below every ridge, and S1.1 classifies each of these layers as memory-bound.
+layer performs 9 MACs per output byte and at most 9 per input byte, at most 4.5 MAC/B
+of traffic, far below every ridge, and S1.1 classifies each of these layers as memory-bound.
 Without them MobileNetV2 takes 5.24 ms on `edge-256` and 0.182 ms on `client-16c`, and its MAC
 utilization rises from 14.5% to 20.9% and from 5.7% to 7.8%. S9 sizes the datapath that runs
 them.
@@ -144,7 +142,7 @@ the weight bytes set the prefill time, and 1.16x on `workstation-32c` (5.02 to 4
 
 ## S2 Roofline per design point
 
-Every GEMM layer of the five workloads as achieved MAC/cycle against MAC per DRAM byte moved,
+Every GEMM layer of the five workloads as achieved MAC/cycle against MAC/B of DRAM traffic,
 with the S1 mappings and INT8 weights. Bytes are whole AXI beats. The solid roofs are the
 array's peak and the DRAM rate; the dotted line is the depthwise datapath's peak, the compute
 roof of the depthwise layers. The study checks each mark against the roof of the datapath it
@@ -156,31 +154,31 @@ ran on.
 ![workstation-32c roofline](figures/s2-roofline-workstation-32c.svg)
 
 *Figure S2. Rooflines of `edge-256`, `mobile-2k`, `client-16c` and `workstation-32c`: every
-GEMM layer of the five workloads as achieved MAC/cycle against MAC per DRAM byte.*
+GEMM layer of the five workloads as achieved MAC/cycle against MAC/B of DRAM traffic.*
 
 A mark's vertical gap to the lower roof at its intensity is time the layer spends outside both
 rates: the read latency of each panel request (S3), the pipeline charge per panel, array waves
 that leave rows or columns idle (S5), and cluster cores without work units (S4). The depthwise
-layers, at most 4.5 MAC per byte (S1.2), form the low-intensity end of each plot. The ridge
-moves from 32 MAC per byte on `edge-256` to 163.8 on `client-16c`, whose 16 cores share 100 B
-per cycle, and falls to 49.13 on `workstation-32c`, whose 32 cores share 667.
+layers, at most 4.5 MAC/B (S1.2), form the low-intensity end of each plot. The ridge moves
+from 32 MAC/B on `edge-256` to 163.8 on `client-16c`, whose 16 cores share 100 B/cycle, and
+falls to 49.13 on `workstation-32c`, whose 32 cores share 667.
 
 ## S3 AXI outstanding transactions
 
 An INT4 GEMV of $1 \times 4096 \times 4096$ streams its weights through one core's read
-channel: 16-byte beats, 16-beat bursts, unlimited DRAM, read and write latencies both $L$, at
-100 and at 400 cycles, and read outstanding limit $N$ from 1 to 32, in the default
+channel: 16-byte beats, 16-beat bursts, unlimited DRAM, read and write latencies $L_r = L_w$,
+at 100 and at 400 cycles, and read outstanding limit $N_r$ from 1 to 32, in the default
 $8 \times 8$ tiles. The formula column is the channel's steady state, equation 5.5 of
-[architecture](architecture.md) in bytes per cycle, $\min(D, NbD/(L + b))$ with $D = 16$ bytes
-and $b = 16$ beats.
+[architecture](architecture.md) in bytes per cycle, $\min(D, N_r b D/(L_r + b))$ with
+$D = 16$ bytes and $b = 16$ beats.
 
 ![AXI outstanding](figures/s3-outstanding.svg)
 
 *Figure S3. Read bandwidth of the INT4 GEMV $1 \times 4096 \times 4096$ against outstanding AXI
-reads at $L$ = 100 and 400 cycles; dashed lines are the steady-state formula.*
+reads at $L_r$ = 100 and 400 cycles; dashed lines are the steady-state formula.*
 
 <!-- generated:s3-outstanding -->
-| Outstanding N | L=100 npu-sim (B/cycle) | L=100 formula (B/cycle) | L=400 npu-sim (B/cycle) | L=400 formula (B/cycle) |
+| $N_r$ | `npu-sim`, $L_r$ = 100 (B/cycle) | Formula, $L_r$ = 100 (B/cycle) | `npu-sim`, $L_r$ = 400 (B/cycle) | Formula, $L_r$ = 400 (B/cycle) |
 |---|---:|---:|---:|---:|
 | 1 | 2.19 | 2.21 | 0.61 | 0.62 |
 | 2 | 4.33 | 4.41 | 1.20 | 1.23 |
@@ -191,18 +189,18 @@ reads at $L$ = 100 and 400 cycles; dashed lines are the steady-state formula.*
 | 32 | 14.84 | 16.00 | 12.19 | 16.00 |
 <!-- end:s3-outstanding -->
 
-Below saturation `npu-sim` runs 0.9% to 4.5% under the formula for $N \le 4$. The formula reaches
-the 16 B/cycle bus from $N = 8$ at $L = 100$ and from $N = 26$ at $L = 400$; `npu-sim` reaches
-14.84 B/cycle from $N = 8$ at $L = 100$ and 12.19 B/cycle at $N = 32$ for $L = 400$. The
-plateau is a request boundary: the load process issues one panel request and waits for its
-completion before the next ([architecture](architecture.md) section 5.2), so the read latency
-is exposed once per request.
-A $1 \times 8$ tile's panel moves 20,512 bytes in 1,282 beats, and `npu-sim` reports a mean
-request latency of 1,382 cycles at $L = 100$ and 1,682 at $L = 400$, the beats plus $L$:
+Below saturation `npu-sim` runs 0.9% to 4.5% under the formula for $N_r \le 4$. The formula reaches
+the 16 B/cycle bus from $N_r = 8$ at $L_r = 100$ and from $N_r = 26$ at $L_r = 400$; `npu-sim`
+reaches 14.84 B/cycle from $N_r = 8$ at $L_r = 100$ and 12.19 B/cycle at $N_r = 32$ for
+$L_r = 400$. The plateau is set by the request boundary: the load process issues one panel request
+and waits for its completion before the next ([architecture](architecture.md) section 5.2), so the
+read latency is exposed once per request. A $1 \times 8$ tile's panel moves 20,512 bytes in 1,282
+beats, and `npu-sim` reports a mean request latency of 1,382 cycles at $L_r = 100$ and 1,682 at
+$L_r = 400$, the beats plus $L_r$:
 
 $$\frac{20{,}512}{1{,}282 + 100} = 14.84, \qquad \frac{20{,}512}{1{,}282 + 400} = 12.19 \ \text{B/cycle}$$
 
-A panel request of $x$ bytes therefore sustains at most $x / (L + x/D)$ bytes per cycle per
+A panel request of $x$ bytes therefore sustains at most $x / (L_r + x/D)$ bytes per cycle per
 core, whatever the outstanding limit; deeper panels and wider tiles raise the plateau.
 
 ## S4 Multi-core scaling
@@ -411,7 +409,7 @@ reduction with 2 slots, 256.5 KiB and 81,641 cycles, and `npuperf.mapper` picks 
 rows are 4 output rows of 28 pixels, so an interior tile's panel reads 6 whole input rows,
 21,504 bytes, where the same rows of the im2col matrix hold 129,024. The mapper gives the
 10.5 KiB left over to the weight cache, which leaves the cycles at 81,641. The front continues
-to 64,890 cycles at 848 KiB: 3.3 times the SRAM reduces cycles by 20.5%. At the array's 2,048
+to 64,890 cycles at 848 KiB: 3.3x the SRAM reduces cycles by 20.5%. At the array's 2,048
 MAC/cycle the layer's MACs take 56,448 cycles, so the pick runs at 69.1% MAC utilization and
 the end of the front at 87.0%.
 

@@ -14,7 +14,7 @@
   "https://arxiv.org/abs/1810.04805",
   "https://arxiv.org/abs/2004.02984"
  ],
- "notes": "One BERT-base encoder layer at sequence 128, batch 1: hidden 768, 12 heads x 64, FFN 3072, GELU, post-LN, biases on every projection. The full encoder is this layer x12 (totals.encoder_x12). Attention is bidirectional.",
+ "notes": "One BERT-base encoder layer at sequence 128, batch 1: hidden 768, 12 heads x 64, FFN 3072, GELU, post-LN, biases on every projection. The full encoder is this layer x12 (totals.encoder_x12).",
  "layers": [
   {
    "name": "attention.self.query",

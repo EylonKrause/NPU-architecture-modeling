@@ -16,7 +16,6 @@ list(APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 option(NPU_FETCH_SYSTEMC "Fetch the pinned SystemC dependency" ON)
 set(NPU_SANITIZERS "" CACHE STRING
   "Sanitizers for the project and a fetched SystemC: any of address;undefined;leak")
-option(NPU_ENABLE_SANITIZERS "Deprecated: same as NPU_SANITIZERS=undefined" OFF)
 option(NPU_WARNINGS_AS_ERRORS "Treat warnings in project code as errors" OFF)
 option(NPU_COVERAGE "Instrument project code for gcov line coverage" OFF)
 option(NPU_ENABLE_ONNX_TESTS "Test the optional ONNX importer against ONNX Runtime" OFF)

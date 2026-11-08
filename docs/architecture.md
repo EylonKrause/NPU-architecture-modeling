@@ -87,6 +87,19 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 | $C_w, C_a$ | Weight-cache and activation-cache bytes per core | `arch.weight_cache_bytes`, `arch.activation_cache_bytes` |
 | $N_c$ | Cores | `arch.cores` |
 
+### 1.4 Abbreviations
+
+| Term | Meaning |
+|---|---|
+| GEMV | Matrix-vector product, a GEMM with $M = 1$ |
+| LUT | Lookup table of a palette-encoded weight panel ([numerics](numerics.md) section 4.2) |
+| OPP | Operating performance point, a voltage and frequency pair ([SoC integration](soc-integration.md) section 2.6) |
+| OS | Output-stationary (section 3.3) |
+| PE | Processing element of the systolic array |
+| TPOT | Time per output token |
+| TTFT | Time to first token |
+| WS | Weight-stationary (section 3.4) |
+
 ## 2 Design parameters
 
 ### 2.1 Parameter table
@@ -103,7 +116,7 @@ section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the check
 | `arch.compute.macs_per_cycle` | `--macs-per-cycle` | MAC/cycle | 1 to $10^9$ | 64 | Vector datapath throughput $P$; unused when an array is configured |
 | `arch.compute.array_rows` | `--array-rows` | PE rows | 0, or 1 to 256 | 0 | Array rows $A_r$; 0 together with `array_cols` 0 selects the vector datapath |
 | `arch.compute.array_cols` | `--array-cols` | PE columns | 0, or 1 to 256 | 0 | Array columns $A_c$ |
-| `arch.compute.dataflow` | `--dataflow` | enumeration | `os`, `ws` | `os` | Array dataflow, section 3.3 and 3.4 |
+| `arch.compute.dataflow` | `--dataflow` | enumeration | `os`, `ws` | `os` | Array dataflow, sections 3.3 and 3.4 |
 | `arch.compute.pipeline_cycles` | `--pipeline-cycles` | cycles | 0 to $10^9$ | 4 | $C_{\mathrm{pipe}}$, charged once per reduction panel |
 | `arch.compute.weight_decode_values_per_cycle` | `--weight-decode-values-per-cycle` | values/cycle | 1 to $10^9$ | 16 | Decoder throughput $V$ |
 | `arch.compute.depthwise_macs_per_cycle` | `--depthwise-macs-per-cycle` | MAC/cycle | 0 to $10^9$ | 0 | Depthwise datapath throughput $P_{\mathrm{dw}}$, section 3.5; 0 runs depthwise problems as grouped GEMMs |
@@ -160,7 +173,7 @@ section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the check
 
 The MAC datapath is one of three engines, selected per job (`mac_cycles`, `src/core.cpp`):
 
-| Engine | Selected by | Peak MACs per cycle per core |
+| Engine | Selected by | Peak MAC/cycle per core |
 |---|---|---|
 | Vector datapath | `array_rows` = `array_cols` = 0 | $P$ |
 | Systolic array, output-stationary or weight-stationary | `array_rows`, `array_cols` in 1 to 256 | $A_r A_c$ |
@@ -421,7 +434,7 @@ row; any other panel reads one run of its channels per pixel of each span (secti
 input pixel is read once per panel whose kernel rows touch it; the im2col matrix holds it once
 per kernel tap.
 
-The table runs a 3x3 convolution with unit stride and one pixel of padding on an
+The rows below come from a 3x3 convolution with unit stride and one pixel of padding on an
 $8 \times 8 \times 16$ input, $N = 16$, in tiles of two output rows: `npu-sim --m 64 --n 16
 --k 144 --tile-m 16 --tile-n 16 --memory-model axi`, with `--conv-input-h 8 --conv-input-w 8
 --conv-input-c 16 --conv-kernel-h 3 --conv-kernel-w 3` and 1 for each `--conv-pad-*` flag in
@@ -467,7 +480,7 @@ four accumulator bytes and one output byte per element. $B_{\mathrm{SRAM}}$ must
 `arch.sram_bytes`; a configuration that exceeds it is rejected, and the model has no spill path.
 The result reports $B_{\mathrm{SRAM}}$ per core as `scratchpad_bytes`.
 
-For the `client-16c` design point of [design points](design-points.md) section 4
+For `client-16c` ([design points](design-points.md) section 4)
 ($T_m = T_n = 64$, $K_\pi = 256$, $N_s = P_b = 2$, $Q = 0$, dense INT8, $C_w = 89{,}600$,
 $C_a = 0$):
 
@@ -515,9 +528,9 @@ In the loop nest of section 4.2 the $n_k$ activation panels of one row tile recu
 column tile of the group, $n_k$ panel loads apart. When they fit $C_a$ together, every column
 tile after the first hits, and the activation bytes fall by the factor $\lceil N / T_n \rceil$.
 The convolution of section 4.4 with $N = 32$, two column tiles, reads 3,584 activation bytes;
-with $C_a = 512$ bytes, its largest footprint, it reads 1,792, with 4 hits and 4 misses. On the
-depthwise datapath a line belongs to one channel tile, which no other tile reads, so the cache
-records misses and no hits. $C_a$ enters the SRAM budget of equation 4.3.
+with $C_a = 512$ bytes, its largest footprint, it reads 1,792, with four hits and four misses.
+On the depthwise datapath a line belongs to one channel tile, which no other tile reads, so the
+cache records misses and no hits. $C_a$ enters the SRAM budget of equation 4.3.
 
 ## 5 Memory system
 
@@ -673,8 +686,7 @@ One arbiter process grants every channel of every core and owns the DRAM timelin
 it waits until no other process has activity pending at that time, so every request issued in
 the cycle is queued, and then issues one burst on each channel whose next issue cycle is now, in
 a fixed order: core 0 read, core 0 write, core 1 read, and so on. Grant order, and with it the
-DRAM gap each burst takes, depends on core index and direction alone; SystemC process evaluation
-order never decides a grant.
+DRAM gap each burst takes, depends only on core index and direction.
 
 ## 6 Cluster
 
@@ -814,10 +826,9 @@ One SystemC time unit is one cycle; the kernel resolution is 1 ns
 | `event` | One `wait` of the stage duration | Default; host run time grows with the number of stage events |
 | `cycle` | One `wait` of one cycle per cycle of the stage; the AXI arbiter also advances one cycle at a time | Cross-check of the event schedule; limited to $10^7$ cycles of serial work |
 
-Both modes produce identical cycle counts, statistics and traces; `tests/architecture_tests.py`
-compares them, and figure 2's job with `--dram-bytes-per-cycle 6` produces the same trace file
-and the same statistics in both modes. Frequency enters only the reported
-`modeled_latency_ns`: $1000\,C / f$ for $C$ cycles at $f$ MHz.
+Both modes produce identical cycle counts, statistics and traces (`tests/architecture_tests.py`).
+Frequency enters only the reported `modeled_latency_ns`: $1000\,C / f$ for $C$ cycles at
+$f$ MHz.
 
 `sim.timing_only` times the schedule without tensors: no numerics, no reference, dense weights
 only, up to $10^{13}$ MACs. It reports `"numerics": "skipped"`.

@@ -7,7 +7,7 @@ order follows call order and no output depends on time or randomness, so committ
 diff cleanly. The opaque white background keeps a figure legible on GitHub's light and dark
 themes.
 
-    fig = Figure(title="Roofline", x_label="MAC per DRAM byte", y_label="MAC per cycle",
+    fig = Figure(title="Roofline", x_label="MAC/B", y_label="MAC/cycle",
                  x_scale="log", y_scale="log")
     fig.line([0.1, 4, 1000], [1.6, 64, 64], label="roof")
     fig.scatter([3.8], [26.8], label="layer", point_labels=["conv1"])

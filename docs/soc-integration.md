@@ -3,14 +3,13 @@
 Three SystemC executables place the NPU model in a system context: a TLM-2.0 coprocessor with a
 register interface and an interrupt, a multi-core platform with QoS dispatch, DVFS and power
 gating, and a transformer decoder engine with a DRAM-resident KV cache. A Python tool adds an
-energy estimate to any `npu-sim` result. [Methodology](methodology.md#model-fidelity) section 3
-defines the scope of all four.
+energy estimate to any `npu-sim` result.
 
 | Executable | Source | Models | CTest |
 |---|---|---|---|
 | `npu-tlm-demo` | `src/tlm_platform.cpp`, `include/npu/tlm_platform.hpp` | Host, NPU coprocessor and DRAM on TLM-2.0 sockets; MMIO programming, DMA, completion interrupt | `soc.tlm` |
 | `npu-mobile-demo` | `src/mobile_platform.cpp` | 1 to 8 NPU cores; priority dispatch, shared DRAM channel, per-core OPP and power gating, energy account | `soc.multicore` |
-| `npu-transformer-demo` | `src/transformer.cpp` | Decoder layers; batched prefill, per-token decode, DRAM-resident KV cache, TTFT and TPOT | `soc.transformer` |
+| `npu-transformer-demo` | `src/transformer.cpp` | Decoder layers; batched prefill, per-token decode, DRAM-resident KV cache, time to first token (TTFT) and time per output token (TPOT) | `soc.transformer` |
 | `python3 -m npuperf.energy` | `npuperf/energy.py` | MAC, DRAM and static energy of one `npu-sim` result | `tools.energy` |
 
 Each SystemC executable prints one JSON object on stdout and diagnostics on stderr, accepts
@@ -44,11 +43,11 @@ The register block occupies offsets `0x00` to `0x1F` of the `npu.registers` targ
 
 | DRAM address | Size | Content | Written by | Read by |
 |---|---|---|---|---|
-| `0x0000` | 21 B | A[3][7], int8, row-major | host | engine DMA |
-| `0x1000` | 35 B | W[7][5], int8, row-major | host | engine DMA |
-| `0x2000` | 20 B | bias[5], int32, little-endian | host | engine DMA |
-| `0x3000` | 15 B | C[3][5], int8, row-major | engine DMA | host |
-| `0x4000` | 60 B | accumulators[3][5], int32, little-endian | engine DMA | host |
+| `0x0000` | 21 B | A[3][7], INT8, row-major | host | engine DMA |
+| `0x1000` | 35 B | W[7][5], INT8, row-major | host | engine DMA |
+| `0x2000` | 20 B | bias[5], INT32, little-endian | host | engine DMA |
+| `0x3000` | 15 B | C[3][5], INT8, row-major | engine DMA | host |
+| `0x4000` | 60 B | accumulators[3][5], INT32, little-endian | engine DMA | host |
 | `0x5000` | 4 B | scratch; read by the host during each job to contend with the DMA | none | host |
 
 The addresses are the `*_address` constants in `include/npu/tlm_platform.hpp`.
@@ -144,7 +143,7 @@ The default run (`--jobs 2`) traces the following edges. Job 0 runs with `EN` = 
 masked and is polled.
 
 | Cycle | Event |
-|---|---|
+|---:|---|
 | 25 | Job 0 `START`; `BUSY` rises |
 | 93 | Job 0 completes; `BUSY` falls, `DONE` and `irq` rise, `JOBS` = 1 |
 | 106 | `IRQ_ACK`; `DONE` and `irq` fall |
@@ -220,7 +219,7 @@ Cycle timeline of job 0 in the default run, relative to the `START` write at cyc
 intervals are half-open, `[begin, end)`.
 
 | Cycle | Host | Engine | DRAM occupancy |
-|---|---|---|---|
+|---:|---|---|---|
 | 0 | `START` = 1 (1 cycle) | | |
 | 1 | read `STATUS` = `0x1` | start latch serviced; read A, 21 B | A `[1, 6)` |
 | 2 | `START` = 1 refused (0 cycles); scratch read of 4 B issued | | |
@@ -266,7 +265,7 @@ within DRAM; a debug read takes zero time and stays out of the traffic and error
 debug write returns `TLM_COMMAND_ERROR_RESPONSE`. The register target has no debug interface.
 The engine has no error status: a DMA access that returns an error ends the simulation.
 
-Once per run the host issues 11 invalid accesses, six to the registers and five to DRAM, and in
+Once per run the host issues 11 invalid accesses, 6 to the registers and 5 to DRAM, and in
 every job one `START` while `BUSY`. The run fails unless the targets' error counters sum to the
 host's count, reported as `expected_protocol_errors` (13 for two jobs).
 
@@ -309,10 +308,10 @@ The engine calls the `npu-sim` kernel (`npu::compute_tile`, `npu::tile_compute_c
 | Parameter | Value |
 |---|---|
 | GEMM | $C = A W + \mathrm{bias}$, $M = 3$, $N = 5$, $K = 7$ |
-| Tile | 2 x 3 outputs, one reduction panel of 7 |
-| Datapath | Vector datapath, 4 MACs per cycle, 2 pipeline cycles per panel |
+| Tile | $2 \times 3$ outputs, one reduction panel of 7 |
+| Datapath | Vector datapath, 4 MAC/cycle, 2 pipeline cycles per panel |
 | Requantization | `native`, multiplier 1, shift 4, round half to even, zero points A = -3, W = 2, output = 0 |
-| Outputs | int8 C and int32 accumulators, both stored to DRAM |
+| Outputs | INT8 C and INT32 accumulators, both stored to DRAM |
 
 Tile cycles are $\lceil M_t N_t K / 4 \rceil + 2$. Requantization is defined in
 [numerics](numerics.md).
@@ -385,7 +384,7 @@ C = \left\lceil \tfrac{mnk}{P} \right\rceil + c_{\mathrm{pipe}}, \qquad
 t_{\mathrm{compute}} = \tfrac{1000\,C}{f_{\mathrm{MHz}}}\ \mathrm{ns}
 $$
 
-The write carries an int8 output and an int32 accumulator per element. $P$ is
+The write carries an INT8 output and an INT32 accumulator per element. $P$ is
 `--macs-per-cycle` and $c_{\mathrm{pipe}}$ is `--pipeline-cycles`. Time resolution is 1 ps.
 
 ### 2.3 Scheduling
@@ -445,7 +444,7 @@ $$
 voltages do not decrease, within 100 to 2000 mV. The default table is:
 
 | Index | MHz | mV |
-|---|---|---|
+|---:|---:|---:|
 | 0 | 100 | 700 |
 | 1 | 200 | 800 |
 | 2 | 400 | 900 |
@@ -516,7 +515,7 @@ build/release/npu-mobile-demo --cores 1 --jobs 3 --batch-size 1 --arrival-ns 100
 ```
 
 | Term | Count | pJ |
-|---|---|---|
+|---|---|---:|
 | Compute | 3 jobs x 512 MACs at $V = V_{\mathrm{ref}}$ = 800 mV | 3,072 |
 | DRAM | 352 B read + 480 B written | 2,496 |
 | Active | 676 ns | 3,380 |
@@ -530,7 +529,7 @@ and reads 224 B; jobs 1 and 2 hit it and read their 64 B of activations.
 
 ### 2.9 Example runs
 
-Core scaling, eight compute-bound jobs of $8 \times 8 \times 64$ at 1 MAC per cycle (4100 cycles,
+Core scaling, eight compute-bound jobs of $8 \times 8 \times 64$ at 1 MAC/cycle (4,100 cycles,
 20.5 µs per job at 200 MHz):
 
 ```sh
@@ -538,7 +537,7 @@ build/release/npu-mobile-demo --cores C --jobs 8 --m 8 --n 8 --k 64 --macs-per-c
 ```
 
 | Cores | `simulation_ns` | Speedup | `bus_busy_ns` | `bus_wait_ns` | Cache hits / misses |
-|---|---|---|---|---|---|
+|---:|---:|---:|---:|---:|---|
 | 1 | 164,590 | 1.00 | 578 | 0 | 7 / 1 |
 | 2 | 82,392 | 2.00 | 612 | 74 | 6 / 2 |
 | 4 | 41,404 | 3.98 | 680 | 444 | 4 / 4 |
@@ -547,7 +546,7 @@ build/release/npu-mobile-demo --cores C --jobs 8 --m 8 --n 8 --k 64 --macs-per-c
 Each additional core misses the weight cache once, so bus time grows with the core count, and
 cores that start or finish together queue on the channel.
 
-Governor comparison, 12 jobs released in batches of three every 1000 ns with priorities
+Governor comparison, 12 jobs released in batches of three every 1,000 ns with priorities
 `0,3,1` on the default two cores and OPP table. `--mac-pj 1` makes `compute_pj` the
 voltage-weighted MAC count $\sum_j mnk\,(V_j/V_{\mathrm{ref}})^2$.
 
@@ -557,15 +556,15 @@ build/release/npu-mobile-demo --jobs 12 --batch-size 3 --arrival-ns 1000 --prior
 ```
 
 | D (ns) | Governor | Jobs at OPP 0 / 1 / 2 | OPP switches | Deadline misses | Max response (ns) | `compute_pj` |
-|---|---|---|---|---|---|---|
-| 1000 | fixed | 0 / 12 / 0 | 0 | 0 | 450 | 6144 |
-| 1000 | deadline | 12 / 0 / 0 | 2 | 0 | 810 | 4704 |
-| 450 | fixed | 0 / 12 / 0 | 0 | 0 | 450 | 6144 |
-| 450 | deadline | 8 / 0 / 4 | 9 | 4 | 562 | 5728 |
-| 300 | fixed | 0 / 12 / 0 | 0 | 4 | 450 | 6144 |
-| 300 | deadline | 0 / 8 / 4 | 7 | 4 | 374 | 6688 |
+|---:|---|---|---:|---:|---:|---:|
+| 1,000 | fixed | 0 / 12 / 0 | 0 | 0 | 450 | 6,144 |
+| 1,000 | deadline | 12 / 0 / 0 | 2 | 0 | 810 | 4,704 |
+| 450 | fixed | 0 / 12 / 0 | 0 | 0 | 450 | 6,144 |
+| 450 | deadline | 8 / 0 / 4 | 9 | 4 | 562 | 5,728 |
+| 300 | fixed | 0 / 12 / 0 | 0 | 4 | 450 | 6,144 |
+| 300 | deadline | 0 / 8 / 4 | 7 | 4 | 374 | 6,688 |
 
-With a 1000 ns deadline the governor runs every job at 700 mV and cuts compute energy by the
+With a 1,000 ns deadline the governor runs every job at 700 mV and cuts compute energy by the
 factor $(700/800)^2 = 0.766$. With 450 ns it misses the four priority-0 jobs (0, 3, 6 and 9)
 that the fixed governor meets: the first two jobs of each batch take the slowest OPP that meets
 their own deadline and keep both cores busy. In the first batch the third job is dispatched at
@@ -578,7 +577,7 @@ jobs.
 |---|---|---|---|
 | `--cores` | 1 to 8 | 2 | Cores |
 | `--jobs` | 1 to 128 | 6 | Jobs |
-| `--models` | 1..jobs | 1 | Weight sets; job $i$ uses set $i \bmod$ models |
+| `--models` | 1 to `--jobs` | 1 | Weight sets; job $i$ uses set $i \bmod$ `--models` |
 | `--m`, `--n` | 1 to 64 | 4, 8 | Output rows, columns |
 | `--k` | 1 to 256 | 16 | Reduction depth |
 | `--seed` | 0 to 4,294,967,295 | 1 | Input pattern |
@@ -698,7 +697,7 @@ $$
 A configuration is admitted when
 $B_{\mathrm{act}} + B_{\mathrm{score}} + B_{\mathrm{kv}} + \max(d, f)\,b \le B_{\mathrm{SRAM}}$, so
 the weight buffer holds at least one column. `reserved_sram_bytes` reports the sum of the four
-buffers; the defaults reserve 576 + 1024 + 1024 + 1024 = 3648 bytes.
+buffers; the defaults reserve 576 + 1,024 + 1,024 + 1,024 = 3,648 bytes.
 
 ### 3.6 Timing
 
@@ -724,7 +723,7 @@ tensor rate is in MACs per cycle at every storage precision.
 | `tpot_mean_cycles` | `decode_cycles` / `decode_tokens` |
 | `workload_cycles` | `prefill_cycles` + `decode_cycles`; excludes the `--verify-lifecycle` checks, which `simulation_cycles` includes |
 
-Prompt-length sweep, two layers with $d = 256$, $H = 8$, $H_{kv} = 2$, $f = 1024$, fp16, at the
+Prompt-length sweep, two layers with $d = 256$, $H = 8$, $H_{kv} = 2$, $f = 1024$, FP16, at the
 default rates (64 MACs, 16 vector ops and 32 DMA bytes per cycle) and 1 MiB SRAM:
 
 ```sh
@@ -733,7 +732,7 @@ build/release/npu-transformer-demo --dim 256 --heads 8 --kv-heads 2 --ff-dim 102
 ```
 
 | S | `ttft_cycles` | TTFT / S | `tpot_mean_cycles` | `weight_read_bytes` | `kv_dram_read_bytes` |
-|---|---|---|---|---|---|
+|---:|---:|---:|---:|---:|---:|
 | 1 | 149,892 | 149,892.0 | 150,071 | 34,228,224 | 18,432 |
 | 8 | 367,444 | 45,930.5 | 150,337 | 34,228,224 | 47,104 |
 | 32 | 1,121,536 | 35,048.0 | 151,249 | 34,228,224 | 145,408 |
@@ -753,22 +752,22 @@ build/release/npu-transformer-demo --dim 2048 --heads 32 --kv-heads 8 --ff-dim 8
 ```
 
 | Request | DMA cycles | Tensor cycles | Vector cycles | Total |
-|---|---|---|---|---|
+|---|---:|---:|---:|---:|
 | Prefill, $S = 16$ (TTFT) | 3,806,518 | 15,213,056 | 80,004 | 19,099,578 |
 | Decode, mean of 8 (TPOT) | 3,802,970 | 951,584 | 5,146 | 4,759,700 |
 
 Prefill is tensor-bound (80% of TTFT) and decode is DMA-bound (80% of TPOT): both requests stream
 the same 121,643,008 weight bytes, and prefill spends 16 times the projection MACs. TPOT rises by
-140 cycles per token, from 4,759,210 to 4,760,190: each step loads 2048 more KV bytes (64 DMA
+140 cycles per token, from 4,759,210 to 4,760,190: each step loads 2,048 more KV bytes (64 DMA
 cycles) and attends over one more key (64 tensor and 12 vector cycles).
 
 Storage precision, same command with `--precision`:
 
 | Precision | `ttft_cycles` | `tpot_mean_cycles` | `weight_read_bytes` | `dma_cycles` | `tensor_cycles` |
-|---|---|---|---|---|---|
-| fp32 | 22,906,076 | 8,562,646 | 2,189,574,144 | 68,460,344 | 22,825,728 |
-| fp16 | 19,099,578 | 4,759,700 | 1,094,787,072 | 34,230,278 | 22,825,728 |
-| bf16 | 19,099,578 | 4,759,700 | 1,094,787,072 | 34,230,278 | 22,825,728 |
+|---|---:|---:|---:|---:|---:|
+| `fp32` | 22,906,076 | 8,562,646 | 2,189,574,144 | 68,460,344 | 22,825,728 |
+| `fp16` | 19,099,578 | 4,759,700 | 1,094,787,072 | 34,230,278 | 22,825,728 |
+| `bf16` | 19,099,578 | 4,759,700 | 1,094,787,072 | 34,230,278 | 22,825,728 |
 
 ### 3.8 Request validation and atomicity
 
@@ -785,12 +784,12 @@ NaN row (rejected), a request whose second row overflows inside the first layer 
 `rejected_work_cycles` of work, 18 at the defaults), and a replay of the workload's own
 prefill and decode partition on the reset cache, which must reproduce every output and every
 layer's KV cache. The default lifecycle run reports `rejected_requests` 5, `cache_resets` 1,
-`workload_cycles` 1185 and `simulation_cycles` 2388.
+`workload_cycles` 1,185 and `simulation_cycles` 2,388.
 
 ### 3.9 Numerics
 
 Activations, weights, projections, rotated Q and K, cached K and V, attention outputs and residual
-rows are stored in fp32, fp16 or bf16 (`--precision`, default fp16). Dot products accumulate in
+rows are stored in FP32, FP16 or BF16 (`--precision`, default `fp16`). Dot products accumulate in
 binary32 with separate multiply and add operations (no FMA contraction). RMSNorm and softmax
 intermediates stay in binary32. Conversions round to nearest, ties to even, in software.
 `--round-f32-bits WORDS` applies the storage rounding to a list of binary32 bit patterns and
@@ -891,5 +890,5 @@ reads, must not be combined with a separate charge for that term.
 |---|---|---|
 | `soc.tlm` | `tests/tlm_platform_tests.py` | Full outputs against an independent integer oracle, traffic counts, persistent engine across seeds and jobs, `START` in the reset-release timestep, VCD signals, CLI errors |
 | `soc.multicore` | `tests/mobile_platform_tests.py` | Full outputs, exact bus durations and byte counts, round-robin grants including a request raised as the channel frees, non-preemptive priority dispatch, LRU traffic, OPP period and voltage scaling, deadline governor and misses, gating intervals and energy units, idle accounting of unused cores, VCD signals |
-| `soc.transformer` | `tests/transformer_tests.py` | Independent float oracle for every precision and head grouping, stacked layers, prefill partitions and causal independence, closed-form work, traffic and SRAM, weights streamed once per layer per request, per-token KV reads, panel streaming at the largest dimensions, atomic rejection, VCD and progress events, exhaustive fp16 round trip |
+| `soc.transformer` | `tests/transformer_tests.py` | Independent float oracle for every precision and head grouping, stacked layers, prefill partitions and causal independence, closed-form work, traffic and SRAM, weights streamed once per layer per request, per-token KV reads, panel streaming at the largest dimensions, atomic rejection, VCD and progress events, exhaustive FP16 round trip |
 | `tools.energy` | `tests/energy_tests.py` | Hand-calculated units, executed versus logical MACs, latency and frequency agreement, schema versions, malformed input |
