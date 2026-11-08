@@ -20,8 +20,8 @@ panel: an $M_t \times N_t$ output tile over $K_p$ reduction elements.
 
 | Transaction | Issued by | Content | Timed by |
 |---|---|---|---|
-| Panel load | load thread | $M_t$ activation runs of $K_p$ bytes, the weight panel as one run, and on the first panel of a tile the bias and per-channel parameter run | memory model, `src/memory.cpp` |
-| Panel compute | compute thread | $M_t N_t K_p$ MACs, and the decode of a compressed weight panel | closed form per panel, `src/core.cpp` |
+| Panel load | load thread | $M_t$ activation runs of $K_p$ bytes (with `shape.conv`, the runs of the tile's input footprint), the weight panel as one run, and on the first panel of a tile the bias and per-channel parameter run; a cache hit omits the activation or weight runs | memory model, `src/memory.cpp` |
+| Panel compute | compute thread | $M_t N_t K_p$ MACs ($M_t C_t K_p$ on the depthwise datapath), and the decode of a compressed weight panel | closed form per panel, `src/core.cpp` |
 | Tile store | store thread | $M_t$ output runs of $N_t$ bytes | memory model, `src/memory.cpp` |
 
 A load or store is a `MemRequest`, a list of address runs over the fixed address map in
@@ -58,7 +58,8 @@ serial cycle bound reaches $2^{53}$, so every reported count is exact in a JSON 
 ### 1.3 Cost model
 
 The closed forms below time one transaction. Compute: $P$ is `macs_per_cycle`,
-$A_r \times A_c$ the array, $p$ `pipeline_cycles`, $r$ `weight_decode_values_per_cycle`.
+$A_r \times A_c$ the array, $P_{\mathrm{dw}}$ `depthwise_macs_per_cycle`, $p$ `pipeline_cycles`,
+$r$ `weight_decode_values_per_cycle`.
 Serial DMA: $L$ is `memory.latency`, $W$ `memory.bytes_per_cycle`, $b$ `memory.burst_bytes`.
 AXI: $N$ is the channel's outstanding limit, $L_r$ and $L_w$ the read latency and write
 response latency, $R$ `dram_bytes_per_cycle`.
@@ -68,7 +69,7 @@ response latency, $R$ `dram_bytes_per_cycle`.
 | Vector datapath | $\lceil M_t N_t K_p / P \rceil + p$ | `mac_cycles`, `src/core.cpp` |
 | Output-stationary array | $\lceil M_t/A_r \rceil \lceil N_t/A_c \rceil K_p + (A_r + A_c - 2) + p$ | `mac_cycles` |
 | Weight-stationary array | $A_r + (F-1)\max(M_t, A_r) + M_t + (A_r + A_c - 2) + p$, with $F = \lceil K_p/A_r \rceil \lceil N_t/A_c \rceil$ | `mac_cycles` |
-| Depthwise datapath | $\lceil M_t C_t K_p / D \rceil + p$ for `groups` > 1 and $n = 1$, $D$ = `arch.compute.depthwise_macs_per_cycle`, $C_t$ channels per tile | `src/core.cpp` |
+| Depthwise datapath | $\lceil M_t C_t K_p / P_{\mathrm{dw}} \rceil + p$ when $P_{\mathrm{dw}} > 0$, $G > 1$ and $N = 1$; $C_t$ channels per tile, at most `tile_n` | `compute_panel_cycles`, `src/core.cpp` |
 | Compressed weight panel | $\max(\text{MAC cycles}, \text{decode cycles}) + p$; palette decode $\lceil V/r \rceil$, sparse decode $\lceil V_b/r \rceil + \lceil V_k/r \rceil$ for $V$ values, $V_b$ bitmap blocks and $V_k$ retained values | `encoded_panel_compute_cycles` |
 | Serial DMA request | per burst of at most $b$ bytes, $L + \lceil \text{burst bytes} / W \rceil$; $b = 0$ issues the request as one burst | `dma_transfer_cycles` |
 | AXI burst $i$ on one channel | $\text{issue}_i = \max(\text{arrival}, \text{issue}_{i-1} + 1, \text{done}_{i-N})$; $\text{start}_i = \max(\text{issue}_i + L_r, \text{free})$, then the first DRAM gap; $\text{free} \leftarrow \text{start}_i + \text{beats}_i$; $\text{done}_i = \text{free}$ for reads, $\text{free} + L_w$ for writes | `AxiMemory::issue`, `src/memory.cpp` |
@@ -105,7 +106,7 @@ echoes the complete effective configuration (`config`, schema version 2), which
 |---|---|---|
 | Serial DMA | collects the requests of a cycle over two delta cycles, then alternates read and write at request boundaries | `SerialDma::serve`, `src/memory.cpp` |
 | AXI channels and DRAM | grants once no activity is pending at the current time, in order core id, then read before write | `AxiMemory::arbitrate`, `src/memory.cpp` |
-| Cluster split | `auto` takes the smaller predicted makespan bound, then fewer predicted DRAM bytes, then `n` | `src/model.cpp` |
+| Cluster split | `auto` takes the smaller predicted makespan bound, then fewer predicted DRAM bytes, then `n` | `auto_partition`, `src/core.cpp` |
 | Synthetic tensors | 32-bit LCG $s \leftarrow 1664525\,s + 1013904223$ seeded from `shape.seed` | `make_problem`, `src/core.cpp` |
 | Mobile platform bus | round-robin by core id over requests issued before the decision delta | `src/mobile_platform.cpp` |
 
@@ -120,9 +121,9 @@ separate evidence. Sections 2.2 to 2.8 cover the first two; section 4 covers the
 
 | Claim | Evidence | Tests (CTest name) |
 |---|---|---|
-| Outputs are bit-exact | every functional run compares the tiled datapath with a scalar reference; independent Python oracles; ONNX Runtime | `core.arithmetic`, `sim.gemm-oracle`, `sim.quantization`, `sim.weight-compression`, `onnx.ort-differential` |
+| Outputs are bit-exact | every functional run compares the tiled datapath with a scalar reference; independent Python oracles, including a direct convolution over the NHWC input; ONNX Runtime | `core.arithmetic`, `sim.gemm-oracle`, `sim.quantization`, `sim.weight-compression`, `sim.conv-traffic`, `onnx.ort-differential` |
 | Requantization matches published definitions | TOSA 1.0.2, TFLite, gemmlowp and CMSIS-NN formulations, published golden vectors | `core.arithmetic`, `sim.quantization`, `tools.npuperf` |
-| The schedule follows the stated rules | independent timestamp schedulers in Python predict cycles, wait counters and complete stage traces | `sim.gemm-oracle`, `sim.memory-hierarchy`, `sim.memory-model`, `sim.cluster` |
+| The schedule follows the stated rules | independent timestamp schedulers in Python predict cycles, wait counters and complete stage traces; footprint, run and cache oracles predict convolution traffic | `sim.gemm-oracle`, `sim.memory-hierarchy`, `sim.memory-model`, `sim.cluster`, `sim.conv-traffic` |
 | Two implementations of the rules agree | `npuperf.analytic.schedule()` against npu-sim, cycle for cycle | `tools.analytic-model`, study S6 |
 | Instrumentation is passive | traced, untraced, stepped and batch runs give identical results | `sim.observability`, `live.protocol` |
 | The C++ runs without memory errors, leaks or undefined behavior on the test inputs | ASan, UBSan with the vptr check, LeakSanitizer | CI job `linux-x64-asan-ubsan` |
@@ -196,6 +197,7 @@ independent of SystemC threads and delta cycles.
 | `tests/architecture_tests.py` | serial sum of panel transfer and compute durations with one slot and one panel buffer; multi-slot runs through the scheduler above | exact cycles, INT4 padding, parameter bytes, LRU cache hits, SRAM reservation at its boundary |
 | `tests/memory_model_tests.py` | AXI bursts formed by walking beats, DRAM gaps found by fixpoint iteration over every reservation, the load-compute-store pipeline replayed | cycles and traces of random mappings; closed forms for single-burst latency, steady-state bandwidth, 4 KiB splits, misaligned beats, read-write overlap and DRAM caps |
 | `tests/cluster_tests.py` | per-core pipelines on one DRAM timeline, m and n splits | cycles of random clusters, traffic difference between splits, the DRAM floor on the makespan |
+| `tests/conv_traffic_tests.py` | input footprints enumerated tap by tap, NHWC runs, AXI beats walked slot by slot, LRU replay of both caches in the traced load order, a direct convolution | footprint bytes and runs with halo and padding, depthwise-datapath timing, activation-cache hits, timing-only traffic equal to bit-exact traffic, rejected geometries |
 
 Closed forms check limiting cases. Study S3 compares the read bandwidth of a weight-streaming
 GEMV with Little's law for $N$ outstanding bursts of $B$ beats of $D$ bytes at read latency
@@ -217,24 +219,26 @@ has two models.
 | `analyze()` | closed form over tile and panel classes: exact traffic, request counts, compute busy cycles and cache hits; lower bounds; a three-stage pipeline estimate that times every request alone on the memory system | traffic, request counts, compute busy cycles and cache hits exact; lower bound at or below npu-sim; estimate exact without overlap (one slot, one panel buffer); median error below 1%; p95 error below 15% (serial), 25% (AXI) and 30% (clusters of up to 8 cores); bound class agreeing on more than 95% of configurations; the cluster plan npu-sim picks |
 
 `tests/analytic_model_tests.py` enforces these requirements on seeded random serial, AXI and
-cluster configurations. Study S6 measures the estimate on a second seeded set (seed
-20261107: dense configurations with read latency up to 300 cycles, at most 16 outstanding
-reads, DRAM up to 64 B/cycle and up to 8 cores) and on the S1 layers of each design point.
-The random rows of the generated S6 table in [results.md](results.md):
+cluster configurations. Study S6 measures the estimate on a second seeded set (seed 20261107:
+dense configurations with read latency up to 300 cycles, at most 16 outstanding reads, DRAM up
+to 64 B/cycle and up to 8 cores, and convolutions on their input footprint, a third of them on
+the depthwise datapath and half with an activation cache) and on the S1 layers of each design
+point. The random rows of the generated S6 table in [results.md](results.md):
 
-| Configurations | Count | Median error | p95 error | Max error | Estimate below npu-sim | `schedule()` exact | Traffic and compute exact |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| random serial | 120 | 0.0% | 5.9% | 21.7% | 11/120 | 120/120 | 120/120 |
-| random axi | 83 | 0.0% | 14.2% | 26.8% | 40/83 | 83/83 | 83/83 |
-| random axi cluster | 37 | 0.5% | 20.9% | 44.8% | 28/37 | 37/37 | 37/37 |
+| Configurations | Count | Median error | p95 error | Max error | Estimate below npu-sim | Bound class agrees | `schedule()` exact | Traffic and compute exact |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| random serial | 120 | 0.0% | 5.9% | 21.7% | 11/120 | 120/120 | 120/120 | 120/120 |
+| random axi | 83 | 0.0% | 14.2% | 26.8% | 40/83 | 82/83 | 83/83 | 83/83 |
+| random axi cluster | 37 | 0.5% | 20.9% | 44.8% | 28/37 | 36/37 | 37/37 | 37/37 |
+| random conv | 80 | 0.1% | 18.7% | 29.1% | 49/80 | 80/80 | 80/80 | 80/80 |
 
 The estimate charges the shared DRAM as an aggregate byte bound, so its error grows with
 the queueing of channels and cores on one timeline; `schedule()`, which replays that
 queueing, stays exact. The generated table in [results.md](results.md) holds the same
 statistics for the network layers of each design point. `npuperf.mapper` ranks tilings by
-the `analyze()` estimate; `tests/mapper_tests.py` holds its pick for ResNet-50 res3 3x3 on
-`mobile-2k`, weight cache off, within 10% of the fastest mapping of a 64-point npu-sim
-search.
+the `analyze()` estimate and replays them with `schedule()`; `tests/mapper_tests.py` holds its
+pick for ResNet-50 res3 3x3 on `mobile-2k`, caches off, within 10% of the fastest mapping of a
+48-point npu-sim search.
 
 ### 2.6 Serial-mode regression lock
 
@@ -304,13 +308,14 @@ against RTL or silicon (section 4).
 |---|---|---|---|---|
 | Numerics | INT8 activations, INT8 or INT4 weights, INT32 bias, zero points | Modeled | bit-exact; the final accumulator must lie in INT32 | `src/core.cpp` |
 | Numerics | Requantization `native`, `tosa-single`, `tosa-double`; per-channel multipliers, shifts and weight zero points; ReLU at the output zero point | Modeled | bit-exact to TOSA 1.0.2 `apply_scale_32` and its TFLite and CMSIS-NN equivalents | `src/core.cpp` |
-| Numerics | Grouped GEMM and depthwise convolution as $G$ groups | Modeled | tiles never straddle a group | `src/core.cpp` |
+| Numerics | Grouped GEMM and depthwise convolution as $G$ groups | Modeled | GEMM-engine tiles never straddle a group; depthwise-datapath tiles span channels, each channel reducing its own group | `src/core.cpp` |
+| Numerics | Convolution on its NHWC input (`shape.conv`) | Modeled | the im2col view of the input, padding at the activation zero point; bit-exact against the scalar reference on the im2col matrix | `src/conv.cpp` |
 | Numerics | Palette (1, 2, 4, 8-bit indices) and block-sparse weight codecs | Modeled | lossless; outputs computed from the decoded encoding | `src/core.cpp` |
 | Numerics | Partial sums across reduction panels | Modeled | held in the slot's INT32 buffer for timing and SRAM; the integer result is evaluated at the final panel, which gives the same value | `src/model.cpp` |
 | Numerics | Floating point (FP32, FP16, BF16 storage with FP32 accumulation) | Modeled | `npu-transformer-demo` only | `src/transformer.cpp` |
 | Compute | Vector datapath | Approximated | $\lceil M_t N_t K_p / P \rceil$ per panel | `src/core.cpp` |
 | Compute | Systolic array, output- and weight-stationary | Approximated | closed-form waves or folds per panel; fill and drain exposed once per panel; no processing-element state | `src/core.cpp` |
-| Compute | Depthwise datapath | Approximated | channel-parallel rate `arch.compute.depthwise_macs_per_cycle` when `groups` > 1 and $n = 1$, tiles spanning channels | `src/core.cpp` |
+| Compute | Depthwise datapath | Approximated | one MAC rate, `arch.compute.depthwise_macs_per_cycle`, for every kernel size when $G > 1$ and $N = 1$; tiles spanning channels; dense weights only; no microblock or kernel-step term | `src/core.cpp` |
 | Compute | Per-panel issue overhead | Approximated | constant `pipeline_cycles` per reduction panel | `src/core.cpp` |
 | Compute | Weight decoder | Approximated | `weight_decode_values_per_cycle`, running ahead of the array: $\max(\text{MAC}, \text{decode})$ | `src/core.cpp` |
 | Compute | Input-stationary dataflow, register-level array timing, operand gating | Not modeled | | |
@@ -318,14 +323,15 @@ against RTL or silicon (section 4).
 | On-chip memory | Tile slots, panel double buffering, back-pressure | Modeled | `sc_fifo` tokens; a load blocks only when all of its slot's panel buffers are full | `src/model.cpp` |
 | On-chip memory | SRAM capacity | Modeled | per-slot reservation (bias, parameters, panel buffers, INT32 partial sums, INT8 outputs) plus the caches; an oversubscribed mapping is rejected | `scratchpad_bytes`, `src/core.cpp` |
 | On-chip memory | Weight-panel cache | Approximated | fully associative LRU over (output-channel panel, reduction block) lines, capacity in bytes, zero lookup latency | `src/model.cpp` |
-| On-chip memory | Activation-panel cache | Approximated | `arch.activation_cache_bytes`: LRU over activation panels, mirroring the weight cache | `src/model.cpp` |
+| On-chip memory | Activation-panel cache | Approximated | fully associative LRU over (group or channel tile, row tile, reduction block) lines, capacity in bytes, zero lookup latency | `src/model.cpp` |
 | On-chip memory | SRAM banks, ports, bank conflicts, access energy | Not modeled | | |
 | External memory | Serial DMA | Modeled | one non-preemptive server for reads and writes; per-burst latency plus $\lceil \text{bytes}/W \rceil$ | `src/memory.cpp` |
 | External memory | AXI4 read and write channels | Modeled | INCR bursts split at `max_burst_beats` and 4 KiB; partial beats; per-channel outstanding limits; read latency; write response latency; one beat per channel per cycle; in-order data per channel | `src/memory.cpp` |
+| External memory | Request issue | Approximated | a core's load process holds one panel request at a time and its store process one tile store; a request's bursts pipeline through the outstanding window, so a panel's read latency is exposed once per request (S3 in [results.md](results.md)) | `src/model.cpp`, `src/memory.cpp` |
 | External memory | AXI IDs, out-of-order completion, WRAP and FIXED bursts, QoS, address-channel back-pressure from the interconnect | Not modeled | | |
 | External memory | DRAM | Approximated | one byte-rate timeline shared by all channels and cores, exact integer reservation, fixed grant order; every beat is charged at full width | `src/memory.cpp`, `src/core.cpp` |
 | External memory | DRAM banks, row-buffer hits and misses, refresh, read-write turnaround, controller scheduling, LPDDR command timing | Not modeled | | |
-| External memory | Convolution activation traffic | Approximated | without `shape.conv`, the im2col matrix of `npuperf.workloads`; with `shape.conv`, the tile's NHWC input footprint including the halo, padding not read, `tile_k` 0 or a multiple of $k_w C_{in}/G$ | `npuperf/workloads.py`, `src/core.cpp` |
+| External memory | Convolution activation traffic | Approximated | without `shape.conv`, the im2col matrix; with `shape.conv`, per input row the span of columns the tile's output pixels need, halo included, once per reduction panel; skipped columns inside a span are read, padding is not; `tile_k` 0 or a multiple of $k_w C/G$ | `src/conv.cpp`, `src/core.cpp` |
 | System | Multi-core cluster | Modeled | 1 to 64 cores, each with its own slots, SRAM, caches and AXI port, on one DRAM timeline; m, n and `auto` partitions | `src/model.cpp` |
 | System | Network on chip, shared last-level cache, inter-core or die-to-die links, coherence, IOMMU | Not modeled | every core reaches DRAM at the same cost | |
 | System | Layer sequencing | Approximated | each GEMM is an independent `npu-sim` run; outputs go to external memory between layers; the graph runtime orders the calls on the host | `npuperf/graph.py` |
@@ -340,7 +346,7 @@ against RTL or silicon (section 4).
 | Power | Thermal behavior, measured power | Not modeled | | |
 | Frontends | ONNX import | Modeled | signed INT8, static shapes, standard-domain opsets 10 to 21, rank-2 `QLinearMatMul`, 2-D `QLinearConv` including depthwise, exactly representable scale ratios; anything else is rejected | `npuperf/onnx_import.py` |
 | Frontends | TOSA and TFLite graph import | Not modeled | | |
-| Mapping | Tile and slot search | Approximated | `npuperf.mapper`: heuristic candidate set ranked by `analyze()`; no loop-order, layout or fusion choice | `npuperf/mapper.py` |
+| Mapping | Tile, slot, cache-split and lowering search | Approximated | `npuperf.mapper`: heuristic candidate set ranked by `analyze()` and replayed with `schedule()`; no loop-order, layout or fusion choice | `npuperf/mapper.py` |
 
 `npu-sim` accepts each dimension up to 1,048,576. A functional run is limited to
 $4 \times 10^{9}$ MACs and 256 MiB of host storage; a `--timing-only` run, dense weights only,

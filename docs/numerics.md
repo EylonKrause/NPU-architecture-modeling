@@ -18,7 +18,7 @@ The scope of the model as a whole is stated once, in [methodology](methodology.m
 | Python requantization oracle, `quantize_multiplier` | `npuperf/quant.py` |
 | Floating-point storage conversion and operators | `src/transformer.cpp` |
 
-## 1. Integer datapath
+## 1 Integer datapath
 
 ### 1.1 Operand types and layout
 
@@ -45,6 +45,11 @@ are the output channels and the reduction depth of one group. The tensors are ro
 | Accumulators, outputs | $M \times GN$ | $(r, c)$ at $rGN + c$ |
 
 A depthwise convolution is $G$ channels with $N = 1$ (the channel multiplier) and $K = k_h k_w$.
+With `shape.conv` the activation matrix is the im2col view of an $H \times W \times C$ NHWC input
+tensor ([architecture](architecture.md) section 4.4, `im2col` in `src/conv.cpp`): reduction index
+$(k_y k_w + k_x) C_g + c$ of group $g$, with $C_g = C / G$, reads input channel $gC_g + c$ at the
+pixel the kernel tap reaches, and a tap in the padding reads $z_a$, so its term
+$(z_a - z_a)(W - z_w)$ is zero.
 
 ### 1.2 Accumulation
 
@@ -71,9 +76,10 @@ accumulator buffer, which the SRAM reservation sizes at 4 bytes (INT32) per outp
 
 The result does not depend on `tile_m`, `tile_n`, `tile_k`, buffer slots, panel buffers, the
 vector or systolic datapath and its dataflow, the memory model, the core count and partition, or
-the timing mode. The depthwise datapath (`arch.compute.depthwise_macs_per_cycle`, used when
-$G > 1$ and $N = 1$) places several channels in one tile; each output still reduces over its own
-group's $K$ values with its own channel parameters.
+the timing mode. The depthwise datapath (`arch.compute.depthwise_macs_per_cycle` above 0, used
+when $G > 1$ and $N = 1$) places several channels in one tile; each output still reduces over its
+own group's $K$ values with its own channel parameters (`compute_channel_tile`, `src/core.cpp`).
+A run with `shape.conv` produces the accumulators and outputs of the GEMM on its im2col matrix.
 
 ### 1.3 INT4 weights
 
@@ -112,7 +118,7 @@ $$s_{i+1} = \left(1664525 s_i + 1013904223\right) \bmod 2^{32}.$$
 
 | Order | Tensor | Value from draw $s$ | Range |
 |---|---|---|---|
-| 1 | All activations, flat order | $(s \bmod 31) - 15$ | -15..15 |
+| 1 | All activations, flat order; with `shape.conv`, the NHWC input tensor | $(s \bmod 31) - 15$ | -15..15 |
 | 2 | All weights, INT8 | $(s \bmod 31) - 15$ | -15..15 |
 | 2 | All weights, INT4 | $(s \bmod 16) - 8$ | -8..7 |
 | 3 | All biases | $(s \bmod 127) - 63$ | -63..63 |
@@ -120,7 +126,7 @@ $$s_{i+1} = \left(1664525 s_i + 1013904223\right) \bmod 2^{32}.$$
 Default parameters: $z_a = -3$, $z_w = 2$, $z_o = 0$, multiplier 1, shift 7, `--rescale native`,
 `--rounding away`, ReLU off.
 
-## 2. Requantization
+## 2 Requantization
 
 ### 2.1 Modes
 
@@ -286,7 +292,7 @@ $M/2^S$ below $2^{-30}$.
 | 0.0019 | 2089072093 | 40 |
 | $2^{-32}$ | 1073741824 | 62 |
 
-## 3. Per-channel parameters and file formats
+## 3 Per-channel parameters and file formats
 
 ### 3.1 Resolution and validation
 
@@ -326,6 +332,7 @@ NPU1 M N K
 
 $G$ comes from `--groups`; the header holds $M$, $N$ and $K$. `--m`, `--n` and `--k` are rejected
 alongside `--input`, and a config file may restate the shape only when it agrees with the header.
+`--input` is rejected with `shape.conv`, whose input tensor is generated.
 Activations must lie in -128..127, weights in the range of `--weight-bits`, biases in INT32. A
 missing value (`truncated INT8 tensor`, `truncated bias tensor`) or a trailing token is an error.
 
@@ -373,7 +380,7 @@ $$\left\lvert \frac{s_a s_{w,c}}{s_o} - \frac{M_c}{2^{S_c}} \right\rvert \le 2^{
 A bias must be INT32 with zero point 0 and scale $s_a s_{w,c}$ to a relative tolerance of
 $10^{-12}$.
 
-## 4. Weight compression
+## 4 Weight compression
 
 `--weight-encoding palette|sparse` stores each weight panel in a lossless byte format. The
 encoded buffer is the only weight source of the compressed datapath (`compute_tile_encoded`);
@@ -513,7 +520,7 @@ reserved byte, a header whose bit width or block length disagrees with the confi
 palette with $L = 0$ or $L > 2^p$, a buffer length that disagrees with its header and contents, a
 palette index at or above $L$, and a sparse bitmap that disagrees with its payload.
 
-## 5. Floating-point path of the transformer engine
+## 5 Floating-point path of the transformer engine
 
 ### 5.1 Storage formats
 
@@ -584,7 +591,7 @@ request. The fixture values are exact in all three formats: inputs $i/16$ with $
 weights $i / (8 \cdot 2^e)$ with $i \in [-15, 15]$ and $e \ge 3$ set by the reduction depth, and
 $\gamma = 1 + i/32$ with $i \in [-4, 4]$.
 
-## 6. Verification
+## 6 Verification
 
 ### 6.1 In-run checks
 
@@ -625,7 +632,7 @@ one addition, multiplication, division or square root of binary32 operands this 
 correctly rounded binary32 result, because binary64 carries at least $2 \cdot 24 + 2$ significand
 bits. The comparison is therefore exact.
 
-## 7. References
+## 7 References
 
 | Source | Version | Location |
 |---|---|---|
