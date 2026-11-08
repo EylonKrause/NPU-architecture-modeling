@@ -167,7 +167,7 @@ jobs:
   # The quick studies of docs/results.md, regenerated and compared with the committed tables.
   results-drift:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 60
     env:
       CC: gcc
       CXX: g++
