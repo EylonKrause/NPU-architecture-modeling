@@ -23,8 +23,9 @@ its fidelity. Arithmetic and the compressed weight formats are specified in
 
 ![NPU cluster block diagram](figures/npu-block-diagram.svg)
 
-*Figure 1. NPU cluster. Solid arrows carry data, dashed arrows control. The host CPU cluster is
-outside the model: `npu-sim` receives one job, a grouped GEMM, and runs it to completion.*
+*Figure 1. NPU cluster. Solid arrows carry data, dashed arrows control; symbols as in section
+1.3. The host CPU cluster is outside the model: `npu-sim` receives one job, a grouped GEMM, and
+runs it to completion.*
 
 An NPU cluster holds $N_c$ identical cores. Each core holds a tile sequencer, a DMA engine with
 one memory port (serial DMA, or AXI read and write channels), an SRAM partitioned into tile

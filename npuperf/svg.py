@@ -2,10 +2,10 @@
 
 ``Figure`` draws on one linear or log10 x/y axis pair (or categorical bands for bars and
 Gantt rows): lines, scatter, steps, bars, rectangles, reference lines, text annotations and
-a legend. Output is deterministic: coordinates use fixed two-decimal formatting, element
-order follows call order and no output depends on time or randomness, so committed figures
-diff cleanly. The opaque white background keeps a figure legible on GitHub's light and dark
-themes.
+a legend; ``_{...}`` in a label sets a subscript. Output is deterministic: coordinates use
+fixed two-decimal formatting, element order follows call order and no output depends on time
+or randomness, so committed figures diff cleanly. The opaque white background keeps a figure
+legible on GitHub's light and dark themes.
 
     fig = Figure(title="Roofline", x_label="MAC/B", y_label="MAC/cycle",
                  x_scale="log", y_scale="log")
@@ -17,6 +17,7 @@ themes.
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -39,11 +40,17 @@ LEGEND_TEXT_X = 6 + LEGEND_SWATCH + 8
 # Average advance widths (em) for the sans faces above; used to size margins and legends.
 _NARROW = set("il.,:;'|!()[]{}/\\ ")
 _WIDE = set("mwMW@%")
+_SUBSCRIPT = re.compile(r"_\{([^{}]*)\}")
+
+
+def plain(text: str) -> str:
+    """``text`` with each ``_{...}`` subscript written inline."""
+    return _SUBSCRIPT.sub(r"\1", str(text))
 
 
 def text_width(text: str, size: float) -> float:
     width = 0.0
-    for char in text:
+    for char in plain(text):
         if char in _NARROW:
             width += 0.30
         elif char in _WIDE:
@@ -71,6 +78,21 @@ def escape(text: str) -> str:
         .replace(">", "&gt;")
         .replace('"', "&quot;")
     )
+
+
+def markup(text: str, size: float) -> str:
+    """Escaped ``text`` for a ``<text>`` of font size ``size``, each ``_{...}`` as a subscript
+    tspan at three quarters of the size, shifted down by a quarter."""
+    parts = _SUBSCRIPT.split(str(text))
+    shift = num(size / 4)
+    out = [escape(parts[0])]
+    count = len(parts) // 2
+    for index in range(count):
+        sub, rest = parts[2 * index + 1], parts[2 * index + 2]
+        out.append(f'<tspan dy="{shift}" font-size="{num(size * 0.75)}">{escape(sub)}</tspan>')
+        if rest or index + 1 < count:
+            out.append(f'<tspan dy="-{shift}">{escape(rest)}</tspan>')
+    return "".join(out)
 
 
 def _compact(value: float) -> str:
@@ -604,7 +626,7 @@ class Figure:
                     self.boxes.append(
                         (cx - size * 0.45, cy - size * 0.45, cx + size * 0.45, cy + size * 0.45)
                     )
-        return f"<text {' '.join(attrs)}>{escape(text)}</text>"
+        return f"<text {' '.join(attrs)}>{markup(text, size)}</text>"
 
     def _marker(
         self,
@@ -985,7 +1007,7 @@ class Figure:
             f'viewBox="0 0 {self.width} {self.height}" font-family="{escape(FONT)}">'
         ]
         if self.title:
-            out.append(f"<title>{escape(self.title)}</title>")
+            out.append(f"<title>{escape(plain(self.title))}</title>")
         out.append(f'<rect width="{self.width}" height="{self.height}" fill="{SURFACE}"/>')
         out.append(
             f'<defs><clipPath id="{clip}"><rect x="{num(x0)}" y="{num(y0 - 2)}" '

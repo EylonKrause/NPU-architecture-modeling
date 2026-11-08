@@ -51,7 +51,7 @@
 <text x="49.44" y="214.91" font-size="12" fill="#52514e" text-anchor="end">10</text>
 <text x="49.44" y="107.26" font-size="12" fill="#52514e" text-anchor="end">15</text>
 </g>
-<text x="427.22" y="468" font-size="13" fill="#0b0b0b" text-anchor="middle">read transactions outstanding (N)</text>
+<text x="427.22" y="468" font-size="13" fill="#0b0b0b" text-anchor="middle">outstanding read bursts, N<tspan dy="3.25" font-size="9.75">r</tspan></text>
 <text x="21.2" y="243" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 243)">read bandwidth (B/cycle)</text>
 <g clip-path="url(#s3-plot)">
 <path d="M80.79,378.49 L103.14,330.97 L125.49,283.46 L147.84,235.95 L170.19,188.43 L192.54,140.92 L214.89,93.41 L237.24,81.53 L259.59,81.53 L281.94,81.53 L304.29,81.53 L326.64,81.53 L348.99,81.53 L371.34,81.53 L393.69,81.53 L416.04,81.53 L438.4,81.53 L460.75,81.53 L483.1,81.53 L505.45,81.53 L527.8,81.53 L550.15,81.53 L572.5,81.53 L594.85,81.53 L617.2,81.53 L639.55,81.53 L661.9,81.53 L684.25,81.53 L706.6,81.53 L728.95,81.53 L751.3,81.53 L773.65,81.53" fill="none" stroke="#2a78d6" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="6 4"/>
@@ -123,15 +123,15 @@
 <line x1="58.44" y1="81.53" x2="796" y2="81.53" stroke="#6f6e69" stroke-width="1.25" stroke-dasharray="5 4"/>
 </g>
 <text x="790" y="75.53" font-size="11" fill="#6f6e69" text-anchor="end">bus 16 B/cycle</text>
-<g transform="translate(553.8,332)">
-<rect width="232.2" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<g transform="translate(534.72,332)">
+<rect width="251.28" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
 <line x1="6" y1="14.5" x2="42" y2="14.5" stroke="#2a78d6" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
-<text x="50" y="18.7" font-size="12" fill="#0b0b0b">min(D, N·b·D / (L + b)), L = 100</text>
+<text x="50" y="18.7" font-size="12" fill="#0b0b0b">min(D, N<tspan dy="3" font-size="9">r</tspan><tspan dy="-3">·b·D / (L</tspan><tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> + b)), L</tspan><tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> = 100</tspan></text>
 <circle cx="24" cy="33.5" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
-<text x="50" y="37.7" font-size="12" fill="#0b0b0b">npu-sim, read latency L = 100</text>
+<text x="50" y="37.7" font-size="12" fill="#0b0b0b">npu-sim, L<tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> = 100</tspan></text>
 <line x1="6" y1="52.5" x2="42" y2="52.5" stroke="#eb6834" stroke-width="1.5" stroke-linecap="round" stroke-dasharray="6 4"/>
-<text x="50" y="56.7" font-size="12" fill="#0b0b0b">min(D, N·b·D / (L + b)), L = 400</text>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">min(D, N<tspan dy="3" font-size="9">r</tspan><tspan dy="-3">·b·D / (L</tspan><tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> + b)), L</tspan><tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> = 400</tspan></text>
 <rect x="20.4" y="67.9" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<text x="50" y="75.7" font-size="12" fill="#0b0b0b">npu-sim, read latency L = 400</text>
+<text x="50" y="75.7" font-size="12" fill="#0b0b0b">npu-sim, L<tspan dy="3" font-size="9">r</tspan><tspan dy="-3"> = 400</tspan></text>
 </g>
 </svg>

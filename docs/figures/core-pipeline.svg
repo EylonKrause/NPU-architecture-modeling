@@ -46,9 +46,9 @@
 <text x="108" y="296" font-size="12" fill="#3a3a3a">read: panel runs</text>
 <line x1="960" y1="210" x2="960" y2="304" stroke="#3a3a3a" stroke-width="1.8" marker-end="url(#arr)" marker-start="url(#arr)"/>
 <text x="968" y="296" font-size="12" fill="#3a3a3a">write: tile runs</text>
-<text x="24" y="392" font-size="12" fill="#555555">(b) Stage spans from npu-sim --trace: M = 24, N = 8, K = 96, 8 × 8 × 32 tiles, 16 MAC/cycle, AXI memory model, N<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> = 2</tspan></text>
+<text x="24" y="392" font-size="12" fill="#555555">(b) Stage spans from npu-sim --trace: M = 24, N = 8, K = 96, 8x8x32 tiles, 16 MAC/cycle, AXI memory model, N<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> = 2</tspan></text>
 <text x="24" y="416" font-size="13" fill="#1a1a1a" font-weight="600">P<tspan dy="3" font-size="9">b</tspan><tspan dy="-3"> = 2</tspan></text>
-<text x="110" y="416" font-size="12" fill="#3a3a3a">makespan 1,275 cycles, compute busy 1,188, panel_wait_cycles 528</text>
+<text x="110" y="416" font-size="12" fill="#3a3a3a">makespan 1,275 cycles, compute busy 1,188 cycles, panel wait 528 cycles</text>
 <rect x="130" y="426" width="1040" height="24" fill="#f6f6f4"/>
 <text x="120" y="442" font-size="12" fill="#3a3a3a" text-anchor="end">load</text>
 <rect x="130" y="456" width="1040" height="24" fill="#f6f6f4"/>
@@ -126,7 +126,7 @@
 <text x="1108.82" y="529" font-size="12" fill="#555555" text-anchor="middle">1,600</text>
 <line x1="1170" y1="512" x2="1170" y2="516" stroke="#9c9a93"/>
 <text x="24" y="564" font-size="13" fill="#1a1a1a" font-weight="600">P<tspan dy="3" font-size="9">b</tspan><tspan dy="-3"> = 1</tspan></text>
-<text x="110" y="564" font-size="12" fill="#3a3a3a">makespan 1,611 cycles, compute busy 1,188, panel_wait_cycles 940</text>
+<text x="110" y="564" font-size="12" fill="#3a3a3a">makespan 1,611 cycles, compute busy 1,188 cycles, panel wait 940 cycles</text>
 <rect x="130" y="574" width="1040" height="24" fill="#f6f6f4"/>
 <text x="120" y="590" font-size="12" fill="#3a3a3a" text-anchor="end">load</text>
 <rect x="130" y="604" width="1040" height="24" fill="#f6f6f4"/>

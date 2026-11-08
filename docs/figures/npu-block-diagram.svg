@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="826" viewBox="0 0 1200 826" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif">
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="802" viewBox="0 0 1200 802" font-family="'Segoe UI', system-ui, -apple-system, Helvetica, Arial, sans-serif">
 <title>NPU cluster block diagram</title>
 <defs>
   <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -8,10 +8,9 @@
     <path d="M0,0 L10,5 L0,10 z" fill="#7a7a7a"/>
   </marker>
 </defs>
-<rect width="1200" height="826" fill="#ffffff"/>
+<rect width="1200" height="802" fill="#ffffff"/>
 
-<text x="24" y="32" font-size="12" fill="#555555">Symbols of architecture section 1.3: N<tspan dy="3" font-size="9">c</tspan><tspan dy="-3"> cores, </tspan>N<tspan dy="3" font-size="9">s</tspan><tspan dy="-3"> tile slots, </tspan>P<tspan dy="3" font-size="9">b</tspan><tspan dy="-3"> panel buffers, D AXI beat bytes, R DRAM bytes per cycle</tspan></text>
-<g transform="translate(0,-20)">
+<g transform="translate(0,-44)">
 
 <!-- Host CPU cluster (context) -->
 <rect x="24" y="72" width="320" height="104" rx="4" fill="#f6f6f4" stroke="#8c8c8c" stroke-width="1.2" stroke-dasharray="5 4"/>
@@ -161,12 +160,6 @@
 </g>
 <line x1="952" y1="340" x2="952" y2="268" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
 <line x1="1122" y1="340" x2="1122" y2="268" stroke="#3a3a3a" stroke-width="2.4" marker-end="url(#arr)" marker-start="url(#arr)"/>
-<g font-size="12" fill="#3a3a3a">
-  <text x="890" y="524">Each core holds its own slots,</text>
-  <text x="890" y="542">panel buffers, caches, datapath</text>
-  <text x="890" y="560">and AXI port, and runs a</text>
-  <text x="890" y="578">contiguous band of output tiles.</text>
-</g>
 
 <!-- Legend -->
 <g font-size="12" fill="#3a3a3a">

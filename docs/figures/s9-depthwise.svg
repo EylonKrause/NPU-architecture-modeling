@@ -3,7 +3,7 @@
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="s9-plot"><rect x="58.44" y="58" width="739.56" height="388"/></clipPath></defs>
 <text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">MobileNetV2 latency against depthwise datapath rate</text>
-<text x="14" y="52" font-size="12" fill="#52514e">MobileNetV2 on every design point; tiles from npuperf.mapper at every rate</text>
+<text x="14" y="52" font-size="12" fill="#52514e">all four design points; tiles from npuperf.mapper at every rate</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="58.44" y1="434.61" x2="796" y2="434.61"/>
 <line x1="58.44" y1="359.69" x2="796" y2="359.69"/>

@@ -775,7 +775,7 @@ def s3_outstanding(ctx: Context) -> StudyOutput:
         title="Read bandwidth against outstanding AXI reads",
         subtitle="INT4 GEMV 1x4096x4096 streaming weights; 16 B beats, 16-beat "
         "bursts, DRAM unlimited",
-        x_label="read transactions outstanding (N)",
+        x_label="outstanding read bursts, N_{r}",
         y_label="read bandwidth (B/cycle)",
         x_range=(0, 33),
         y_range=(0, 17),
@@ -815,14 +815,14 @@ def s3_outstanding(ctx: Context) -> StudyOutput:
             color=color,
             width=1.5,
             dash="6 4",
-            label=f"min(D, N·b·D / (L + b)), L = {latency}",
+            label=f"min(D, N_{{r}}·b·D / (L_{{r}} + b)), L_{{r}} = {latency}",
         )
         fig.scatter(
             S3_OUTSTANDING,
             measured,
             color=color,
             marker=svg.MARKERS[index],
-            label=f"npu-sim, read latency L = {latency}",
+            label=f"npu-sim, L_{{r}} = {latency}",
         )
     fig.hline(bus, f"bus {bus} B/cycle", color=svg.INK_MUTED)
     out.figures["s3-outstanding"] = fig
@@ -970,7 +970,7 @@ def s4_scaling(ctx: Context) -> StudyOutput:
                 if partition == "m":
                     fig.hline(
                         ceiling,
-                        f"DRAM ceiling at {rate} B/cycle: {ceiling:.1f}",
+                        f"DRAM ceiling at {rate} B/cycle: {ceiling:.2f}",
                         color=svg.INK_SECONDARY,
                         dash="2 3",
                         width=1,
@@ -1612,7 +1612,7 @@ def s7_compression(ctx: Context) -> StudyOutput:
         title="Llama-3.2-1B decode: 4-bit palette against dense INT4 weights",
         subtitle=f"every weight GEMM in the same pieces for all three formats; "
         f"dense INT8 runs at {min(int8):.2f} to {max(int8):.2f} of dense "
-        "INT4; KV-cache matmuls stay INT8",
+        "INT4; attention GEMMs stay INT8",
         x_label="weight decoder throughput (values per cycle per core)",
         y_label="palette decode rate relative to dense INT4",
         x_scale="log",
@@ -1989,7 +1989,7 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
         820,
         500,
         title="MobileNetV2 latency against depthwise datapath rate",
-        subtitle="MobileNetV2 on every design point; tiles from npuperf.mapper at every rate",
+        subtitle="all four design points; tiles from npuperf.mapper at every rate",
         x_label="depthwise MAC/cycle per core",
         y_label="latency relative to the array-wide rate",
         x_scale="log",

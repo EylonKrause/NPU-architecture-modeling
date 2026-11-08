@@ -109,8 +109,8 @@
 <polygon points="549.04,348.28 554.04,353.28 549.04,358.28 544.04,353.28" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="592.84,348.28 597.84,353.28 592.84,358.28 587.84,353.28" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 </g>
-<text x="586.84" y="215.32" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 100 B/cycle: 34.4</text>
-<text x="586.84" y="101.98" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 667 B/cycle: 229.3</text>
+<text x="586.84" y="215.32" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 100 B/cycle: 34.40</text>
+<text x="586.84" y="101.98" font-size="11" fill="#52514e" text-anchor="end">DRAM ceiling at 667 B/cycle: 229.33</text>
 <g transform="translate(610.84,68)">
 <rect width="197.16" height="105" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
 <line x1="6" y1="14.5" x2="42" y2="14.5" stroke="#6f6e69" stroke-width="1.25" stroke-linecap="round"/>
