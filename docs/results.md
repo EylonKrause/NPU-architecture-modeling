@@ -44,7 +44,7 @@ NPU cycles, where Arm's Corstone-300 reference platform for the Ethos-U55 places
 tensor arena by default ([`platform.ld`, tag 26.08][corstone]).
 
 <!-- generated:s1-networks -->
-| Design point | Network | Weights (MB) | Latency (ms) | Inferences/s | Achieved TOP/s | MAC utilisation | DRAM MB/inference | Compute-bound layers | Memory-bound layers |
+| Design point | Network | Weights (MB) | Latency (ms) | Inferences/s | Achieved TOP/s | MAC utilization | DRAM MB/inference | Compute-bound layers | Memory-bound layers |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `edge-256` | MobileNetV2 | 3.47 | 8.09 | 124 | 0.0743 | 14.5% | 25.1 | 0% | 100% |
 | `edge-256` | ResNet-50 v1.5 | 25.5 | 46.3 | 21.6 | 0.177 | 34.5% | 186 | 11% | 89% |
@@ -101,7 +101,7 @@ MobileNetV2 with and without its depthwise layers. Burst efficiency is payload b
 whole-beat bytes of the depthwise layers' AXI traffic.
 
 <!-- generated:s1-depthwise -->
-| Design point | Depthwise MAC/cycle per core | MobileNetV2 latency (ms) | Depthwise share of cycles | Depthwise share of DRAM bytes | Depthwise read burst efficiency | Depthwise write burst efficiency | Latency without depthwise (ms) | MAC utilisation without depthwise |
+| Design point | Depthwise MAC/cycle per core | MobileNetV2 latency (ms) | Depthwise share of cycles | Depthwise share of DRAM bytes | Depthwise read burst efficiency | Depthwise write burst efficiency | Latency without depthwise (ms) | MAC utilization without depthwise |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `edge-256` | 24 | 8.09 | 35.2% | 43.2% | 100.0% | 100.0% | 5.24 | 20.9% |
 | `mobile-2k` | 192 | 1.40 | 35.4% | 39.2% | 100.0% | 97.3% | 0.905 | 15.1% |
@@ -125,7 +125,7 @@ the full SRAM also holds, and INT4 may not speed decode up by more than 2x, as i
 the weight bytes.
 
 <!-- generated:s1-llm -->
-| Design point | Decode tokens/s INT8 | Decode tokens/s INT4 | INT4 speedup | Decode DRAM MB/token INT8 | Decode DRAM rate used INT8 | Prefill TTFT INT8 (ms) | Prefill TTFT INT4 (ms) | Prefill MAC utilisation INT8 |
+| Design point | Decode tokens/s INT8 | Decode tokens/s INT4 | INT4 speedup | Decode DRAM MB/token INT8 | Decode DRAM rate used INT8 | Prefill TTFT INT8 (ms) | Prefill TTFT INT4 (ms) | Prefill MAC utilization INT8 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
 | `edge-256` | 5.05 | 9.85 | 1.95x | 1,241 | 78.3% | 1,453 | 746 | 33.8% |
 | `mobile-2k` | 17.1 | 33.5 | 1.96x | 1,241 | 88.4% | 107 | 79.6 | 57.6% |
@@ -259,7 +259,7 @@ compute-busy cycles times 1,024, end-to-end utilization by total cycles times 1,
 ![dataflow](figures/s5-dataflow.svg)
 
 <!-- generated:s5-dataflow -->
-| Layer type | Layers | Distinct shapes | MACs (M) | OS array utilisation | WS array utilisation | OS end-to-end | WS end-to-end |
+| Layer type | Layers | Distinct shapes | MACs (M) | OS array utilization | WS array utilization | OS end-to-end | WS end-to-end |
 |---|---:|---:|---:|---:|---:|---:|---:|
 | pointwise | 70 | 34 | 2,387 | 86.2% | 92.8% | 76.4% | 80.1% |
 | 3x3 | 17 | 5 | 1,861 | 89.1% | 97.7% | 81.7% | 87.5% |

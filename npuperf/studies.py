@@ -7,7 +7,7 @@ runs them; see that module for the command line.
 Conventions shared by the studies:
   - Design points are configs/*.json (hypothetical configurations sized from public data,
     docs/design-points.md). A layer runs on its point with the tiles npuperf.mapper picks.
-  - Only the GEMM layers of a workload run; vector operators (softmax, normalisation,
+  - Only the GEMM layers of a workload run; vector operators (softmax, normalization,
     pooling, residual adds) are not modeled. A layer with ``calls`` identical instances
     runs once and counts ``calls`` times. A convolution runs on its NHWC input footprint
     (npuperf.workloads conv geometry), or a 1x1 convolution on its plain operand when the
@@ -17,10 +17,10 @@ Conventions shared by the studies:
     and FUNCTIONAL_MACS; otherwise --timing-only. Dense timing does not depend on the data.
   - External-memory bytes are the bytes the DRAM timeline charges: whole AXI beats, so a
     partial beat counts in full.
-  - MAC utilisation is MACs over cycles times the array's peak, the depthwise layers'
+  - MAC utilization is MACs over cycles times the array's peak, the depthwise layers'
     MACs included.
   - One MAC is two operations (TOP/s).
-  - A result that breaks a physical limit (above a roof, utilisation above 1, speedup above
+  - A result that breaks a physical limit (above a roof, utilization above 1, speedup above
     the core count, bandwidth above the bus) stops the run with a ``SanityError``.
 """
 from __future__ import annotations
@@ -203,7 +203,7 @@ def dram_bytes(result: Mapping[str, Any]) -> int:
 
 
 def check_result(result: Mapping[str, Any], label: str) -> None:
-    """Physical limits of one run: utilisation, the compute and DRAM roofs, the bus."""
+    """Physical limits of one run: utilization, the compute and DRAM roofs, the bus."""
     cycles, macs = result["cycles"], result["macs"]
     peak = result["effective_macs_per_cycle"]
     require(macs <= peak * cycles, f"{label}: {macs} MACs exceed {peak} MAC/cycle x {cycles}")
@@ -364,8 +364,8 @@ def run_networks(ctx: Context, points: Sequence[Point]) -> dict[tuple[str, str, 
 
 
 def network_weight_bytes(name: str) -> int:
-    """INT8 bytes of every weight operand of a workload, each once; an attention matmul's B
-    operand is the KV cache, not a weight."""
+    """INT8 bytes of every weight operand of a workload, each once. An attention matmul's B
+    operand is the KV cache and counts as an activation."""
     total = 0
     for layer in workloads.load(name)["layers"]:
         if layer.get("b_operand", "weights") == "weights":
@@ -441,7 +441,7 @@ def s1_networks(ctx: Context) -> StudyOutput:
             ms = t.latency_ms(point.frequency_mhz)
             latency[network] = ms
             util = t.macs / (t.cycles * peak)
-            require(util <= 1, f"{point.name} {network}: utilisation {util}")
+            require(util <= 1, f"{point.name} {network}: utilization {util}")
             memory = t.bound_calls["bandwidth"] + t.bound_calls["latency"]
             rows.append([f"`{point.name}`", network,
                          fmt(weights[network] / 1e6), fmt(ms), fmt(1e3 / ms),
@@ -453,7 +453,8 @@ def s1_networks(ctx: Context) -> StudyOutput:
                         "macs": t.macs, "dram_bytes": t.dram_bytes, "latency_ms": ms,
                         "bound_calls": t.bound_calls, "calls": t.calls,
                         "bit_exact_calls": t.bit_exact_calls})
-        # MobileNetV2 has 13x fewer MACs and 7x fewer weight bytes than ResNet-50.
+        # MobileNetV2 has 13.6x fewer MACs and 7.4x fewer weight bytes than ResNet-50
+        # (workloads/*.json totals).
         require(latency["MobileNetV2"] < latency["ResNet-50 v1.5"],
                 f"{point.name}: MobileNetV2 {latency['MobileNetV2']} ms is not below ResNet-50 "
                 f"{latency['ResNet-50 v1.5']} ms")
@@ -499,17 +500,17 @@ def s1_networks(ctx: Context) -> StudyOutput:
                             "bit_exact_calls": t.bit_exact_calls})
     out.tables["s1-networks"] = markdown_table(
         ["Design point", "Network", "Weights (MB)", "Latency (ms)", "Inferences/s",
-         "Achieved TOP/s", "MAC utilisation", "DRAM MB/inference", "Compute-bound layers",
+         "Achieved TOP/s", "MAC utilization", "DRAM MB/inference", "Compute-bound layers",
          "Memory-bound layers"], rows, [False, False] + [True] * 8)
     out.tables["s1-depthwise"] = markdown_table(
         ["Design point", "Depthwise MAC/cycle per core", "MobileNetV2 latency (ms)",
          "Depthwise share of cycles", "Depthwise share of DRAM bytes",
          "Depthwise read burst efficiency", "Depthwise write burst efficiency",
-         "Latency without depthwise (ms)", "MAC utilisation without depthwise"], depthwise)
+         "Latency without depthwise (ms)", "MAC utilization without depthwise"], depthwise)
     out.tables["s1-llm"] = markdown_table(
         ["Design point", "Decode tokens/s INT8", "Decode tokens/s INT4", "INT4 speedup",
          "Decode DRAM MB/token INT8", "Decode DRAM rate used INT8", "Prefill TTFT INT8 (ms)",
-         "Prefill TTFT INT4 (ms)", "Prefill MAC utilisation INT8"], llm)
+         "Prefill TTFT INT4 (ms)", "Prefill MAC utilization INT8"], llm)
     out.raw["networks"] = raw
     out.raw["calls"] = [{"point": key[0], "network": key[1], "weight_bits": key[2],
                          "layer": call.layer["name"], "calls": call.gemm.calls,
@@ -774,7 +775,7 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
             check_result(result, f"S5 {layer['name']}")
             array_util = result["macs"] / (result["compute_busy_cycles"] * array)
             overall = result["macs"] / (result["cycles"] * array)
-            require(array_util <= 1 and overall <= 1, f"S5 {layer['name']}: utilisation")
+            require(array_util <= 1 and overall <= 1, f"S5 {layer['name']}: utilization")
             values.append((array_util, overall))
         kind = layer_type(layer)
         by_type[kind].append((gemm, values))
@@ -783,11 +784,11 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
                     "groups": gemm.groups, "os": values[0], "ws": values[1]})
     # Linear axes: the dense layers sit between 0.4 and 1, where the OS-WS differences of
     # the table are; the FC layers collapse near the origin.
-    fig = svg.Figure(820, 600, title="Array utilisation: output- vs weight-stationary",
+    fig = svg.Figure(820, 600, title="Array utilization: output- vs weight-stationary",
                      subtitle="32x32 array, one core of client-16c; MACs / (compute-busy "
                               "cycles x 1024); one mark per distinct layer shape",
-                     x_label="output-stationary utilisation", y_label="weight-stationary "
-                     "utilisation", x_range=(0, 1), y_range=(0, 1), legend="upper left",
+                     x_label="output-stationary utilization", y_label="weight-stationary "
+                     "utilization", x_range=(0, 1), y_range=(0, 1), legend="upper left",
                      id_prefix="s5")
     fig.line([0, 1], [0, 1], color=svg.INK_MUTED, width=1, dash="4 4")
     fig.annotate(0.3, 0.3, "equal", dx=8, dy=14, color=svg.INK_MUTED)
@@ -804,15 +805,15 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
                     color=svg.PALETTE[index], marker=svg.MARKERS[index],
                     label=f"{kind} ({plural(layers, 'layer')}, "
                           f"{plural(len(shapes), 'shape')})", hollow=True)
-        # MAC-weighted means of (OS, WS) x (array, end-to-end) utilisation.
+        # MAC-weighted means of (OS, WS) x (array, end-to-end) utilization.
         weights = [g.total_macs for g, _ in members]
         means = [pct(sum(w * v[flow][measure] for w, (_, v) in zip(weights, members))
                      / sum(weights)) for measure in (0, 1) for flow in (0, 1)]
         rows.append([kind, str(layers), str(len(shapes)), fmt(sum(weights) / 1e6), *means])
     out.figures["s5-dataflow"] = fig
     out.tables["s5-dataflow"] = markdown_table(
-        ["Layer type", "Layers", "Distinct shapes", "MACs (M)", "OS array utilisation",
-         "WS array utilisation", "OS end-to-end", "WS end-to-end"], rows)
+        ["Layer type", "Layers", "Distinct shapes", "MACs (M)", "OS array utilization",
+         "WS array utilization", "OS end-to-end", "WS end-to-end"], rows)
     out.raw["layers"] = raw
     return out
 
@@ -1403,15 +1404,15 @@ S10_POINTS = ("client-16c", "workstation-32c")
 S10_NETWORKS = {"resnet50_v1.5_224": "ResNet-50 v1.5", "mobilenet_v2_1.0_224": "MobileNetV2"}
 S10_SIZES_KIB = (64, 128, 256, 512, 1024, 2048, 4096)
 # The sizing rule: on each point, the smallest swept size at which every network reaches
-# this fraction of its highest MAC utilisation in the sweep; the two points share one core
+# this fraction of its highest MAC utilization in the sweep; the two points share one core
 # design, so both take the larger of their picks.
 S10_SHARE = 0.9
 
 
-def s10_pick(utilisation: Mapping[int, float]) -> int:
-    """The smallest size (KiB) whose utilisation reaches S10_SHARE of the sweep's highest."""
-    best = max(utilisation.values())
-    return min(size for size, value in utilisation.items() if value >= S10_SHARE * best)
+def s10_pick(utilization: Mapping[int, float]) -> int:
+    """The smallest size (KiB) whose utilization reaches S10_SHARE of the sweep's highest."""
+    best = max(utilization.values())
+    return min(size for size, value in utilization.items() if value >= S10_SHARE * best)
 
 
 def s10_sram(ctx: Context) -> StudyOutput:
@@ -1423,7 +1424,7 @@ def s10_sram(ctx: Context) -> StudyOutput:
     results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
     out = StudyOutput()
     raw = []
-    utilisation: dict[tuple[str, str], dict[int, float]] = {}
+    utilization: dict[tuple[str, str], dict[int, float]] = {}
     latency: dict[tuple[str, str], dict[int, float]] = {}
     for (name, network_file, kib), calls in planned.items():
         chunk = [next(results) for _ in calls]
@@ -1434,11 +1435,11 @@ def s10_sram(ctx: Context) -> StudyOutput:
         point = next(point for point in points if point.name == name)
         t = totals(calls, chunk)
         util = t.macs / (t.cycles * point.design.array_macs_per_cycle)
-        utilisation.setdefault((name, network), {})[kib] = util
+        utilization.setdefault((name, network), {})[kib] = util
         latency.setdefault((name, network), {})[kib] = t.latency_ms(point.frequency_mhz)
         raw.append({"point": name, "network": network, "sram_kib": kib, "cycles": t.cycles,
                     "macs": t.macs, "dram_bytes": t.dram_bytes, "mac_utilisation": util})
-    picks = {point.name: max(s10_pick(utilisation[(point.name, network)])
+    picks = {point.name: max(s10_pick(utilization[(point.name, network)])
                              for network in S10_NETWORKS.values()) for point in points}
     chosen = max(picks.values())
     for point in points:
@@ -1446,21 +1447,21 @@ def s10_sram(ctx: Context) -> StudyOutput:
                 f"configs/{point.name}.json sets sram_bytes {point.design.sram_bytes}; the "
                 f"S10 rule picks {chosen} KiB")
     keys = [(point.name, network) for point in points for network in S10_NETWORKS.values()]
-    rows = [[f"{kib:,}"] + [f"{pct(utilisation[key][kib])} ({fmt(latency[key][kib])} ms)"
+    rows = [[f"{kib:,}"] + [f"{pct(utilization[key][kib])} ({fmt(latency[key][kib])} ms)"
                             for key in keys] for kib in S10_SIZES_KIB]
     out.tables["s10-sram"] = markdown_table(
         ["SRAM per core (KiB)"] + [f"`{name}` {network}" for name, network in keys], rows)
-    choice = [[f"`{point.name}`"] + [f"{s10_pick(utilisation[(point.name, network)]):,}"
+    choice = [[f"`{point.name}`"] + [f"{s10_pick(utilization[(point.name, network)]):,}"
                                      for network in S10_NETWORKS.values()]
               + [f"{picks[point.name]:,}"] for point in points]
     out.tables["s10-choice"] = markdown_table(
         ["Design point"] + [f"{network} pick (KiB)" for network in S10_NETWORKS.values()]
         + ["Point's pick (KiB)"], choice)
-    top = max(value for values in utilisation.values() for value in values.values())
-    fig = svg.Figure(820, 500, title="MAC utilisation vs per-core SRAM",
+    top = max(value for values in utilization.values() for value in values.values())
+    fig = svg.Figure(820, 500, title="MAC utilization vs per-core SRAM",
                      subtitle="cores of client-16c and workstation-32c; tiles and cache split "
                               "from npuperf.mapper per size",
-                     x_label="SRAM per core (KiB)", y_label="MAC utilisation", x_scale="log",
+                     x_label="SRAM per core (KiB)", y_label="MAC utilization", x_scale="log",
                      x_range=(S10_SIZES_KIB[0], S10_SIZES_KIB[-1]),
                      y_range=(0, math.ceil(top * 10) / 10), x_ticks=list(S10_SIZES_KIB),
                      legend="right", id_prefix="s10")
@@ -1468,7 +1469,7 @@ def s10_sram(ctx: Context) -> StudyOutput:
     fig.vline(chosen, f"rule picks {chosen:,} KiB", color=svg.INK_SECONDARY)
     for index, network in enumerate(S10_NETWORKS.values()):
         for point in points:
-            values = utilisation[(point.name, network)]
+            values = utilization[(point.name, network)]
             fig.line(S10_SIZES_KIB, [values[kib] for kib in S10_SIZES_KIB],
                      color=svg.PALETTE[index],
                      dash=None if point.name == S10_POINTS[0] else "7 4",
