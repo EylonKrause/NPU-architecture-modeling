@@ -31,6 +31,9 @@ GRID = "#e6e5df"
 AXIS = "#9c9a93"
 SURFACE = "#ffffff"
 FONT = "system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif"
+# Legend line swatches are long enough for a 7-4 dash to show twice beside the marker.
+LEGEND_SWATCH = 36
+LEGEND_TEXT_X = 6 + LEGEND_SWATCH + 8
 
 # Average advance widths (em) for the sans faces above; used to size margins and legends.
 _NARROW = set("il.,:;'|!()[]{}/\\ ")
@@ -360,7 +363,8 @@ class Figure:
         right = 24
         self.legend_items = [s for s in self.series if s.label]
         if self.legend_position == "right" and self.legend_items:
-            right = 18 + 44 + max(text_width(s.label or "", size - 1) for s in self.legend_items) + 12
+            right = 18 + LEGEND_TEXT_X + 10 + max(text_width(s.label or "", size - 1)
+                                                  for s in self.legend_items) + 12
         x_labels = [self.x.label_for(t, self.x_ticks) for t in self.x_ticks]
         if x_labels:
             right = max(right, text_width(x_labels[-1], size - 1) / 2 + 8)
@@ -405,8 +409,8 @@ class Figure:
         return f'<text {" ".join(attrs)}>{escape(text)}</text>'
 
     def _marker(self, kind: str, x: float, y: float, r: float, color: str,
-                hollow: bool = False) -> str:
-        ring = f'stroke="{SURFACE}" stroke-width="1.5"'
+                hollow: bool = False, halo: bool = True) -> str:
+        ring = f'stroke="{SURFACE}" stroke-width="1.5"' if halo else 'stroke="none"'
         if hollow:
             ring = f'stroke="{color}" stroke-width="1.75"'
             color = "none"
@@ -610,7 +614,7 @@ class Figure:
             return []
         size = self.font_size - 1
         row = size + 7
-        width = 34 + max(text_width(s.label or "", size) for s in items) + 10
+        width = LEGEND_TEXT_X + max(text_width(s.label or "", size) for s in items) + 10
         height = 10 + row * len(items)
         x0, y0, x1, y1 = self.plot
         corners = {"upper left": (x0 + 10, y0 + 8), "upper right": (x1 - width - 10, y0 + 8),
@@ -634,21 +638,25 @@ class Figure:
                f'fill-opacity="0.92" stroke="{GRID}"/>']
         for index, series in enumerate(items):
             cy = 5 + row * index + row / 2
+            middle = 6 + LEGEND_SWATCH / 2
             if series.kind in ("line", "step"):
                 dash = f' stroke-dasharray="{series.dash}"' if series.dash else ""
-                out.append(f'<line x1="8" y1="{num(cy)}" x2="28" y2="{num(cy)}" '
-                           f'stroke="{series.color}" stroke-width="{num(series.width)}" '
-                           f'stroke-linecap="round"{dash}/>')
+                out.append(f'<line x1="6" y1="{num(cy)}" x2="{num(6 + LEGEND_SWATCH)}" '
+                           f'y2="{num(cy)}" stroke="{series.color}" '
+                           f'stroke-width="{num(series.width)}" stroke-linecap="round"{dash}/>')
+                # No halo: a white ring would cut a solid swatch in two and make it read
+                # as dashed.
                 if series.marker:
-                    out.append(self._marker(series.marker, 18, cy, 3.5, series.color))
+                    out.append(self._marker(series.marker, middle, cy, 3.5, series.color,
+                                            halo=False))
             elif series.kind in ("bar", "rect"):
-                out.append(f'<rect x="12" y="{num(cy - 5)}" width="10" height="10" rx="2" '
-                           f'fill="{series.color}"/>')
+                out.append(f'<rect x="{num(middle - 5)}" y="{num(cy - 5)}" width="10" '
+                           f'height="10" rx="2" fill="{series.color}"/>')
             else:
-                out.append(self._marker(series.marker or "circle", 18, cy, 4, series.color,
+                out.append(self._marker(series.marker or "circle", middle, cy, 4, series.color,
                                         series.extra.get("hollow", False)))
-            out.append(self._text(34, cy + size * 0.35, series.label or "", size, INK,
-                                  track=False))
+            out.append(self._text(LEGEND_TEXT_X, cy + size * 0.35, series.label or "", size,
+                                  INK, track=False))
         out.append("</g>")
         self.boxes.append((lx, ly, lx + width, ly + height))
         return out

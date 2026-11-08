@@ -624,6 +624,9 @@ def coincident(curves: Sequence[Sequence[float]]) -> list[list[int]]:
 
 def s4_scaling(ctx: Context) -> StudyOutput:
     point = design_points(["client-16c"])[0]
+    d = point.design
+    core = (f"{d.array_rows}x{d.array_cols} {d.dataflow.upper()}, {8 * d.axi_data_bytes}-bit "
+            f"AXI, {d.sram_bytes / 1024:g} KiB SRAM")
     out = StudyOutput()
     rows, raw = [], []
     for slug, (label, gemm, bits) in zip(("conv", "gemv"), s4_layers()):
@@ -643,8 +646,8 @@ def s4_scaling(ctx: Context) -> StudyOutput:
         top = max(64, 2 ** math.ceil(math.log2(top * 1.15)))
         ticks = [2 ** e for e in range(int(math.log2(top)) + 1)]
         fig = svg.Figure(820, 500, title=f"Cluster speedup: {label}",
-                         subtitle="cores of the client-16c point (32x32 OS, 256-bit AXI, "
-                                  "133.5 KiB SRAM); tiles from npuperf.mapper per configuration",
+                         subtitle=f"cores of the {point.name} point ({core}); tiles from "
+                                  "npuperf.mapper per configuration",
                          x_label="cores", y_label="speedup over one core", x_scale="log",
                          y_scale="log", x_range=(1, 32), y_range=(0.8, top),
                          x_ticks=list(S4_CORES), y_ticks=ticks,
@@ -960,11 +963,13 @@ def s6_analytic(ctx: Context) -> StudyOutput:
     lo = 10 ** math.floor(math.log10(min(e["cycles"] for e in raw)))
     hi = 10 ** math.ceil(math.log10(max(e["cycles"] for e in raw)))
     ratios = [e["estimate"] / e["cycles"] for e in raw]
-    random_count = sum(len(groups[kind]) for kind in groups if kind.startswith("random"))
+    conv_count = len(groups["random conv"])
+    dense_count = sum(len(groups[kind]) for kind in groups
+                      if kind.startswith("random") and kind != "random conv")
     fig = svg.Figure(820, 600, title="Closed-form estimate / npu-sim cycles",
-                     subtitle=f"{random_count} seeded random dense configurations (seed "
-                              f"{S6_SEED}) and the distinct S1 layer runs of each design "
-                              "point; 1 = exact",
+                     subtitle=f"{dense_count} random dense and {conv_count} random conv "
+                              f"configurations (seed {S6_SEED}) and the distinct S1 layer runs "
+                              "of each design point; 1 = exact",
                      x_label="npu-sim cycles", y_label="analytic.analyze estimate / npu-sim "
                      "cycles", x_scale="log", x_range=(lo, hi),
                      y_range=(math.floor(min(ratios) * 10) / 10, math.ceil(max(ratios) * 10) / 10),
