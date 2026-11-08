@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 project(NPUArchitectureModeling
-  VERSION 0.4.0
+  VERSION 1.0.0
   DESCRIPTION "SystemC/TLM-2.0 architecture model of a tiled INT8/INT4 NPU"
   HOMEPAGE_URL "https://github.com/EylonKrause/NPU-architecture-modeling"
   LANGUAGES CXX)
