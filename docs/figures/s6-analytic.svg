@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="600" viewBox="0 0 820 600" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>Closed-form estimate / npu-sim cycles</title>
+<title>Closed-form cycle estimate against npu-sim</title>
 <rect width="820" height="600" fill="#ffffff"/>
 <defs><clipPath id="s6-plot"><rect x="62.04" y="58" width="457.32" height="488"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Closed-form estimate / npu-sim cycles</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Closed-form cycle estimate against npu-sim</text>
 <text x="14" y="52" font-size="12" fill="#52514e">240 random dense and 80 random conv configurations (seed 20261107) and the distinct S1 layer runs of each design point; 1 = exact</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="62.04" y1="485.25" x2="517.36" y2="485.25"/>
@@ -82,19 +82,19 @@
 </g>
 <g style="font-variant-numeric: tabular-nums">
 <text x="62.04" y="565" font-size="12" fill="#52514e" text-anchor="middle">100</text>
-<text x="137.93" y="565" font-size="12" fill="#52514e" text-anchor="middle">1k</text>
-<text x="213.81" y="565" font-size="12" fill="#52514e" text-anchor="middle">10k</text>
-<text x="289.7" y="565" font-size="12" fill="#52514e" text-anchor="middle">100k</text>
-<text x="365.59" y="565" font-size="12" fill="#52514e" text-anchor="middle">1M</text>
-<text x="441.47" y="565" font-size="12" fill="#52514e" text-anchor="middle">10M</text>
-<text x="517.36" y="565" font-size="12" fill="#52514e" text-anchor="middle">100M</text>
+<text x="137.93" y="565" font-size="12" fill="#52514e" text-anchor="middle">1,000</text>
+<text x="213.81" y="565" font-size="12" fill="#52514e" text-anchor="middle">10,000</text>
+<text x="289.7" y="565" font-size="12" fill="#52514e" text-anchor="middle">100,000</text>
+<text x="365.59" y="565" font-size="12" fill="#52514e" text-anchor="middle">1,000,000</text>
+<text x="441.47" y="565" font-size="12" fill="#52514e" text-anchor="middle">10,000,000</text>
+<text x="517.36" y="565" font-size="12" fill="#52514e" text-anchor="middle">100,000,000</text>
 <text x="53.04" y="489.45" font-size="12" fill="#52514e" text-anchor="end">0.6</text>
 <text x="53.04" y="367.95" font-size="12" fill="#52514e" text-anchor="end">0.8</text>
 <text x="53.04" y="246.45" font-size="12" fill="#52514e" text-anchor="end">1.0</text>
 <text x="53.04" y="124.95" font-size="12" fill="#52514e" text-anchor="end">1.2</text>
 </g>
 <text x="289.7" y="588" font-size="13" fill="#0b0b0b" text-anchor="middle">npu-sim cycles</text>
-<text x="21.2" y="303" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 303)">analytic.analyze estimate / npu-sim cycles</text>
+<text x="21.2" y="303" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 303)">estimated cycles / simulated cycles</text>
 <g clip-path="url(#s6-plot)">
 <line x1="62.04" y1="242.25" x2="517.36" y2="242.25" stroke="#6f6e69" stroke-width="1" stroke-dasharray="4 4"/>
 <circle cx="193.27" cy="240.44" r="4" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
@@ -751,9 +751,9 @@
 <circle cx="24" cy="14.5" r="4" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <text x="50" y="18.7" font-size="12" fill="#0b0b0b">random serial (120)</text>
 <rect x="20.4" y="29.9" width="7.2" height="7.2" fill="none" stroke="#eb6834" stroke-width="1.75"/>
-<text x="50" y="37.7" font-size="12" fill="#0b0b0b">random axi (83)</text>
+<text x="50" y="37.7" font-size="12" fill="#0b0b0b">random AXI (83)</text>
 <polygon points="24,47.9 28.6,55.95 19.4,55.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
-<text x="50" y="56.7" font-size="12" fill="#0b0b0b">random axi cluster (37)</text>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">random AXI cluster (37)</text>
 <polygon points="24,66.5 29,71.5 24,76.5 19,71.5" fill="none" stroke="#eda100" stroke-width="1.75"/>
 <text x="50" y="75.7" font-size="12" fill="#0b0b0b">random conv (80)</text>
 <polygon points="24,95.1 28.6,87.05 19.4,87.05" fill="none" stroke="#e87ba4" stroke-width="1.75"/>

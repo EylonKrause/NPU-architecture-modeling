@@ -55,7 +55,7 @@
 <text x="53.04" y="64.2" font-size="12" fill="#52514e" text-anchor="end">1.2</text>
 </g>
 <text x="429.02" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">weight decoder throughput (values per cycle per core)</text>
-<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">palette tokens/s / dense INT4 tokens/s</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">palette decode rate relative to dense INT4</text>
 <g clip-path="url(#s7-plot)">
 <line x1="62.04" y1="124.33" x2="796" y2="124.33" stroke="#6f6e69" stroke-width="1.25" stroke-dasharray="5 4"/>
 <path d="M62.04,340.55 L184.37,235.76 L306.69,124.69 L429.02,124.69 L551.35,124.69 L673.67,124.69 L796,124.69" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>

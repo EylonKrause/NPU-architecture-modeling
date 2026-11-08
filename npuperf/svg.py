@@ -190,11 +190,11 @@ class Axis:
             return str(self.categories[int(value)])
         if self.tick_format is not None:
             return self.tick_format(value)
+        if self.scale == "log":
+            return _plain(value)
         top = max((abs(t) for t in ticks), default=0)
         if top >= 10000:
             return _compact(value)
-        if self.scale == "log":
-            return _plain(value)
         decimals = next(
             (d for d in range(7) if all(abs(t * 10**d - round(t * 10**d)) < 1e-6 for t in ticks)), 6
         )

@@ -3,7 +3,7 @@
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="s8-plot"><rect x="71.52" y="58" width="726.48" height="388"/></clipPath></defs>
 <text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Mapping search: ResNet-50 res3 3x3 conv on mobile-2k</text>
-<text x="14" y="52" font-size="12" fill="#52514e">784x128x1152 on its input footprint; 49 feasible tile and slot choices of 49, all bit-exact; caches off unless noted</text>
+<text x="14" y="52" font-size="12" fill="#52514e">784x128x1152 on its input footprint; 49 tile and slot choices, all feasible and bit-exact; caches off unless noted</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="71.52" y1="446" x2="796" y2="446"/>
 <line x1="71.52" y1="349.5" x2="796" y2="349.5"/>
@@ -126,7 +126,7 @@
 <line x1="6" y1="33.5" x2="42" y2="33.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
 <text x="50" y="37.7" font-size="12" fill="#0b0b0b">Pareto front</text>
 <polygon points="24,47.5 29,52.5 24,57.5 19,52.5" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<text x="50" y="56.7" font-size="12" fill="#0b0b0b">npuperf.mapper, cache off</text>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">npuperf.mapper, caches off</text>
 <polygon points="24,66.9 28.6,74.95 19.4,74.95" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <text x="50" y="75.7" font-size="12" fill="#0b0b0b">npuperf.mapper, free SRAM as caches</text>
 </g>

@@ -1,4 +1,4 @@
-"""Design points: the configs/*.json files, their headline figures and the rules that size them.
+"""Design points: the configs/*.json files, their summary figures and the rules that size them.
 
     python -m npuperf.designs                    # the table in docs/design-points.md
     python -m npuperf.designs --format json      # the same rows as JSON
@@ -286,11 +286,11 @@ def markdown(rows: Sequence[Summary]) -> str:
     for row in rows:
         cells = (
             f"`{row.name}`",
-            str(row.macs_per_cycle),
+            f"{row.macs_per_cycle:,}",
             row.array,
             str(row.cores),
             f"{row.frequency_mhz:g} MHz",
-            f"{row.peak_tops:.6g}",
+            f"{row.peak_tops:.4g}",
             _per_core(row.cores, f"{row.sram_bytes / 1024:g} KiB"),
             _per_core(row.cores, str(row.depthwise_macs_per_cycle)),
             _per_core(row.cores, f"{row.axi_bits}-bit"),

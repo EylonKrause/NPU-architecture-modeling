@@ -43,19 +43,19 @@
 <text x="146.87" y="465" font-size="12" fill="#52514e" text-anchor="middle">128</text>
 <text x="224.97" y="465" font-size="12" fill="#52514e" text-anchor="middle">256</text>
 <text x="303.08" y="465" font-size="12" fill="#52514e" text-anchor="middle">512</text>
-<text x="381.19" y="465" font-size="12" fill="#52514e" text-anchor="middle">1024</text>
-<text x="459.29" y="465" font-size="12" fill="#52514e" text-anchor="middle">2048</text>
-<text x="537.4" y="465" font-size="12" fill="#52514e" text-anchor="middle">4096</text>
-<text x="59.76" y="450.2" font-size="12" fill="#52514e" text-anchor="end">0.00</text>
-<text x="59.76" y="385.87" font-size="12" fill="#52514e" text-anchor="end">0.05</text>
-<text x="59.76" y="321.53" font-size="12" fill="#52514e" text-anchor="end">0.10</text>
-<text x="59.76" y="257.2" font-size="12" fill="#52514e" text-anchor="end">0.15</text>
-<text x="59.76" y="192.87" font-size="12" fill="#52514e" text-anchor="end">0.20</text>
-<text x="59.76" y="128.53" font-size="12" fill="#52514e" text-anchor="end">0.25</text>
-<text x="59.76" y="64.2" font-size="12" fill="#52514e" text-anchor="end">0.30</text>
+<text x="381.19" y="465" font-size="12" fill="#52514e" text-anchor="middle">1,024</text>
+<text x="459.29" y="465" font-size="12" fill="#52514e" text-anchor="middle">2,048</text>
+<text x="537.4" y="465" font-size="12" fill="#52514e" text-anchor="middle">4,096</text>
+<text x="59.76" y="450.2" font-size="12" fill="#52514e" text-anchor="end">0%</text>
+<text x="59.76" y="385.87" font-size="12" fill="#52514e" text-anchor="end">5%</text>
+<text x="59.76" y="321.53" font-size="12" fill="#52514e" text-anchor="end">10%</text>
+<text x="59.76" y="257.2" font-size="12" fill="#52514e" text-anchor="end">15%</text>
+<text x="59.76" y="192.87" font-size="12" fill="#52514e" text-anchor="end">20%</text>
+<text x="59.76" y="128.53" font-size="12" fill="#52514e" text-anchor="end">25%</text>
+<text x="59.76" y="64.2" font-size="12" fill="#52514e" text-anchor="end">30%</text>
 </g>
 <text x="303.08" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">SRAM per core (KiB)</text>
-<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">MAC utilization</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">MAC utilization (%)</text>
 <g clip-path="url(#s10-plot)">
 <line x1="224.97" y1="60" x2="224.97" y2="446" stroke="#52514e" stroke-width="1.25" stroke-dasharray="5 4"/>
 <path d="M68.76,321.06 L146.87,248.28 L224.97,153.92 L303.08,146.86 L381.19,146.27 L459.29,146.27 L537.4,146.27" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>

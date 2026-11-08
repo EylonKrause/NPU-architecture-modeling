@@ -3,7 +3,7 @@
 <rect width="820" height="500" fill="#ffffff"/>
 <defs><clipPath id="s9-plot"><rect x="58.44" y="58" width="739.56" height="388"/></clipPath></defs>
 <text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">MobileNetV2 latency vs depthwise datapath rate</text>
-<text x="14" y="52" font-size="12" fill="#52514e">latency over latency with a depthwise datapath as wide as the array; diamonds: the rule's pick; squares: the configured Arm-model rate</text>
+<text x="14" y="52" font-size="12" fill="#52514e">MobileNetV2 latency relative to an array-wide depthwise datapath; rings: the S9 rule's pick; open down-triangles: the configured Arm-model rate</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="58.44" y1="434.61" x2="796" y2="434.61"/>
 <line x1="58.44" y1="359.69" x2="796" y2="359.69"/>
@@ -57,8 +57,8 @@
 <text x="527.8" y="465" font-size="12" fill="#52514e" text-anchor="middle">128</text>
 <text x="594.85" y="465" font-size="12" fill="#52514e" text-anchor="middle">256</text>
 <text x="661.9" y="465" font-size="12" fill="#52514e" text-anchor="middle">512</text>
-<text x="728.95" y="465" font-size="12" fill="#52514e" text-anchor="middle">1024</text>
-<text x="796" y="465" font-size="12" fill="#52514e" text-anchor="middle">2048</text>
+<text x="728.95" y="465" font-size="12" fill="#52514e" text-anchor="middle">1,024</text>
+<text x="796" y="465" font-size="12" fill="#52514e" text-anchor="middle">2,048</text>
 <text x="49.44" y="438.81" font-size="12" fill="#52514e" text-anchor="end">1</text>
 <text x="49.44" y="363.89" font-size="12" fill="#52514e" text-anchor="end">2</text>
 <text x="49.44" y="288.97" font-size="12" fill="#52514e" text-anchor="end">4</text>
@@ -67,7 +67,7 @@
 <text x="49.44" y="64.2" font-size="12" fill="#52514e" text-anchor="end">32</text>
 </g>
 <text x="427.22" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">depthwise MAC/cycle per core</text>
-<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">latency / latency at the array-wide rate</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">latency relative to the array-wide rate</text>
 <g clip-path="url(#s9-plot)">
 <line x1="58.44" y1="429.34" x2="796" y2="429.34" stroke="#6f6e69" stroke-width="1" stroke-dasharray="4 4"/>
 <path d="M58.44,305.02 L125.49,359.95 L192.54,403.29 L259.59,426.48 L326.64,430.37 L393.69,431.63 L460.75,433.19 L527.8,434.04 L594.85,434.61" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
@@ -80,8 +80,8 @@
 <circle cx="460.75" cy="433.19" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="527.8" cy="434.04" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
 <circle cx="594.85" cy="434.61" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
-<polygon points="326.64,415.37 341.64,430.37 326.64,445.37 311.64,430.37" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<rect x="359.57" y="424.83" width="12.6" height="12.6" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="326.64" cy="430.37" r="12" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<polygon points="365.87,441.48 376.22,423.37 355.52,423.37" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <path d="M58.44,134.56 L125.49,204.95 L192.54,271.33 L259.59,330.96 L326.64,380.5 L393.69,413.73 L460.75,426.13 L527.8,429.4 L594.85,431.56 L661.9,433.19 L728.95,434.08 L796,434.61" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <rect x="54.84" y="130.96" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="121.89" y="201.35" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
@@ -95,8 +95,8 @@
 <rect x="658.3" y="429.59" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="725.35" y="430.48" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
 <rect x="792.4" y="431.01" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<polygon points="527.8,416.9 540.3,429.4 527.8,441.9 515.3,429.4" fill="none" stroke="#eb6834" stroke-width="1.75"/>
-<rect x="560.72" y="424.27" width="12.6" height="12.6" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="527.8" cy="429.4" r="10" fill="none" stroke="#eb6834" stroke-width="1.75"/>
+<polygon points="567.02,440.92 577.37,422.81 556.67,422.81" fill="none" stroke="#eb6834" stroke-width="1.75"/>
 <path d="M58.44,257.64 L125.49,316.98 L192.54,365.75 L259.59,400.01 L326.64,416.51 L393.69,424.59 L460.75,428.67 L527.8,430.4 L594.85,432.65 L661.9,433.89 L728.95,434.61" fill="none" stroke="#1baf7a" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <polygon points="58.44,253.04 63.04,261.09 53.84,261.09" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="125.49,312.38 130.09,320.43 120.89,320.43" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
@@ -109,7 +109,7 @@
 <polygon points="594.85,428.05 599.45,436.1 590.25,436.1" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="661.9,429.29 666.5,437.34 657.3,437.34" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="728.95,430.01 733.55,438.06 724.35,438.06" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
-<polygon points="527.8,420.4 537.8,430.4 527.8,440.4 517.8,430.4" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
+<circle cx="527.8" cy="430.4" r="8" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
 <path d="M58.44,240.85 L125.49,300.94 L192.54,351.29 L259.59,388.03 L326.64,410.54 L393.69,421.95 L460.75,427.31 L527.8,430.73 L594.85,432.89 L661.9,434.04 L728.95,434.61" fill="none" stroke="#eda100" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
 <polygon points="58.44,235.85 63.44,240.85 58.44,245.85 53.44,240.85" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="125.49,295.94 130.49,300.94 125.49,305.94 120.49,300.94" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
@@ -122,7 +122,7 @@
 <polygon points="594.85,427.89 599.85,432.89 594.85,437.89 589.85,432.89" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="661.9,429.04 666.9,434.04 661.9,439.04 656.9,434.04" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
 <polygon points="728.95,429.61 733.95,434.61 728.95,439.61 723.95,434.61" fill="#eda100" stroke="#ffffff" stroke-width="1.5"/>
-<polygon points="527.8,423.23 535.3,430.73 527.8,438.23 520.3,430.73" fill="none" stroke="#eda100" stroke-width="1.75"/>
+<circle cx="527.8" cy="430.73" r="6" fill="none" stroke="#eda100" stroke-width="1.75"/>
 </g>
 <text x="790" y="423.34" font-size="11" fill="#6f6e69" text-anchor="end">rule: within 5% of the array-wide rate</text>
 <g transform="translate(488.28,68)">

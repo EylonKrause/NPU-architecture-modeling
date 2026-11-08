@@ -93,7 +93,7 @@ def figure(
     fig.line([x for x, _ in roof], [y for _, y in roof], color=svg.INK, width=2)
     fig.vline(ridge, color=svg.INK_MUTED, dash="2 3", width=1)
     fig.annotate(
-        ridge, y_lo, f"ridge {_fmt(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED, inside=True
+        ridge, y_lo, f"ridge {_fmt4(ridge)} MAC/B", dx=5, dy=-6, color=svg.INK_MUTED, inside=True
     )
     # Left of the ridge and above the peak lies above the roof, where no point can be.
     fig.annotate(
@@ -162,6 +162,11 @@ def _fmt(value: float) -> str:
     return f"{value:.3g}"
 
 
+def _fmt4(value: float) -> str:
+    """Four significant figures, as the design-point table gives the ridge."""
+    return f"{value:,.0f}" if value >= 1000 else f"{value:.4g}"
+
+
 def _parse_set(text: str) -> tuple[str, Any]:
     if "=" not in text:
         raise ValueError(f"--set expects KEY=VALUE, got {text!r}")
@@ -222,10 +227,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--simulate",
         action="store_true",
-        help="also run every layer on npu-sim: --timing-only calls when the "
-        "build has it, else functional calls split to its smaller "
-        "per-call limits; grouped layers run as one call per group "
-        "when it has no --groups",
+        help="also run every layer on npu-sim and plot the simulated points",
     )
     parser.add_argument("--out", help="write the roofline SVG here")
     parser.add_argument(

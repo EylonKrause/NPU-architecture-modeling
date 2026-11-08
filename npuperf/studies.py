@@ -1,4 +1,4 @@
-"""The generated studies of docs/results.md. Every number comes from an npu-sim run.
+"""The studies that generate the tables and figures of docs/results.md.
 
 Each study returns markdown tables (keyed by their docs/results.md marker), SVG figures
 (docs/figures/) and raw records (results/studies/<id>.json). ``python -m npuperf.reproduce``
@@ -272,6 +272,16 @@ def plural(count: int, noun: str) -> str:
 
 def pct(value: float, decimals: int = 1) -> str:
     return f"{100 * value:.{decimals}f}%"
+
+
+def percent_tick(value: float) -> str:
+    """Axis label of a fraction, in percent."""
+    return f"{100 * value:g}%"
+
+
+def kib(byte_count: float) -> str:
+    """Bytes in KiB with two decimals, the fixed precision of the KiB table columns."""
+    return f"{byte_count / 1024:,.2f}"
 
 
 def figure_path(name: str) -> str:
@@ -806,7 +816,7 @@ def s3_outstanding(ctx: Context) -> StudyOutput:
             color=color,
             width=1.5,
             dash="6 4",
-            label=f"min(bus, N x burst / (L + beats)), L = {latency}",
+            label=f"min(D, N·b·D / (L + b)), L = {latency}",
         )
         fig.scatter(
             S3_OUTSTANDING,
@@ -916,7 +926,7 @@ def s4_scaling(ctx: Context) -> StudyOutput:
         )
         fig.x.tick_format = lambda v: f"{v:g}"
         fig.y.tick_format = lambda v: f"{v:g}"
-        fig.line(S4_CORES, S4_CORES, color=svg.INK_MUTED, width=1.25, label="ideal (= cores)")
+        fig.line(S4_CORES, S4_CORES, color=svg.INK_MUTED, width=1.25, label="linear speedup")
         curves: list[tuple[str, int, int, list[float]]] = []  # partition, rate, units, speedups
         for rate in S4_RATES.values():
             for partition in ("m", "n"):
@@ -1081,16 +1091,17 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         600,
-        title="Array utilization: output- vs weight-stationary",
-        subtitle="32x32 array, one core of client-16c; MACs / (compute-busy "
-        "cycles x 1024); one mark per distinct layer shape",
-        x_label="output-stationary utilization",
-        y_label="weight-stationary utilization",
+        title="Array utilization, output-stationary against weight-stationary",
+        subtitle="32x32 array, one core of client-16c; MACs over compute-busy cycles "
+        "× 1,024; one mark per distinct layer shape",
+        x_label="output-stationary array utilization (%)",
+        y_label="weight-stationary array utilization (%)",
         x_range=(0, 1),
         y_range=(0, 1),
         legend="upper left",
         id_prefix="s5",
     )
+    fig.x.tick_format = fig.y.tick_format = percent_tick
     fig.line([0, 1], [0, 1], color=svg.INK_MUTED, width=1, dash="4 4")
     fig.annotate(0.3, 0.3, "equal", dx=8, dy=14, color=svg.INK_MUTED)
     rows = []
@@ -1327,8 +1338,8 @@ def s6_analytic(ctx: Context) -> StudyOutput:
     raw = []
     groups: dict[str, list[dict]] = {
         "random serial": [],
-        "random axi": [],
-        "random axi cluster": [],
+        "random AXI": [],
+        "random AXI cluster": [],
         "random conv": [],
     }
     for flags, result in zip(configs, results, strict=True):
@@ -1337,7 +1348,8 @@ def s6_analytic(ctx: Context) -> StudyOutput:
         configs, s6_entries(ctx, list(zip(configs, results, strict=True))), strict=True
     ):
         raw.append(entry)
-        kind = "random " + flags["memory_model"] + (" cluster" if flags.get("cores", 1) > 1 else "")
+        memory = "AXI" if flags["memory_model"] == "axi" else flags["memory_model"]
+        kind = "random " + memory + (" cluster" if flags.get("cores", 1) > 1 else "")
         if "conv_input_h" in flags:
             kind = "random conv"
         groups[kind].append(entry)
@@ -1363,12 +1375,12 @@ def s6_analytic(ctx: Context) -> StudyOutput:
     fig = svg.Figure(
         820,
         600,
-        title="Closed-form estimate / npu-sim cycles",
+        title="Closed-form cycle estimate against npu-sim",
         subtitle=f"{dense_count} random dense and {conv_count} random conv "
         f"configurations (seed {S6_SEED}) and the distinct S1 layer runs "
         "of each design point; 1 = exact",
         x_label="npu-sim cycles",
-        y_label="analytic.analyze estimate / npu-sim cycles",
+        y_label="estimated cycles / simulated cycles",
         x_scale="log",
         x_range=(lo, hi),
         y_range=(math.floor(min(ratios) * 10) / 10, math.ceil(max(ratios) * 10) / 10),
@@ -1600,7 +1612,7 @@ def s7_compression(ctx: Context) -> StudyOutput:
         f"dense INT8 runs at {min(int8):.2f} to {max(int8):.2f} of dense "
         "INT4; KV-cache matmuls stay INT8",
         x_label="weight decoder throughput (values per cycle per core)",
-        y_label="palette tokens/s / dense INT4 tokens/s",
+        y_label="palette decode rate relative to dense INT4",
         x_scale="log",
         x_range=(4, 256),
         y_range=(0, max(1.2, math.ceil(top * 10) / 10)),
@@ -1681,6 +1693,11 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         for row in feasible
         if (row["tile_m"], row["tile_n"], row["tile_k"], row["buffer_slots"]) == pick
     )
+    choices = (
+        f"{len(candidates)} tile and slot choices, all feasible and bit-exact"
+        if len(feasible) == len(candidates)
+        else f"{len(feasible)} feasible tile and slot choices of {len(candidates)}, all bit-exact"
+    )
     within = [row for row in feasible if row["scratchpad_bytes"] <= point.design.sram_bytes]
     best = min(within, key=lambda row: (row["cycles"], row["scratchpad_bytes"]))
     out = StudyOutput()
@@ -1688,9 +1705,7 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         820,
         500,
         title="Mapping search: ResNet-50 res3 3x3 conv on mobile-2k",
-        subtitle=f"784x128x1152 on its input footprint; {len(feasible)} feasible "
-        f"tile and slot choices of {len(candidates)}, all bit-exact; "
-        "caches off unless noted",
+        subtitle=f"784x128x1152 on its input footprint; {choices}; caches off unless noted",
         x_label="SRAM reserved (KiB)",
         y_label="cycles",
         y_include_zero=True,
@@ -1725,7 +1740,7 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         color=svg.PALETTE[1],
         marker="diamond",
         size=7,
-        label="npuperf.mapper, cache off",
+        label="npuperf.mapper, caches off",
     )
     fig.scatter(
         [with_cache["scratchpad_bytes"] / 1024],
@@ -1749,9 +1764,9 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         [
             describe(row),
             str(row["buffer_slots"]),
-            "0",
-            "0",
-            fmt(row["scratchpad_bytes"] / 1024, 4),
+            kib(0),
+            kib(0),
+            kib(row["scratchpad_bytes"]),
             f"{row['cycles']:,}",
             "Pareto front",
         ]
@@ -1761,9 +1776,9 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         [
             describe(best),
             str(best["buffer_slots"]),
-            "0",
-            "0",
-            fmt(best["scratchpad_bytes"] / 1024, 4),
+            kib(0),
+            kib(0),
+            kib(best["scratchpad_bytes"]),
             f"{best['cycles']:,}",
             f"fastest within {point.design.sram_bytes / 1024:g} KiB",
         ]
@@ -1772,9 +1787,9 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         [
             describe(mine),
             str(mine["buffer_slots"]),
-            "0",
-            "0",
-            fmt(mine["scratchpad_bytes"] / 1024, 4),
+            kib(0),
+            kib(0),
+            kib(mine["scratchpad_bytes"]),
             f"{mine['cycles']:,}",
             "npuperf.mapper, caches off",
         ]
@@ -1783,9 +1798,9 @@ def s8_pareto(ctx: Context) -> StudyOutput:
         [
             f"{cached.tile_m}x{cached.tile_n}x{cached.tile_k or gemm.k}",
             str(cached.buffer_slots),
-            fmt(cached.weight_cache_bytes / 1024, 4),
-            fmt(cached.activation_cache_bytes / 1024, 4),
-            fmt(with_cache["scratchpad_bytes"] / 1024, 4),
+            kib(cached.weight_cache_bytes),
+            kib(cached.activation_cache_bytes),
+            kib(with_cache["scratchpad_bytes"]),
             f"{with_cache['cycles']:,}",
             "npuperf.mapper, free SRAM as caches",
         ]
@@ -1938,7 +1953,7 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
     rates = sorted({rate for point in points for rate in s9_rates(point)})
     rows = [
         ["none: grouped GEMM on the array, im2col" if rate == 0 else f"{rate:,}"]
-        + [cells.get((rate, point.name), "") for point in points]
+        + [cells.get((rate, point.name), "–") for point in points]
         for rate in rates
     ]
     out.tables["s9-depthwise"] = markdown_table(
@@ -1971,11 +1986,10 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
         820,
         500,
         title="MobileNetV2 latency vs depthwise datapath rate",
-        subtitle="latency over latency with a depthwise datapath as wide as the "
-        "array; diamonds: the rule's pick; squares: the configured "
-        "Arm-model rate",
+        subtitle="MobileNetV2 latency relative to an array-wide depthwise datapath; "
+        "rings: the S9 rule's pick; open down-triangles: the configured Arm-model rate",
         x_label="depthwise MAC/cycle per core",
-        y_label="latency / latency at the array-wide rate",
+        y_label="latency relative to the array-wide rate",
         x_scale="log",
         y_scale="log",
         x_range=(S9_LOWEST, max(rates)),
@@ -1985,7 +1999,7 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
         legend="upper right",
         id_prefix="s9",
     )
-    fig.x.tick_format = lambda v: f"{v:g}"
+    fig.x.tick_format = lambda v: f"{v:,g}"
     fig.y.tick_format = lambda v: f"{v:g}"
     fig.hline(
         1 + S9_TOLERANCE,
@@ -2014,7 +2028,7 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
             [pick],
             [latency[pick] / base],
             color=svg.PALETTE[index],
-            marker="diamond",
+            marker="circle",
             size=12 - 2 * index,
             hollow=True,
         )
@@ -2023,8 +2037,9 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
                 [configured],
                 [latency[configured] / base],
                 color=svg.PALETTE[index],
-                marker="square",
-                size=7,
+                marker="down",
+                size=9,
+                hollow=True,
             )
     out.figures["s9-depthwise"] = fig
     out.raw["runs"] = raw
@@ -2127,7 +2142,7 @@ def s10_sram(ctx: Context) -> StudyOutput:
         subtitle="cores of client-16c and workstation-32c; tiles and cache split "
         "from npuperf.mapper per size",
         x_label="SRAM per core (KiB)",
-        y_label="MAC utilization",
+        y_label="MAC utilization (%)",
         x_scale="log",
         x_range=(S10_SIZES_KIB[0], S10_SIZES_KIB[-1]),
         y_range=(0, math.ceil(top * 10) / 10),
@@ -2135,7 +2150,8 @@ def s10_sram(ctx: Context) -> StudyOutput:
         legend="right",
         id_prefix="s10",
     )
-    fig.x.tick_format = lambda v: f"{v:g}"
+    fig.x.tick_format = lambda v: f"{v:,g}"
+    fig.y.tick_format = percent_tick
     fig.vline(chosen, f"rule picks {chosen:,} KiB", color=svg.INK_SECONDARY)
     for index, network in enumerate(S10_NETWORKS.values()):
         for point in points:
@@ -2172,8 +2188,8 @@ STUDIES = {
         Study("S2", "Roofline per design point", False, s2_roofline),
         Study("S3", "AXI outstanding transactions", True, s3_outstanding),
         Study("S4", "Multi-core scaling", True, s4_scaling),
-        Study("S5", "Dataflow: output- vs weight-stationary", True, s5_dataflow),
-        Study("S6", "Analytic model vs SystemC", True, s6_analytic),
+        Study("S5", "Dataflow", True, s5_dataflow),
+        Study("S6", "Analytic model against npu-sim", True, s6_analytic),
         Study("S7", "Weight compression for LLM decode", False, s7_compression),
         Study("S8", "Mapping search Pareto front", True, s8_pareto),
         Study("S9", "Depthwise datapath rate", False, s9_depthwise),
