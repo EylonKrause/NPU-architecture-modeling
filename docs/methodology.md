@@ -226,7 +226,7 @@ cached.
 | `linux-arm64-gcc` | `ubuntu-24.04-arm` | GCC, `ci-gcc`, native AArch64 | Full CTest |
 | `macos-arm64-clang` | `macos-15` | Clang, `ci-clang` | Full CTest; `run.py` from-scratch build and reuse |
 | `windows-x64-msvc` | `windows-2025` | MSVC, `ci-msvc` | Full CTest; `run.py` from-scratch build and reuse |
-| `linux-x64-asan-ubsan` | `ubuntu-24.04` | Preset workflow `asan-ubsan` | Full CTest under sanitizers |
+| `linux-x64-asan-ubsan` | `ubuntu-24.04` | Preset workflow `asan-ubsan` | CTest under sanitizers, except the `tools` and `sweep` suites |
 | `coverage` | `ubuntu-24.04` | GCC, preset `coverage` | Full CTest; line coverage |
 | `onnx-runtime-differential` | `ubuntu-24.04` | GCC, `ci-gcc`, `NPU_ENABLE_ONNX_TESTS=ON` | `ctest -L onnx` |
 | `results-drift` | `ubuntu-24.04` | GCC, `release` | `python -m npuperf.reproduce --quick --check` |

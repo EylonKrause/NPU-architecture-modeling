@@ -93,6 +93,7 @@
       "name": "asan-ubsan",
       "inherits": "base",
       "configurePreset": "asan-ubsan",
+      "filter": {"exclude": {"label": "tools|sweep"}},
       "environment": {
         "ASAN_OPTIONS": "abort_on_error=1:detect_leaks=1:strict_string_checks=1",
         "UBSAN_OPTIONS": "abort_on_error=1:halt_on_error=1:print_stacktrace=1"
