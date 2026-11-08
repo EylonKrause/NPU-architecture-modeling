@@ -13,7 +13,8 @@ function(_npu_git_describe out_var)
   if(NOT GIT_FOUND)
     return()
   endif()
-  # Describe only a checkout of this project, not an enclosing repository that vendors it.
+  # Describe the tree only at the root of its own checkout: inside a repository that vendors
+  # it, git describe would report the enclosing repository.
   execute_process(
     COMMAND "${GIT_EXECUTABLE}" rev-parse --show-prefix
     WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}"

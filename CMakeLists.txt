@@ -50,9 +50,9 @@ if(NPU_FETCH_SYSTEMC)
     URL "${NPU_SYSTEMC_URL}"
     URL_HASH SHA256=${NPU_SYSTEMC_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
-  # GNUInstallDirs has set CMAKE_INSTALL_DOCDIR to this project's directory, and SystemC's
-  # cache default cannot override a normal variable: without this, its README, LICENSE and
-  # NOTICE install as this project's documentation.
+  # GNUInstallDirs sets CMAKE_INSTALL_DOCDIR to this project's directory as a normal variable,
+  # which SystemC's cache default cannot override. It points at share/doc/systemc while SystemC
+  # configures, so SystemC's README, LICENSE and NOTICE install apart from this project's.
   set(_npu_docdir "${CMAKE_INSTALL_DOCDIR}")
   set(NPU_SYSTEMC_DOCDIR "${CMAKE_INSTALL_DATAROOTDIR}/doc/systemc")
   set(CMAKE_INSTALL_DOCDIR "${NPU_SYSTEMC_DOCDIR}")
@@ -151,8 +151,8 @@ if(BUILD_TESTING)
       SCRIPT tests/ubsan_vptr_tests.py BINARY npu-ubsan-vptr-probe TIMEOUT 30)
   endif()
 
-  # The scripts under scripts/ run end to end on the bundled examples. The setup fixture
-  # deletes the outputs these scripts refuse to overwrite, so ctest can be re-run.
+  # End-to-end runs of scripts/ on the bundled examples. The setup fixture deletes the outputs
+  # the scripts refuse to overwrite, so ctest runs again in the same build tree.
   set(_npu_mobile_out "${PROJECT_BINARY_DIR}/examples-mobile")
   set(_npu_fused_out "${PROJECT_BINARY_DIR}/examples-fused-graph.json")
   add_test(NAME examples.clean-output

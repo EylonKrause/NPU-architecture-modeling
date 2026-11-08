@@ -1,5 +1,5 @@
-# Lint and format settings for the Python tools and tests (ruff). The scripts use only the
-# standard library; this file does not make the repository an installable package.
+# ruff settings for the Python tools and tests. There is no [project] table: the tools use
+# only the standard library and run from the source tree.
 [tool.ruff]
 line-length = 100
 target-version = "py310"
