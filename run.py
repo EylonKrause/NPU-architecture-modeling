@@ -35,13 +35,13 @@ def cmake_executable() -> str:
     binary = shutil.which("cmake")
     if binary is None:
         raise RuntimeError("CMake 3.24 or newer is required; install it as described in "
-                           "docs/QUICKSTART.md.")
+                           "docs/usage.md, section 1.")
     version = subprocess.run([binary, "--version"], capture_output=True, text=True,
                              timeout=15, check=False)
     match = re.search(r"cmake version (\d+)\.(\d+)", version.stdout)
     if version.returncode or match is None or tuple(map(int, match.groups())) < (3, 24):
         raise RuntimeError("CMake 3.24 or newer is required; check the CMake on PATH "
-                           "(docs/QUICKSTART.md).")
+                           "(docs/usage.md, section 1).")
     return binary
 
 
@@ -57,7 +57,7 @@ def build(build_dir: Path, jobs: int) -> None:
     for command in commands:
         if subprocess.run(command, cwd=ROOT, check=False).returncode:
             raise RuntimeError("native build failed; see the compiler or CMake errors above "
-                               "and docs/QUICKSTART.md")
+                               "and docs/usage.md, section 1")
 
 
 def find_binary(build_dir: Path) -> Path:
@@ -87,7 +87,8 @@ def verify_binary(binary: Path) -> None:
 
 def main(argv=None) -> int:
     if sys.version_info < (3, 10):
-        print("run.py: Python 3.10 or newer is required (docs/QUICKSTART.md)", file=sys.stderr)
+        print("run.py: Python 3.10 or newer is required (docs/usage.md, section 1)",
+              file=sys.stderr)
         return 1
     sys.path.insert(0, str(ROOT))
     from npuperf import cli, live

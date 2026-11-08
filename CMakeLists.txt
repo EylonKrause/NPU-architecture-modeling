@@ -200,4 +200,6 @@ if(BUILD_TESTING)
     SCRIPT tests/mapper_tests.py BINARY npu-sim TIMEOUT 300)
   npu_add_python_test(tools.studies
     SCRIPT tests/studies_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(docs.cli-reference
+    SCRIPT tests/cli_reference_tests.py BINARY npu-sim TIMEOUT 60)
 endif()
