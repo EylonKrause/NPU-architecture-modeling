@@ -28,13 +28,20 @@ OUT = ROOT / "workloads"
 CONVENTIONS = {
     "batch": 1,
     "layout": "NHWC",
-    "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately; BN folded",
+    "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately",
     "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
     "repeat": "number of identical instances of the layer in the network",
     "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), "
     "'calls' identical calls; conv via im2col, depthwise as G = channels, "
-    "attention per KV head with sharing query heads stacked along M",
+    "attention as one group per KV head, with the query heads that share it stacked along M",
 }
+
+
+def conventions(name):
+    """CONVENTIONS, with batch normalization folded into the weights of the CNNs."""
+    if not name.startswith(("mobilenet", "resnet")):
+        return CONVENTIONS
+    return {**CONVENTIONS, "weight_bytes": CONVENTIONS["weight_bytes"] + "; BN folded"}
 
 
 def conv_out(n, k, s, p_lo, p_hi):
@@ -366,9 +373,13 @@ def llama(m, kv_len, phase):
             voc,
             d,
             repeat=1,
-            note="tied with embed_tokens (weights counted once in the total). Prefill "
-            "computes logits for the last position only, as serving runtimes do; HF "
-            f"default full-sequence logits would be M={m}",
+            note="tied with embed_tokens (weights counted once in the total)"
+            + (
+                ""
+                if m == 1
+                else "; logits for the last position only, the one that samples the next "
+                f"token; the Hugging Face default computes all {m} positions"
+            ),
         )
     )
     V += [
@@ -651,7 +662,7 @@ def build():
             "totals": t,
         }
     )
-    return [{"schema_version": 1, "conventions": CONVENTIONS, **w} for w in W]
+    return [{"schema_version": 1, "conventions": conventions(w["name"]), **w} for w in W]
 
 
 def render(workload) -> str:

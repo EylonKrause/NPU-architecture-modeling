@@ -3,10 +3,10 @@
  "conventions": {
   "batch": 1,
   "layout": "NHWC",
-  "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately; BN folded",
+  "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately",
   "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
   "repeat": "number of identical instances of the layer in the network",
-  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention per KV head with sharing query heads stacked along M"
+  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention as one group per KV head, with the query heads that share it stacked along M"
  },
  "name": "llama3.2_1b_prefill_s128",
  "source": [
@@ -208,7 +208,7 @@
     "G": 1,
     "calls": 1
    },
-   "note": "tied with embed_tokens (weights counted once in the total). Prefill computes logits for the last position only, as serving runtimes do; HF default full-sequence logits would be M=128"
+   "note": "tied with embed_tokens (weights counted once in the total); logits for the last position only, the one that samples the next token; the Hugging Face default computes all 128 positions"
   }
  ],
  "vector_ops": [

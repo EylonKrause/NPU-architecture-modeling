@@ -6,7 +6,7 @@
   "weight_bytes": "INT8, 1 byte per weight; INT32 bias reported separately; BN folded",
   "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
   "repeat": "number of identical instances of the layer in the network",
-  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention per KV head with sharing query heads stacked along M"
+  "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), 'calls' identical calls; conv via im2col, depthwise as G = channels, attention as one group per KV head, with the query heads that share it stacked along M"
  },
  "name": "mobilenet_v2_1.0_224",
  "source": [
