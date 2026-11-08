@@ -7,6 +7,8 @@ search.
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -24,6 +26,21 @@ def point(name: str) -> tuple[analytic.Design, int, str]:
             str(designs.config_path(name)))
 
 
+def map_on(item: tuple[str, workloads.Gemm]) -> mapper.Mapping:
+    name, gemm = item
+    design, min_depth, _ = point(name)
+    return mapper.map_call(design, gemm, min_depth)
+
+
+def map_all(items: list[tuple[str, workloads.Gemm]]) -> dict:
+    """map_on of every distinct (point, GEMM), four processes at a time: the mapper replays
+    most candidates of a layer."""
+    distinct = list(dict.fromkeys(items))
+    workers = max(1, min(4, os.cpu_count() or 1))
+    with concurrent.futures.ProcessPoolExecutor(workers) as pool:
+        return dict(zip(distinct, pool.map(map_on, distinct)))
+
+
 class MapperTests(unittest.TestCase):
     def test_tiles_align_fit_and_run(self):
         """Every ResNet-50 and MobileNetV2 layer on two points: aligned tiles (multiples of
@@ -31,39 +48,43 @@ class MapperTests(unittest.TestCase):
         panels at least the minimum depth or whole kernel rows, slots within SRAM with the
         caches taking the rest, and npu-sim accepts the mapping with the scratchpad,
         traffic and estimate the model predicts."""
-        for name in ("edge-256", "client-16c"):
+        names = ("edge-256", "client-16c")
+        layers = [gemm for workload in ("resnet50_v1.5_224", "mobilenet_v2_1.0_224")
+                  for _, gemm in workloads.iter_calls(workloads.load(workload))]
+        res3 = next(gemm for layer, gemm in workloads.iter_calls(
+            workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
+        depthwise = next(gemm for layer, gemm in workloads.iter_calls(
+            workloads.load("mobilenet_v2_1.0_224")) if layer["name"] == "block_3_depthwise")
+        runs = (res3, depthwise, res3.plain(), workloads.Gemm("dw", 196, 1, 9, 384))
+        mapped = map_all([(name, gemm) for name in names for gemm in (*layers, *runs)])
+        for name in names:
             design, min_depth, config = point(name)
-            for workload in ("resnet50_v1.5_224", "mobilenet_v2_1.0_224"):
-                for layer, gemm in workloads.iter_calls(workloads.load(workload)):
-                    mapping = mapper.map_call(design, gemm, min_depth)
-                    trial = design.replace(**gemm.flags(conv=mapping.conv))
-                    rows, cols = ((8, 8) if trial.channel_wise
-                                  else (design.array_rows, design.array_cols))
-                    width = (analytic.conv_geometry(trial).output_w if mapping.conv else 0)
-                    with self.subTest(point=name, layer=gemm.name):
-                        self.assertTrue(mapping.tile_m % rows == 0 or mapping.tile_m == gemm.m
-                                        or (width and mapping.tile_m % width == 0))
-                        self.assertTrue(mapping.tile_n % cols == 0
-                                        or mapping.tile_n == trial.grid_columns)
-                        if mapping.conv:
-                            row_k = analytic.conv_geometry(trial).kernel_row_k
-                            self.assertEqual(mapping.tile_k % row_k, 0)
-                        else:
-                            self.assertTrue(mapping.tile_k == 0 or mapping.tile_k >= min_depth)
-                        # 1x1 convolutions may run on their plain operand; the rest on
-                        # their input footprint.
-                        self.assertTrue(mapping.conv or gemm.pointwise or not gemm.conv)
-                        self.assertEqual(mapping.scratchpad_bytes, design.sram_bytes)
-                        self.assertLessEqual(mapping.buffer_slots, design.buffer_slots)
-                        if mapping.activation_cache_bytes:
-                            self.assertFalse(trial.channel_wise)
-                            self.assertGreater(trial.grid_columns, mapping.tile_n)
-            res3 = next(gemm for layer, gemm in workloads.iter_calls(
-                workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
-            depthwise = next(gemm for layer, gemm in workloads.iter_calls(
-                workloads.load("mobilenet_v2_1.0_224")) if layer["name"] == "block_3_depthwise")
-            for gemm in (res3, depthwise, res3.plain(), workloads.Gemm("dw", 196, 1, 9, 384)):
-                mapping = mapper.map_call(design, gemm, min_depth)
+            for gemm in layers:
+                mapping = mapped[(name, gemm)]
+                trial = design.replace(**gemm.flags(conv=mapping.conv))
+                rows, cols = ((8, 8) if trial.channel_wise
+                              else (design.array_rows, design.array_cols))
+                width = (analytic.conv_geometry(trial).output_w if mapping.conv else 0)
+                with self.subTest(point=name, layer=gemm.name):
+                    self.assertTrue(mapping.tile_m % rows == 0 or mapping.tile_m == gemm.m
+                                    or (width and mapping.tile_m % width == 0))
+                    self.assertTrue(mapping.tile_n % cols == 0
+                                    or mapping.tile_n == trial.grid_columns)
+                    if mapping.conv:
+                        row_k = analytic.conv_geometry(trial).kernel_row_k
+                        self.assertEqual(mapping.tile_k % row_k, 0)
+                    else:
+                        self.assertTrue(mapping.tile_k == 0 or mapping.tile_k >= min_depth)
+                    # 1x1 convolutions may run on their plain operand; the rest on their
+                    # input footprint.
+                    self.assertTrue(mapping.conv or gemm.pointwise or not gemm.conv)
+                    self.assertEqual(mapping.scratchpad_bytes, design.sram_bytes)
+                    self.assertLessEqual(mapping.buffer_slots, design.buffer_slots)
+                    if mapping.activation_cache_bytes:
+                        self.assertFalse(trial.channel_wise)
+                        self.assertGreater(trial.grid_columns, mapping.tile_n)
+            for gemm in runs:
+                mapping = mapped[(name, gemm)]
                 result = sim.run({"config": config, **gemm.flags(conv=mapping.conv),
                                   **mapping.flags(), "timing_only": True}, BINARY)
                 with self.subTest(point=name, layer=gemm.name):
