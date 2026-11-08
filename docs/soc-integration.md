@@ -3,8 +3,8 @@
 Three SystemC executables place the NPU model in a system context: a TLM-2.0 coprocessor with a
 register interface and an interrupt, a multi-core platform with QoS dispatch, DVFS and power
 gating, and a transformer decoder engine with a DRAM-resident KV cache. A Python tool adds an
-energy estimate to any `npu-sim` result. Model scope for all four is stated once, in
-[methodology](methodology.md#model-fidelity).
+energy estimate to any `npu-sim` result. [Methodology](methodology.md#model-fidelity) section 3
+defines the scope of all four.
 
 | Executable | Source | Models | CTest |
 |---|---|---|---|
@@ -321,8 +321,8 @@ Tile cycles are $\lceil M_t N_t K / 4 \rceil + 2$. Requantization is defined in
 
 | Flag | Range | Default | Function |
 |---|---|---|---|
-| `--jobs` | 1..100 | 2 | Jobs submitted to the persistent engine |
-| `--seed` | 0..4294967295 | 1 | Input pattern |
+| `--jobs` | 1 to 100 | 2 | Jobs submitted to the persistent engine |
+| `--seed` | 0 to 4,294,967,295 | 1 | Input pattern |
 | `--start-at-reset-release` | | off | Stage job 0 in reset; write `START` in the reset-release timestep |
 | `--dump-output` | | off | Add every accumulator and output to each job |
 | `--vcd BASENAME` | | none | Trace `clock`, `reset_n`, `irq`, `npu_busy`, `npu_done`, `completed_jobs` |
@@ -441,8 +441,8 @@ $$
 
 ### 2.6 Operating points and governors
 
-`--opps` lists 1 to 16 `MHz:mV` pairs. Frequencies increase strictly within 1..2000 MHz and
-voltages do not decrease, within 100..2000 mV. The default table is:
+`--opps` lists 1 to 16 `MHz:mV` pairs. Frequencies increase strictly within 1 to 2000 MHz and
+voltages do not decrease, within 100 to 2000 mV. The default table is:
 
 | Index | MHz | mV |
 |---|---|---|
@@ -517,18 +517,18 @@ build/release/npu-mobile-demo --cores 1 --jobs 3 --batch-size 1 --arrival-ns 100
 
 | Term | Count | pJ |
 |---|---|---|
-| Compute | 3 jobs x 512 MACs at $V = V_{\mathrm{ref}}$ = 800 mV | 3072 |
-| DRAM | 352 B read + 480 B written | 2496 |
-| Active | 676 ns | 3380 |
-| Retention | 200 ns | 1400 |
-| Gated | 1346 ns | 14806 |
+| Compute | 3 jobs x 512 MACs at $V = V_{\mathrm{ref}}$ = 800 mV | 3,072 |
+| DRAM | 352 B read + 480 B written | 2,496 |
+| Active | 676 ns | 3,380 |
+| Retention | 200 ns | 1,400 |
+| Gated | 1,346 ns | 14,806 |
 | Transitions | 3 wake-ups, 0 switches | 39 |
-| Total | `simulation_ns` = 2222 | 25193 |
+| Total | `simulation_ns` = 2,222 | 25,193 |
 
 Each job arrives after the core has gated, so each pays a wake-up. Job 0 misses the weight cache
 and reads 224 B; jobs 1 and 2 hit it and read their 64 B of activations.
 
-### 2.9 Measured behavior
+### 2.9 Example runs
 
 Core scaling, eight compute-bound jobs of $8 \times 8 \times 64$ at 1 MAC per cycle (4100 cycles,
 20.5 µs per job at 200 MHz):
@@ -542,7 +542,7 @@ build/release/npu-mobile-demo --cores C --jobs 8 --m 8 --n 8 --k 64 --macs-per-c
 | 1 | 164,590 | 1.00 | 578 | 0 | 7 / 1 |
 | 2 | 82,392 | 2.00 | 612 | 74 | 6 / 2 |
 | 4 | 41,404 | 3.98 | 680 | 444 | 4 / 4 |
-| 8 | 21,132 | 7.79 | 816 | 2072 | 0 / 8 |
+| 8 | 21,132 | 7.79 | 816 | 2,072 | 0 / 8 |
 
 Each additional core misses the weight cache once, so bus time grows with the core count, and
 cores that start or finish together queue on the channel.
@@ -576,28 +576,28 @@ jobs.
 
 | Flag | Range | Default | Function |
 |---|---|---|---|
-| `--cores` | 1..8 | 2 | Cores |
-| `--jobs` | 1..128 | 6 | Jobs |
+| `--cores` | 1 to 8 | 2 | Cores |
+| `--jobs` | 1 to 128 | 6 | Jobs |
 | `--models` | 1..jobs | 1 | Weight sets; job $i$ uses set $i \bmod$ models |
-| `--m`, `--n` | 1..64 | 4, 8 | Output rows, columns |
-| `--k` | 1..256 | 16 | Reduction depth |
-| `--seed` | 0..4294967295 | 1 | Input pattern |
-| `--arrival-ns` | 0..1000000 | 0 | Spacing of release batches |
-| `--batch-size` | 1..128 | 6 | Jobs per release |
-| `--priorities` | list of 0..255 | `0,2,1` | Priority of job $i$ is entry $i \bmod$ length |
-| `--deadline-ns` | 0..10000000 | 0 | Relative deadline; 0 is none |
+| `--m`, `--n` | 1 to 64 | 4, 8 | Output rows, columns |
+| `--k` | 1 to 256 | 16 | Reduction depth |
+| `--seed` | 0 to 4,294,967,295 | 1 | Input pattern |
+| `--arrival-ns` | 0 to 1,000,000 | 0 | Spacing of release batches |
+| `--batch-size` | 1 to 128 | 6 | Jobs per release |
+| `--priorities` | list of values 0 to 255 | `0,2,1` | Priority of job $i$ is entry $i \bmod$ length |
+| `--deadline-ns` | 0 to 10,000,000 | 0 | Relative deadline; 0 is none |
 | `--governor` | `fixed`, `deadline` | `fixed` | Section 2.6 |
 | `--opps`, `--opp` | section 2.6 | default table, 1 | OPP table and initial index |
-| `--bus-bytes-per-ns` | 1..4096 | 16 | DRAM channel rate |
-| `--bus-latency-ns` | 0..1000000 | 8 | Per-transfer channel latency |
-| `--macs-per-cycle` | 1..1048576 | 16 | Core MAC rate |
-| `--pipeline-cycles` | 0..1000000 | 4 | Per-job pipeline cycles |
-| `--sram-bytes` | 0..16777216 | 65536 | Per-core SRAM |
-| `--cache-bytes` | 0..sram | 4096 | Per-core weight cache |
-| `--gate-after-ns` | 0..10000000 | 100 | Idle time before gating |
-| `--wakeup-ns`, `--switch-ns` | 0..1000000 | 12, 8 | Transition times |
-| `--reference-mv` | 100..2000 | 800 | $V_{\mathrm{ref}}$ |
-| `--mac-pj`, `--dram-byte-pj`, `--leakage-mw`, `--retention-mw`, `--gated-mw`, `--wakeup-pj`, `--switch-pj` | 0..1e9, finite | 0 | Section 2.8 |
+| `--bus-bytes-per-ns` | 1 to 4096 | 16 | DRAM channel rate |
+| `--bus-latency-ns` | 0 to 1,000,000 | 8 | Per-transfer channel latency |
+| `--macs-per-cycle` | 1 to 1,048,576 | 16 | Core MAC rate |
+| `--pipeline-cycles` | 0 to 1,000,000 | 4 | Per-job pipeline cycles |
+| `--sram-bytes` | 0 to 16 MiB | 64 KiB | Per-core SRAM |
+| `--cache-bytes` | 0 to `--sram-bytes` | 4 KiB | Per-core weight cache |
+| `--gate-after-ns` | 0 to 10,000,000 | 100 | Idle time before gating |
+| `--wakeup-ns`, `--switch-ns` | 0 to 1,000,000 | 12, 8 | Transition times |
+| `--reference-mv` | 100 to 2000 | 800 | $V_{\mathrm{ref}}$ |
+| `--mac-pj`, `--dram-byte-pj`, `--leakage-mw`, `--retention-mw`, `--gated-mw`, `--wakeup-pj`, `--switch-pj` | 0 to $10^9$, finite | 0 | Section 2.8 |
 | `--inject-output-fault` | job id | off | Flip bit 0 of that job's first output; the run reports the mismatch and exits 2 |
 | `--dump-output`, `--vcd BASENAME` | | off | Per-job outputs; waveform |
 
@@ -804,18 +804,18 @@ against an independent Python oracle that computes full Q, K and V tensors with 
 
 | Parameter | Flag | Range | Default |
 |---|---|---|---|
-| $d$ | `--dim` | 2..2048, a multiple of $H$ with $d/H$ even | 16 |
-| $H$ | `--heads` | 1..64 | 4 |
-| $H_{kv}$ | `--kv-heads` | 1..64, divides $H$ | 2 |
-| $f$ | `--ff-dim` | 1..8192 | 32 |
-| $L$ | `--layers` | 1..16 | 1 |
-| $T_{\max}$ | `--context` | 1..4096 | 32 |
-| $S_{\max}$ | `--prefill` | 1..4096 | 3 |
-| decode tokens | `--decode` | 0..4096; prefill + decode $\le T_{\max}$ | 3 |
+| $d$ | `--dim` | 2 to 2048, a multiple of $H$ with $d/H$ even | 16 |
+| $H$ | `--heads` | 1 to 64 | 4 |
+| $H_{kv}$ | `--kv-heads` | 1 to 64, divides $H$ | 2 |
+| $f$ | `--ff-dim` | 1 to 8192 | 32 |
+| $L$ | `--layers` | 1 to 16 | 1 |
+| $T_{\max}$ | `--context` | 1 to 4096 | 32 |
+| $S_{\max}$ | `--prefill` | 1 to 4096 | 3 |
+| decode tokens | `--decode` | 0 to 4096; prefill + decode $\le T_{\max}$ | 3 |
 | $b$ | `--precision` | `fp32`, `fp16`, `bf16` | `fp16` |
-| $r_t$, $r_v$, $r_{\mathrm{dma}}$ | `--tensor-macs-per-cycle`, `--vector-ops-per-cycle`, `--dma-bytes-per-cycle` | 1..4096 | 64, 16, 32 |
-| $c_0$ | `--dma-startup` | 0..1000 | 2 |
-| $B_{\mathrm{SRAM}}$ | `--sram-bytes` | 1..67108864, admission of section 3.5 | 1048576 |
+| $r_t$, $r_v$, $r_{\mathrm{dma}}$ | `--tensor-macs-per-cycle`, `--vector-ops-per-cycle`, `--dma-bytes-per-cycle` | 1 to 4096 | 64, 16, 32 |
+| $c_0$ | `--dma-startup` | 0 to 1000 | 2 |
+| $B_{\mathrm{SRAM}}$ | `--sram-bytes` | 1 B to 64 MiB, admission of section 3.5 | 1 MiB |
 
 Two host limits apply. Weights are held in binary32, and $4 L W_\ell$ must not exceed 256 MiB.
 The arithmetic runs twice (three times with `--verify-lifecycle`), and that multiple of
@@ -865,10 +865,9 @@ source counts, the coefficients, and the `scope` lists of `npuperf/energy.py`: i
 
 ### 4.2 Coefficient provenance
 
-The repository ships no energy coefficients. Every coefficient is an input of the run, every
-report echoes the values it used, and the multi-core platform's report sets
-`silicon_calibrated` to false. Both tools follow the action-count method: a count of each event
-multiplied by a per-event cost,
+Coefficients are run inputs; every report echoes the values it used, and the multi-core
+platform's report sets `silicon_calibrated` to false. Both tools follow the action-count
+method: a count of each event multiplied by a per-event cost,
 as in [Accelergy energy reference tables](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables).
 
 | Coefficient | Flag | Unit | Multiplies | Default | Calibrated from |

@@ -1,15 +1,13 @@
 # Usage
 
-This document describes how to build the model, run `npu-sim`, read and write its file
-formats, drive the live dashboard, and use the Python tools in `npuperf/`. The mechanisms
-behind the reported counters are specified in [architecture](architecture.md), arithmetic and
-weight formats in [numerics](numerics.md), and the scope of the model in the "Model fidelity"
-section of [methodology](methodology.md).
+The mechanisms behind the reported counters are specified in [architecture](architecture.md),
+arithmetic and weight formats in [numerics](numerics.md), and the scope of the model in
+[methodology](methodology.md#model-fidelity) section 3.
 
 | Section | Content |
 |---|---|
 | [1 Build](#1-build) | Prerequisites, CMake presets, cache options, executables, tests, install |
-| [2 Launcher](#2-launcher) | `run.py`: build, check and open the dashboard in one command |
+| [2 Launcher](#2-launcher) | `run.py`: build and check `npu-sim`, then open the dashboard |
 | [3 npu-sim command line](#3-npu-sim-command-line) | Conventions, option reference, limits |
 | [4 Configuration files](#4-configuration-files) | `--config` schema, shipped design points, precedence |
 | [5 Result JSON](#5-result-json) | Schema version 2: top level, `memory`, `cluster`, `cores` |
@@ -173,7 +171,7 @@ stops the server and its simulator child.
 | Option | Default | Effect |
 |---|---|---|
 | `--build-dir DIR` | `build-live` | CMake build directory |
-| `--jobs N` | `2` | Parallel build jobs, 1..128 |
+| `--jobs N` | `2` | Parallel build jobs, 1 to 128 |
 | `--port N` | `8765` | Dashboard port on `127.0.0.1`; `0` picks a free port and prints it |
 | `--profile NAME` | `balanced` | Initial workload: `balanced`, `compute-bound`, `memory-bound`, `palette-weights` |
 | `--no-browser` | | Print the URL only |
@@ -293,7 +291,7 @@ switch. Descriptions are the `--help` text.
 | `--tile-n` | `mapping.tile_n` | `N` | `8` | output tile columns |
 | `--tile-k` | `mapping.tile_k` | `N` | `0` | reduction panel depth; 0 uses one panel of depth K |
 | `--buffer-slots` | `mapping.buffer_slots` | `N` | `2` | tiles in flight across load, compute and store |
-| `--panel-buffers` | `mapping.panel_buffers` | `1\|2` | `2` | reduction-panel buffers per slot; with 2 the DMA loads panel b+1 while compute reads panel b |
+| `--panel-buffers` | `mapping.panel_buffers` | `1\|2` | `2` | reduction-panel buffers per slot; with 2 the DMA loads panel p+1 while compute reads panel p |
 | `--partition` | `mapping.partition` | `m\|n\|auto` | `auto` | cluster work split: m gives each core a band of output-row tiles and n a band of output-column tiles; whole groups go to cores when groups >= cores; auto takes the smaller predicted makespan bound, then fewer predicted DRAM bytes, then n |
 | `--weight-bits` | `weights.bits` | `4\|8` | `8` | signed weight precision |
 | `--weight-encoding` | `weights.encoding` | `dense\|palette\|sparse` | `dense` | lossless weight storage format |
@@ -317,35 +315,16 @@ switch. Descriptions are the `--help` text.
 
 ### 3.4 Limits
 
+[Architecture](architecture.md) section 2 gives the range of every architecture and mapping
+field and the rules between fields, section 4.4 the convolution geometry, and
+[numerics](numerics.md) section 2 the multiplier and shift ranges. The other limits are:
+
 | Quantity | Accepted range | Defined in |
 |---|---|---|
-| `shape.m`, `shape.n`, `shape.k`, `shape.groups` | 1..1,048,576 | `include/npu/core.hpp` (`max_dimension`) |
-| G·N and G·K | at most 1,048,576 | `src/core.cpp` |
-| MACs per bit-exact run | at most 4,000,000,000 | `max_functional_macs` |
-| MACs per `--timing-only` run | at most 10,000,000,000,000 | `max_timing_only_macs` |
-| Simulator host storage estimate | at most 256 MiB | `max_host_bytes` |
-| `mapping.tile_m`, `mapping.tile_n` | 1..1,048,576 | `src/core.cpp` |
-| `mapping.tile_k` | 0 (one panel of depth K) or 1..1,048,576 | `src/core.cpp` |
-| `mapping.buffer_slots` | 1..64 | `src/core.cpp` |
-| `mapping.panel_buffers` | 1 or 2 | `src/core.cpp` |
-| `arch.compute.array_rows`, `array_cols` | both 0 (vector datapath) or both 1..256 | `src/core.cpp` |
-| Rates: `macs_per_cycle`, `memory.bytes_per_cycle`, `weight_decode_values_per_cycle` | 1..1,000,000,000 | `src/core.cpp` |
-| Latencies, `pipeline_cycles`, `burst_bytes`, `weight_cache_bytes`, `activation_cache_bytes`, `dram_bytes_per_cycle`, `depthwise_macs_per_cycle` | at most 1,000,000,000 | `src/core.cpp` |
-| `shape.conv` input extents, kernel, stride, dilation | 1..1,048,576 each, all three input extents set together; `input_c` a multiple of `groups`; M = output height·width, K = kernel_h·kernel_w·input_c/groups | `src/conv.cpp` |
-| `shape.conv` padding | 0..1,048,576 per side; the kernel's reach fits the padded input | `src/conv.cpp` |
-| `arch.memory.axi.data_bytes` | 8, 16, 32 or 64 | `src/core.cpp` |
-| `arch.memory.axi.max_burst_beats` | 1..256 | `src/core.cpp` |
-| `read_outstanding`, `write_outstanding` | 1..64 | `src/core.cpp` |
-| `arch.cores` | 1..64; above 1 requires `--memory-model axi` | `src/core.cpp` |
-| `arch.frequency_mhz` | 0.000001..1,000,000,000 | `src/core.cpp` |
-| `weights.bits` | 4 or 8; INT4 weight zero points in -8..7 | `src/core.cpp` |
-| `weights.palette_bits` | 1, 2, 4 or 8 | `src/core.cpp` |
-| `weights.sparse_block` | 1..4096; sparse encoding runs on the vector datapath only | `src/core.cpp` |
-| `quant.multiplier` | 0..2,147,483,647 | `src/core.cpp` |
-| `quant.shift` | 0..31 for `native`; 2..62 for `tosa-single` and `tosa-double` | `src/core.cpp` |
-| SRAM | `arch.sram_bytes` at least the reservation of the slots, panel buffers, weight cache and activation cache (`scratchpad_bytes`) | `src/core.cpp` |
+| Simulator host storage estimate | at most 256 MiB | `max_host_bytes`, `include/npu/core.hpp` |
+| `shape.conv` padding | 0 to 1,048,576 per side | `src/conv.cpp` |
 | Config file | at most 64 MiB; JSON nesting at most 64 levels | `include/npu/options.hpp`, `include/npu/json.hpp` |
-| `--slice-cycles`, live `advance N` | 1..10,000,000 | `src/main.cpp` |
+| `--slice-cycles`, live `advance N` | 1 to 10,000,000 | `src/main.cpp` |
 | Live command line | at most 256 characters | `src/main.cpp` |
 
 ## 4 Configuration files
@@ -419,10 +398,9 @@ npu-sim --tile-k 128 --config configs/mobile-2k.json --describe-config   # tile_
 | `configs/workstation-32c.json` | 32x32 OS | 32 | AXI | 64 x 64 x 256 |
 | `configs/example.json` | 16x16 OS | 1 | serial | 32 x 32 x 64 |
 
-The first four are design points sized from public data; [design points](design-points.md)
-derives every field and cites the sources, and `python3 -m npuperf.designs` prints their
-headline table. A design-point file sets the architecture and mapping only, so a run supplies
-the layer shape:
+The first four are the design points; [design points](design-points.md) derives every field and
+cites the sources, and `python3 -m npuperf.designs` prints their summary table. A design-point
+file sets the architecture and mapping only, so a run supplies the layer shape:
 
 ```sh
 npu-sim --config configs/mobile-2k.json --m 1 --n 2048 --k 2048 --timing-only
@@ -623,12 +601,12 @@ stdout, and then reads one command per line on stdin (`live_commands` in `src/ma
 
 | Command | Reply |
 |---|---|
-| `advance N` | Advance simulated time by N cycles, 1..10,000,000, then one snapshot. After completion `cycles` stays at the completion cycle |
+| `advance N` | Advance simulated time by N cycles, 1 to 10,000,000, then one snapshot. After completion `cycles` stays at the completion cycle |
 | `snapshot` | One snapshot of the current state |
 | `stop` | One snapshot with `"type": "stopped"`; the process exits with status 0 |
 | any other line | `{"type":"error","error":"expected advance N, snapshot, or stop"}`; the session continues |
 
-An `advance` outside 1..10,000,000 replies `{"type":"error","error":"advance requires cycles in
+An `advance` outside 1 to 10,000,000 replies `{"type":"error","error":"advance requires cycles in
 1..10000000"}`, and a line longer than 256 characters replies an error and is discarded. End
 of input exits with status 0 and no reply. Each reply is one JSON object on one line. Two
 conditions end the process with status 2 and a diagnostic on stderr: a completed output that
@@ -717,7 +695,7 @@ assigns, as `GET /api/profiles` reports it.
 | `palette-weights` | 2-bit palette weights | `--weight-encoding palette --palette-bits 2 --input-zero 0 --weight-zero 0 --shift 4`, tensors from an `NPU1` file | null (compressed panel sizes depend on the weight values) |
 
 The `palette-weights` tensors come from a file the controller writes per job: activations
-in -8..8, weights from {-3, -1, 1, 3}, bias in -31..31, drawn from the job seed.
+in $-8$ to $8$, weights from {-3, -1, 1, 3}, bias in $-31$ to $31$, drawn from the job seed.
 
 ### 8.3 Controller
 
@@ -729,15 +707,14 @@ in -8..8, weights from {-3, -1, 1, 3}, bias in -31..31, drawn from the job seed.
 | Timeline length | 512 stage transitions | `TIMELINE_TRANSITIONS` |
 | Slice history | 200 advances | `SLICE_HISTORY` |
 | Completed jobs kept | 8 | `recent_jobs` |
-| Step size | 1..10,000 cycles | `MAX_STEP` |
+| Step size | 1 to 10,000 cycles | `MAX_STEP` |
 
 Each inference runs in its own `npu-sim --live-stdio` child with seed n for the n-th job of
 the session. When a snapshot reports completion, the controller requires `"validated": true`
 and starts the next job in a new process; a validation failure moves the controller to the
 `error` state. An advance longer than 512 cycles runs its first part in one command and
 records a transition with `unsampled_from`, so the page never draws an unobserved interval as
-a stage. The pacing makes execution observable in a browser; simulated time and counters come
-from the SystemC process.
+a stage.
 
 ### 8.4 HTTP API
 
@@ -775,13 +752,13 @@ The control body is a JSON object with `action` and, depending on the action, `p
 | `reset` | none | As `start`, but paused |
 | `pause` | running | Stop issuing advances |
 | `resume` | paused | Continue |
-| `step` | paused | Advance `cycles` (1..10,000, default 256), launching the next job first if the last one completed |
+| `step` | paused | Advance `cycles` (1 to 10,000, default 256), launching the next job first if the last one completed |
 | `stop` | none | End the simulator child; the last view remains |
 
 | Status | Cause |
 |---|---|
 | 200 | Command applied |
-| 400 | Invalid JSON, unknown field or action, field not allowed for the action, precondition not met, body outside 1..4096 bytes |
+| 400 | Invalid JSON, unknown field or action, field not allowed for the action, precondition not met, body outside 1 to 4096 bytes |
 | 403 | `Host` header other than `127.0.0.1:<port>`, `localhost:<port>` or `[::1]:<port>`; an `Origin` that differs from the host; any `OPTIONS` request |
 | 404 | Unknown path |
 | 415 | Content type other than `application/json`, or a `Transfer-Encoding` header |
@@ -886,7 +863,7 @@ python3 -m npuperf.roofline --workload resnet50_v1.5_224 \
 | `--out PATH` | Write the roofline SVG |
 | `--label LAYER` | Label a layer on the plot; repeatable |
 
-The x axis is arithmetic intensity in MACs per DRAM byte, re-reads included; the y axis is
+The x axis is arithmetic intensity in MAC per DRAM byte (MAC/B), re-reads included; the y axis is
 achieved MACs per cycle. The roofs are the peak MAC rate and the peak DRAM rate; under the
 serial memory model a dashed roof marks the bandwidth left after per-request latency. Every
 point satisfies y ≤ min(peak, bandwidth · x), which `tests/npuperf_tests.py` checks.
@@ -903,8 +880,8 @@ in `docs/figures/`, and the raw records in `results/studies/<study>.json` (not c
 | S2 | Roofline per design point | |
 | S3 | AXI outstanding transactions | yes |
 | S4 | Multi-core scaling | yes |
-| S5 | Dataflow: output- vs weight-stationary | yes |
-| S6 | Analytic model vs SystemC | yes |
+| S5 | Dataflow | yes |
+| S6 | Analytic model against npu-sim | yes |
 | S7 | Weight compression for LLM decode | |
 | S8 | Mapping search Pareto front | yes |
 | S9 | Depthwise datapath rate | |
@@ -937,8 +914,8 @@ The coefficients above are placeholders. The report's `component_pj` holds the `
 
 ### 9.7 designs and mapper
 
-`python3 -m npuperf.designs [NAME ...] [--format markdown|json]` prints the headline figures of
-the design points: MAC/cycle, array, cores, clock, peak TOP/s at two operations per MAC, SRAM,
+`python3 -m npuperf.designs [NAME ...] [--format markdown|json]` prints the summary figures
+of the design points: MAC/cycle, array, cores, clock, peak TOP/s at two operations per MAC, SRAM,
 depthwise MAC/cycle, AXI width, DRAM rate and ridge point.
 
 `python3 -m npuperf.mapper --design client-16c --m 784 --n 128 --k 1152` searches tile shapes,
@@ -998,7 +975,7 @@ report (section 10.5).
 | `name` | no | Workload name in the report |
 | `tensors` | yes | Map of tensor name to tensor object: inputs, weights, bias |
 | `inputs` | no | Names of external inputs among `tensors`, unique |
-| `nodes` | yes | 1..256 node objects, in any order |
+| `nodes` | yes | 1 to 256 node objects, in any order |
 | `outputs` | yes | Unique names of node outputs or initial tensors |
 | `expected_outputs` | no | Map of output name to a flat INT8 array; checked after the run |
 | `architecture` | no | `npu-sim` flags in snake case (`tile_m`, `macs_per_cycle`, `memory_model`, ...) applied to every call; numbers or strings |
@@ -1019,7 +996,7 @@ A tensor object has exactly five fields:
 | Field | Rule |
 |---|---|
 | `dtype` | `int8` (activations, weights) or `int32` (bias) |
-| `shape` | 1..6 dimensions, each 1..4096, at most 1,000,000 elements |
+| `shape` | 1 to 6 dimensions, each 1 to 4096, at most 1,000,000 elements |
 | `data` | Flat row-major integers in the dtype's range; booleans rejected |
 | `scale` | Finite and positive |
 | `zero_point` | In the dtype's range; 0 for `int32` |
@@ -1030,9 +1007,9 @@ take a `quant` object:
 
 | `quant` field | Required | Rule |
 |---|---|---|
-| `multiplier` | yes | 0..2,147,483,647 |
-| `shift` | yes | 0..31 for `native`, 2..62 for the TOSA modes |
-| `output_scale`, `output_zero` | yes | Output tensor quantization; zero point in -128..127 |
+| `multiplier` | yes | 0 to 2,147,483,647 |
+| `shift` | yes | 0 to 31 for `native`, 2 to 62 for the TOSA modes |
+| `output_scale`, `output_zero` | yes | Output tensor quantization; zero point in $-128$ to $127$ |
 | `relu` | no | Clamp at the output zero point; default false |
 | `rounding` | no | `away` (default) or `even`, for `native` |
 | `rescale` | no | `native` (default), `tosa-single` or `tosa-double` |
@@ -1041,7 +1018,7 @@ take a `quant` object:
 
 The runtime checks the declared scales against the integer parameters per channel: the
 ratio input scale times weight scale over output scale must lie within $2^{-(\text{shift}+1)}$
-of multiplier / 2^shift, and a bias scale must equal input scale times weight scale.
+of $\text{multiplier}/2^{\text{shift}}$, and a bias scale must equal input scale times weight scale.
 
 ### 10.3 Operators
 
@@ -1049,7 +1026,7 @@ of multiplier / 2^shift, and a bias scale must equal input scale times weight sc
 |---|---|---|---|
 | `Dense`, `MatMul` | activations [M, K], weights [K, N], optional bias [N] | `quant` | One `npu-sim` call |
 | `Conv2D` | NHWC activations, weights [KH, KW, IC, OC], optional bias [OC] | `quant`, `strides`, `dilations`, `padding` | Host im2col, then one call with M = N·OH·OW, K = KH·KW·IC, N = OC |
-| `DepthwiseConv2D` | NHWC activations, weights [KH, KW, IC, multiplier], optional bias [IC·multiplier] | `quant`, `strides`, `dilations`, `padding` | One grouped call (G = IC, K = KH·KW, N = multiplier); one call per channel on a build without `--groups` |
+| `DepthwiseConv2D` | NHWC activations, weights [KH, KW, IC, multiplier], optional bias [IC·multiplier] | `quant`, `strides`, `dilations`, `padding` | One grouped call (G = IC, K = KH·KW, N = multiplier) |
 | `Add` | two tensors of identical shape, scale and zero point | | Host: saturate(a + b − zero point) |
 | `ReLU` | one tensor | | Host: max(x, zero point) |
 | `MaxPool2D` | NHWC | `kernel`, `strides`, `dilations`, `padding` | Host; padding never wins the maximum |
@@ -1061,7 +1038,7 @@ channels are ordered input channel first, then channel multiplier.
 
 | Attribute | Default | Rule |
 |---|---|---|
-| `strides`, `dilations` | `[1, 1]` | Two integers in 1..4096 |
+| `strides`, `dilations` | `[1, 1]` | Two integers in 1 to 4096 |
 | `padding` | `"VALID"` | `"VALID"`, `"SAME"` (output ⌈H / stride⌉; the odd padding cell goes bottom and right) or `[top, bottom, left, right]` |
 | `kernel` | `[2, 2]` | Pooling window |
 | `count_include_pad` | false | `AveragePool2D` only |
@@ -1086,8 +1063,8 @@ layout work are outside the NPU cycles.
 
 | Limit | Value |
 |---|---|
-| Nodes | 1..256 |
-| Tensor | 1..6 dimensions of 1..4096, at most 1,000,000 elements |
+| Nodes | 1 to 256 |
+| Tensor | 1 to 6 dimensions of 1 to 4096, at most 1,000,000 elements |
 | Graph file | 32 MiB |
 | MACs per accelerated node | at most 100,000,000 |
 | Lowered matrices | dimensions at most 4096; M·K + K·N at most 1,000,000 elements |
@@ -1180,7 +1157,7 @@ graph.json`). The tests run with `-DNPU_ENABLE_ONNX_TESTS=ON` and `ctest -L onnx
 
 | Model property | Rule |
 |---|---|
-| Opsets | Standard domain only, versions 10..21 |
+| Opsets | Standard domain only, versions 10 to 21 |
 | Shapes | Static; the ONNX checker and strict shape inference run first |
 | Parameters | Weights, scales, zero points and bias are initializers of type INT8, INT32 or FLOAT |
 | Conv attributes | `strides`, `dilations`, `pads`, `kernel_shape` (must match the weights), `group`, `auto_pad` (`NOTSET`, `VALID`, `SAME_UPPER`, `SAME_LOWER`); `auto_pad` and `pads` are exclusive |
@@ -1193,7 +1170,7 @@ graph.json`). The tests run with `-DNPU_ENABLE_ONNX_TESTS=ON` and `ctest -L onnx
 | Aspect | Mapping |
 |---|---|
 | Rescale | `native` with `rounding` `even` |
-| Scale ratio | Input scale times weight scale over output scale, evaluated exactly on the FLOAT32 values; it must equal multiplier / 2^shift with an INT32 multiplier and shift 0..31, else the import fails |
+| Scale ratio | Input scale times weight scale over output scale, evaluated exactly on the FLOAT32 values; it must equal $\text{multiplier}/2^{\text{shift}}$ with an INT32 multiplier and shift 0 to 31, else the import fails |
 | Per-channel weights | `weight_zero_points`, `multipliers`, `shifts`, `weight_scales` per output channel; `bias_scales` = input scale times weight scale |
 | Padding | ONNX `[top, left, bottom, right]` becomes `[top, bottom, left, right]`; `SAME_UPPER` becomes `SAME`; `SAME_LOWER` becomes a four-element list with the odd cell top and left |
 | Layout | NCHW inputs transpose to NHWC on import; consecutive convolutions stay NHWC; each convolution output gets an `io_layouts` entry, so `external_outputs` restores ONNX names, shapes and NCHW order |

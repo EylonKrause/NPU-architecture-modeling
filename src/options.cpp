@@ -147,8 +147,8 @@ const std::vector<ConfigOption> option_table = {
     {"--buffer-slots", "mapping.buffer_slots", "", "tiles in flight across load, compute and store",
      NPU_FIELD(mapping.buffer_slots)},
     {"--panel-buffers", "mapping.panel_buffers", "1|2",
-     "reduction-panel buffers per slot; with 2 the DMA loads panel b+1 while compute reads "
-     "panel b",
+     "reduction-panel buffers per slot; with 2 the DMA loads panel p+1 while compute reads "
+     "panel p",
      NPU_FIELD(mapping.panel_buffers)},
     {"--partition", "mapping.partition", "",
      "cluster work split: m gives each core a band of output-row tiles and n a band of "
@@ -206,10 +206,8 @@ const std::vector<ConfigOption> option_table = {
 
 std::string quoted(std::string_view text) { return "'" + std::string(text) + "'"; }
 
-// The decimal forms strtod reads: a sign, digits with an optional point on
-// either side, an optional exponent. Hex, inf, nan, whitespace and trailing
-// text are rejected. Config files use the JSON number grammar of their
-// parser.
+// The parse_decimal grammar (options.hpp). Config-file numbers use the JSON
+// grammar of json.cpp.
 bool decimal_grammar(std::string_view text) {
     std::size_t i = 0;
     const auto digits = [&]() {

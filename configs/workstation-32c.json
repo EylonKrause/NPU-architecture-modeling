@@ -1,6 +1,6 @@
 {
   "name": "workstation-32c",
-  "description": "Hypothetical two-die workstation NPU sized from public data on the 32-core Neural Engine and the over 800 GB/s of memory bandwidth Apple states for M3 Ultra (no operations-per-second figure stated): two client-16c dies sharing one DRAM. 32 cores of 32x32 output-stationary arrays: 32768 MAC/cycle, 78.6432 TOP/s at 1.2 GHz and 2 ops/MAC. DRAM 667 B/cycle, the smallest integer rate that reaches 800 GB/s at 1.2 GHz (800.4 GB/s), shared with the CPU and GPU; no die-to-die link is modeled. Every per-core parameter is client-16c's: SRAM 256 KiB (the S10 rule over both points), one 256-bit AXI port (32 read channels of 32 B/cycle against 667 B/cycle of DRAM), Vela 5.2.0 Ethos-U85 DRAM latencies and outstanding limits, 8-beat bursts, tiles 64x64x256 and an 89600 B weight cache, and the depthwise datapath 128 MAC/cycle, which the S9 rule picks on this point too. Partition auto. Pipeline 4 cycles per panel, the simulator default.",
+  "description": "Hypothetical two-die workstation NPU sized from Apple's published M3 Ultra figures (32-core Neural Engine, over 800 GB/s): two client-16c dies, 32 cores of 32x32 output-stationary arrays at 1.2 GHz (78.64 TOP/s), 667 B/cycle DRAM shared with the CPU and GPU, no die-to-die link modeled. Per core as client-16c: SRAM 256 KiB, depthwise datapath 128 MAC/cycle. Derivation: docs/design-points.md, section 5.",
   "arch": {
     "compute": {"array_rows": 32, "array_cols": 32, "dataflow": "os", "pipeline_cycles": 4,
                 "depthwise_macs_per_cycle": 128},

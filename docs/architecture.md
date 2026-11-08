@@ -3,10 +3,9 @@
 This document specifies the microarchitecture that `npu-sim` models: the compute datapath, the
 tiling and loop nest, the on-chip storage, the memory system, the multi-core cluster, the SystemC
 scheduling that couples them, and the observation points the simulator exposes. Each mechanism
-names its defining source file. The fidelity of each mechanism is stated once, in the "Model
-fidelity" section of [methodology](methodology.md#model-fidelity). Arithmetic and the
-compressed weight formats are specified in [numerics](numerics.md); command-line use and the
-result schema in [usage](usage.md).
+names its defining source file; [methodology](methodology.md#model-fidelity) section 3 gives
+its fidelity. Arithmetic and the compressed weight formats are specified in
+[numerics](numerics.md); command-line use and the result schema in [usage](usage.md).
 
 | Mechanism | Defining source |
 |---|---|
@@ -25,7 +24,7 @@ result schema in [usage](usage.md).
 ![NPU cluster block diagram](figures/npu-block-diagram.svg)
 
 *Figure 1. NPU cluster. Solid arrows carry data, dashed arrows control. The host CPU cluster is
-context: `npu-sim` receives one job, a grouped GEMM, and runs it to completion.*
+outside the model: `npu-sim` receives one job, a grouped GEMM, and runs it to completion.*
 
 An NPU cluster holds $N_c$ identical cores. Each core holds a tile sequencer, a DMA engine with
 one memory port (serial DMA, or AXI read and write channels), an SRAM partitioned into tile
@@ -333,7 +332,7 @@ overlaps the compute of an earlier one.
 for g in groups of this core:                      # group-major
   for i in row tiles:                               # T_m rows
     for j in column tiles:                          # T_n columns
-      acquire a tile slot                           # blocks when S tiles are in flight
+      acquire a tile slot                           # blocks when N_s tiles are in flight
       for p in 0 .. n_k-1:                          # reduction panels of depth K_pi
         wait for panel buffer p mod P_b             # freed when panel p-P_b is computed
         load  A[g, rows i, panel p]                 # M_t runs of K_p bytes, skipped on an
@@ -468,7 +467,7 @@ four accumulator bytes and one output byte per element. $B_{\mathrm{SRAM}}$ must
 `arch.sram_bytes`; a configuration that exceeds it is rejected, and the model has no spill path.
 The result reports $B_{\mathrm{SRAM}}$ per core as `scratchpad_bytes`.
 
-For the `client-16c` design point, sized from public data in [design points](design-points.md)
+For the `client-16c` design point of [design points](design-points.md) section 4
 ($T_m = T_n = 64$, $K_\pi = 256$, $N_s = P_b = 2$, $Q = 0$, dense INT8, $C_w = 89{,}600$,
 $C_a = 0$):
 
@@ -565,8 +564,7 @@ The core issues one `MemRequest` per panel load or tile store and blocks until i
 (`MemoryPort::transport`, `include/npu/memory.hpp`). A request carries its direction, its address
 runs, its tile and block identifiers and its requester (the core index). The memory model fills
 in the payload bytes, the arrival, start and completion cycles, and the bursts, beats and data
-cycles the request used. The issuing process owns the request object as a member of its module
-for as long as it is in flight. `arch.memory.model` selects one of two models behind this
+cycles the request used. `arch.memory.model` selects one of two models behind this
 interface.
 
 ### 5.3 Serial DMA model
@@ -835,8 +833,7 @@ and the serial server waits two delta cycles before choosing between a read and 
 ## 8 Observability
 
 [Usage](usage.md) sections 5 to 7 define every field of the result, the stage trace, the
-waveforms and the live snapshots. This section maps the observed quantities to the mechanisms
-above and states when each is sampled.
+waveforms and the live snapshots.
 
 ### 8.1 Result statistics
 

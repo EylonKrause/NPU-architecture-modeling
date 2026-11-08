@@ -5,8 +5,7 @@ This document specifies the arithmetic of the integer GEMM engine (`npu-sim`, an
 floating-point transformer engine (`npu-transformer-demo`). It covers operand types,
 accumulation, requantization, per-channel parameters and their file formats, the compressed
 weight formats, the floating-point storage formats, and the oracles that check each of them.
-The scope of the model as a whole is stated once, in [methodology](methodology.md), section
-"Model fidelity".
+[Methodology](methodology.md#model-fidelity) section 3 defines the scope of the model.
 
 | Mechanism | Defining source |
 |---|---|
@@ -24,15 +23,15 @@ The scope of the model as a whole is stated once, in [methodology](methodology.m
 
 | Operand | Type | Range | Host representation | Simulated storage |
 |---|---|---|---|---|
-| Activation $A$ | signed INT8 | -128..127 | `int8_t` | 1 byte |
-| Weight $W$, `--weight-bits 8` | signed INT8 | -128..127 | `int8_t` | 1 byte (dense) |
-| Weight $W$, `--weight-bits 4` | signed INT4 | -8..7 | `int8_t`, sign-extended | 4 bits (dense) |
-| Bias $b$ | signed INT32 | $-2^{31}..2^{31}-1$ | `int32_t` | 4 bytes per output channel |
-| Activation zero point $z_a$ | signed INT8 | -128..127 | `int32_t` | run scalar |
-| Weight zero point $z_w$ | signed INT8 or INT4 | -128..127, or -8..7 with INT4 weights | `int32_t` | per channel (section 3) |
-| Output zero point $z_o$ | signed INT8 | -128..127 | `int32_t` | run scalar |
-| Accumulator | signed INT32 | $-2^{31}..2^{31}-1$ | `int64_t` while summing | 4 bytes per output element |
-| Output $q$ | signed INT8 | -128..127 | `int8_t` | 1 byte |
+| Activation $A$ | signed INT8 | $-128$ to $127$ | `int8_t` | 1 byte |
+| Weight $W$, `--weight-bits 8` | signed INT8 | $-128$ to $127$ | `int8_t` | 1 byte (dense) |
+| Weight $W$, `--weight-bits 4` | signed INT4 | $-8$ to $7$ | `int8_t`, sign-extended | 4 bits (dense) |
+| Bias $b$ | signed INT32 | $-2^{31}$ to $2^{31}-1$ | `int32_t` | 4 bytes per output channel |
+| Activation zero point $z_a$ | signed INT8 | $-128$ to $127$ | `int32_t` | run scalar |
+| Weight zero point $z_w$ | signed INT8 or INT4 | $-128$ to $127$, or $-8$ to $7$ with INT4 weights | `int32_t` | per channel (section 3) |
+| Output zero point $z_o$ | signed INT8 | $-128$ to $127$ | `int32_t` | run scalar |
+| Accumulator | signed INT32 | $-2^{31}$ to $2^{31}-1$ | `int64_t` while summing | 4 bytes per output element |
+| Output $q$ | signed INT8 | $-128$ to $127$ | `int8_t` | 1 byte |
 
 A run is $G$ independent GEMMs that share the row count $M$ (`--groups`, default 1). $N$ and $K$
 are the output channels and the reduction depth of one group. The tensors are row-major:
@@ -81,10 +80,10 @@ with `shape.conv` produces the accumulators and outputs of the GEMM on its im2co
 
 ### 1.3 INT4 weights
 
-INT4 weights are signed values in -8..7, held in host memory and in `NPU1` files as sign-extended
-INT8. A weight outside -8..7 is rejected when the tensor file is read (`tensor value outside
-configured signed precision`) and again when palette or sparse encoding packs it. Weight zero
-points, scalar and per channel, must lie in -8..7.
+INT4 weights are signed values in $-8$ to $7$, held in host memory and in `NPU1` files as
+sign-extended INT8. A weight outside $-8$ to $7$ is rejected when the tensor file is read
+(`tensor value outside configured signed precision`) and again when palette or sparse encoding
+packs it. Weight zero points, scalar and per channel, must lie in $-8$ to $7$.
 
 | Format | INT4 storage |
 |---|---|
@@ -116,10 +115,10 @@ $$s_{i+1} = \left(1664525 s_i + 1013904223\right) \bmod 2^{32}.$$
 
 | Order | Tensor | Value from draw $s$ | Range |
 |---|---|---|---|
-| 1 | All activations, flat order; with `shape.conv`, the NHWC input tensor | $(s \bmod 31) - 15$ | -15..15 |
-| 2 | All weights, INT8 | $(s \bmod 31) - 15$ | -15..15 |
-| 2 | All weights, INT4 | $(s \bmod 16) - 8$ | -8..7 |
-| 3 | All biases | $(s \bmod 127) - 63$ | -63..63 |
+| 1 | All activations, flat order; with `shape.conv`, the NHWC input tensor | $(s \bmod 31) - 15$ | $-15$ to $15$ |
+| 2 | All weights, INT8 | $(s \bmod 31) - 15$ | $-15$ to $15$ |
+| 2 | All weights, INT4 | $(s \bmod 16) - 8$ | $-8$ to $7$ |
+| 3 | All biases | $(s \bmod 127) - 63$ | $-63$ to $63$ |
 
 Default parameters: $z_a = -3$, $z_w = 2$, $z_o = 0$, multiplier 1, shift 7, `--rescale native`,
 `--rounding away`, ReLU off.
@@ -133,9 +132,9 @@ $S$, then apply the output stage of section 1.4. `--rescale` selects the roundin
 
 | `--rescale` | Multiplier $\mu$ | Shift $S$ | Accumulator domain | Rounding | Definition |
 |---|---|---|---|---|---|
-| `native` (default) | $0..2^{31}-1$ | 0..31 | INT32 | Magnitude to nearest; ties per `--rounding away\|even` | `native_scale`, `src/core.cpp` |
-| `tosa-single` | $0..2^{31}-1$ | 2..62 | $[-2^{S-1}, 2^{S-1})$ | Half toward $+\infty$ | TOSA 1.0.2 `apply_scale_32`, `SINGLE_ROUND` |
-| `tosa-double` | $0..2^{31}-1$ | 2..62 | $[-2^{S-1}, 2^{S-1})$ | Half up at bit 31, then half away from zero | TOSA 1.0.2 `apply_scale_32`, `DOUBLE_ROUND` |
+| `native` (default) | $0$ to $2^{31}-1$ | 0 to 31 | INT32 | Magnitude to nearest; ties per `--rounding away\|even` | `native_scale`, `src/core.cpp` |
+| `tosa-single` | $0$ to $2^{31}-1$ | 2 to 62 | $[-2^{S-1}, 2^{S-1})$ | Half toward $+\infty$ | TOSA 1.0.2 `apply_scale_32`, `SINGLE_ROUND` |
+| `tosa-double` | $0$ to $2^{31}-1$ | 2 to 62 | $[-2^{S-1}, 2^{S-1})$ | Half up at bit 31, then half away from zero | TOSA 1.0.2 `apply_scale_32`, `DOUBLE_ROUND` |
 
 `--rounding even` with a TOSA mode is rejected (`rounding even applies to native rescale only`).
 Shifts, scalar and per channel, are signed 32-bit fields; a shift outside the mode's range is
@@ -152,7 +151,7 @@ where $\operatorname{round}_t$ rounds to the nearest integer and breaks ties awa
 (`away`, $\lfloor (\lvert a\mu \rvert + 2^{S-1}) / 2^S \rfloor$) or to the even quotient (`even`).
 The product is formed in INT64; $\lvert a\mu \rvert \le 2^{31}(2^{31}-1) < 2^{62}$.
 
-On the shift range 2..31 that both admit, `native` with `away` and `tosa-single` agree on every
+On the shift range 2 to 31 that both admit, `native` with `away` and `tosa-single` agree on every
 accumulator except negative ties: both round to nearest and round positive ties up, and native
 rounds negative ties down where TOSA rounds them up.
 
@@ -160,9 +159,9 @@ Native mode cannot hold a normalized Q31 multiplier for a scale below $2^{-1}$, 
 $\mu \ge 2^{30}$ and $S \le 31$ give $\sigma \ge 2^{-1}$. A scale of 0.0019 normalizes to
 $(\mu, S) = (2089072093, 40)$ with 31 significant multiplier bits; at $S = 31$ native mode holds it
 as $\mu = 4080219$, 22 significant bits. TFLite and TOSA parameter pairs therefore load bit-exactly
-into the TOSA modes only. Native mode remains the default for existing configurations and is the
-mode the ONNX importer emits: it accepts only float32 scale ratios that are exactly $\mu/2^S$ with
-$\mu \le 2^{31}-1$ and $S \le 31$, and selects `even` (`exact_rescale` in `npuperf/onnx_import.py`).
+into the TOSA modes only. Native mode is the default and the mode the ONNX importer emits: it
+accepts only float32 scale ratios that are exactly $\mu/2^S$ with $\mu \le 2^{31}-1$ and
+$S \le 31$, and selects `even` (`exact_rescale` in `npuperf/onnx_import.py`).
 
 ### 2.3 TOSA modes
 
@@ -213,29 +212,30 @@ $$\mu_{\text{TOSA}} = \mu_{\text{TFLite}}, \qquad S_{\text{TOSA}} = 31 - L_{\tex
 
 | Library parameter | Documented domain | TOSA shift |
 |---|---|---|
-| TFLite single-rounding `shift` | -31..30 (`TFLITE_DCHECK`) | 1..62; the TOSA modes cover $L$ = -31..29 |
-| TFLite double-rounding right shift | 0..31 (`RoundingDivideByPOT` assertion) | at most 62 |
-| CMSIS-NN `shift` | -31..30 | 1..62 |
+| TFLite single-rounding `shift` | $-31$ to $30$ (`TFLITE_DCHECK`) | 1 to 62; the TOSA modes cover $L$ from $-31$ to $29$ |
+| TFLite double-rounding right shift | 0 to 31 (`RoundingDivideByPOT` assertion) | at most 62 |
+| CMSIS-NN `shift` | $-31$ to $30$ | 1 to 62 |
 
-Two facts connect the double-rounding forms. `SaturatingRoundingDoublingHighMul` computes
-$\lfloor (ab + 2^{30}) / 2^{31} \rfloor$ for both signs, the computation of the NEON `VQRDMULH`
-instruction, and so rounds half toward $+\infty$ at bit 31; its saturating case
-$a = b = -2^{31}$ is unreachable with $\mu \ge 0$. `RoundingDivideByPOT` rounds half away from zero.
-For $L > 0$ the default TFLite path multiplies $x$ by $2^L$ in INT32; the TOSA input range gives
-$\lvert x \cdot 2^L \rvert \le 2^{30}$, so the product is exact.
+`SaturatingRoundingDoublingHighMul` computes $\lfloor (ab + 2^{30}) / 2^{31} \rfloor$ for both
+signs, the computation of the NEON `VQRDMULH` instruction, and so rounds half toward $+\infty$
+at bit 31; its saturating case $a = b = -2^{31}$ is unreachable with $\mu \ge 0$.
+`RoundingDivideByPOT` rounds half away from zero. For $L > 0$ the default TFLite path multiplies
+$x$ by $2^L$ in INT32; the TOSA input range gives $\lvert x \cdot 2^L \rvert \le 2^{30}$, so the
+product is exact.
 
-The equivalences were verified by a harness that compiles verbatim transcriptions of the four
-published bodies (g++ 13, `-O2 -std=c++17`) over 20,000,000 random cases: $\mu$ uniform in
-$[2^{30}, 2^{31})$, TFLite shift in -31..7 (TOSA shift 24..62), accumulators restricted to each
-path's documented input range.
+`tools/requant_equivalence.cpp` compiles transcriptions of the four published bodies and of
+`apply_scale_32` (g++ 13, `-O2 -std=c++17`) and compares them over 20,000,000 random cases
+from a seeded `std::mt19937_64`: $\mu$ uniform in $[2^{30}, 2^{31})$, TFLite shift uniform in
+$-31$ to $7$ (TOSA shift 24 to 62), accumulators uniform in the `apply_scale_32` input range of
+the shift, which lies within each path's documented input range.
 
 | Comparison | Mismatches |
 |---|---:|
 | TOSA `SINGLE_ROUND` against TFLite `TFLITE_SINGLE_ROUNDING` | 0 |
-| TOSA `DOUBLE_ROUND` against TFLite default (gemmlowp), 16,952,803 right-shift cases included | 0 |
+| TOSA `DOUBLE_ROUND` against TFLite default (gemmlowp), 15,898,224 right-shift cases included | 0 |
 | CMSIS-NN `CMSIS_NN_USE_SINGLE_ROUNDING` against TFLite single rounding | 0 |
 | CMSIS-NN default against TFLite default | 0 |
-| TFLite single rounding against TFLite default | 273,968 (1.37%) |
+| TFLite single rounding against TFLite default | 256,543 (1.28%) |
 
 The repository's tests repeat the comparison against the model (section 6.2).
 
@@ -258,9 +258,10 @@ golden vectors show.
 
 ### 2.6 Golden vectors
 
-These four vectors come from the harness of section 2.4. `tests/core_tests.cpp` checks them
-through `apply_scale_32`, and `tests/quantization_tests.py` checks them through the TFLite and
-CMSIS-NN formulations and through `npu-sim`, where the INT8 clamp maps 1209998 and 1209999 to 127.
+`tools/requant_equivalence.cpp` checks these four vectors through every formulation of
+section 2.4. `tests/core_tests.cpp` checks them through `apply_scale_32`, and
+`tests/quantization_tests.py` checks them through the TFLite and CMSIS-NN formulations and
+through `npu-sim`, where the INT8 clamp maps 1209998 and 1209999 to 127.
 
 | $x$ | $\mu$ | TFLite shift | TOSA shift | $x\mu / 2^S$ | Single | Double |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -277,10 +278,10 @@ and double rounding at $S = 31$ gives -1 because `SaturatingRoundingDoublingHigh
 
 `npuperf.quant.quantize_multiplier(scale)` follows TFLite `QuantizeMultiplier`
 (`quantization_util.cc`): $\sigma = f \cdot 2^e$ with $f \in [0.5, 1)$ by `frexp`,
-$\mu = \operatorname{round}(f \cdot 2^{31})$ with halves away from zero, $\mu = 2^{31}$ renormalized
-to $2^{30}$ with $e + 1$, and $S = 31 - e$. Scale 0 returns $(0, 31)$; a shift outside 2..62 raises
-`ValueError`. `tests/npuperf_tests.py` requires $\mu \in [2^{30}, 2^{31})$ and a relative error of
-$\mu/2^S$ below $2^{-30}$.
+$\mu = \operatorname{round}(f \cdot 2^{31})$ with halves away from zero, $\mu = 2^{31}$
+renormalized to $2^{30}$ with $e + 1$, and $S = 31 - e$. Scale 0 returns $(0, 31)$; a shift
+outside 2 to 62 raises `ValueError`. `tests/npuperf_tests.py` requires
+$\mu \in [2^{30}, 2^{31})$ and a relative error of $\mu/2^S$ below $2^{-30}$.
 
 | Scale | $\mu$ | $S$ |
 |---:|---:|---:|
@@ -301,9 +302,9 @@ it. $z_a$, $z_o$, ReLU, the rescale mode and the tie rule are run scalars.
 
 | Field | Scalar flag, JSON path | Vector JSON path | Rule |
 |---|---|---|---|
-| Weight zero point | `--weight-zero`, `quant.weight_zero` | `quant.weight_zero_points` | INT8; -8..7 with `--weight-bits 4` |
-| Multiplier | `--multiplier`, `quant.multiplier` | `quant.multipliers` | 0..2147483647 |
-| Shift | `--shift`, `quant.shift` | `quant.shifts` | 0..31 `native`, 2..62 `tosa-*` |
+| Weight zero point | `--weight-zero`, `quant.weight_zero` | `quant.weight_zero_points` | INT8; $-8$ to $7$ with `--weight-bits 4` |
+| Multiplier | `--multiplier`, `quant.multiplier` | `quant.multipliers` | 0 to 2,147,483,647 |
+| Shift | `--shift`, `quant.shift` | `quant.shifts` | 0 to 31 `native`, 2 to 62 `tosa-*` |
 | Activation zero point | `--input-zero`, `quant.input_zero` | none | INT8 |
 | Output zero point | `--output-zero`, `quant.output_zero` | none | INT8 |
 | ReLU | `--relu`, `quant.relu` | none | boolean |
@@ -330,7 +331,7 @@ NPU1 M N K
 
 $G$ comes from `--groups`; the header holds $M$, $N$ and $K$. `--m`, `--n` and `--k` are rejected
 alongside `--input`, and a config file may restate the shape only when it agrees with the header.
-Activations must lie in -128..127, weights in the range of `--weight-bits`, biases in INT32. A
+Activations must lie in $-128$ to $127$, weights in the range of `--weight-bits`, biases in INT32. A
 missing value (`truncated INT8 tensor`, `truncated bias tensor`) or a trailing token is an error.
 
 ### 3.3 `NPUQ1` parameter file
@@ -420,7 +421,7 @@ bytes `00 01`.
 
 | Offset | Bytes | Field |
 |---|---|---|
-| 0 | 2 | $B_s$, block length (uint16), 1..4096 |
+| 0 | 2 | $B_s$, block length (uint16), 1 to 4096 |
 | 2 | 1 | $b_w$, source weight bits: 4 or 8 |
 | 3 | 1 | Reserved, 0 |
 | 4 | $\lceil \beta / 8 \rceil$ | Bitmap of $\beta = \lceil E / B_s \rceil$ bits; bit $j$ set when block $j$ is retained |
@@ -558,10 +559,10 @@ word to `--precision`, prints the results as binary32 words and exits. Output of
 
 Each multiplication, addition and division is a separate binary32 operation (`add`, `mul`,
 `div32` store through `volatile`), so the compiler cannot fuse them into multiply-adds. A dot
-product is one sequential chain from $+0$ over the reduction index $0..K-1$; streaming the weights
-in column panels does not change the order. Square roots are binary32. Exponentials, cosines,
-sines and the RoPE frequency power evaluate in binary64 through the host C library and round once
-to binary32.
+product is one sequential chain from $+0$ over the reduction index $0$ to $K-1$; streaming the
+weights in column panels does not change the order. Square roots are binary32. Exponentials,
+cosines, sines and the RoPE frequency power evaluate in binary64 through the host C library and
+round once to binary32.
 
 | Operator | Evaluated in binary32 | Rounded to the storage format |
 |---|---|---|
@@ -602,9 +603,9 @@ its unsigned byte, with no separators or length prefixes (`output_hash`, `src/co
 
 ### 6.2 Oracles
 
-The Python oracles are written from published definitions or from first principles and import no
-simulator code. The C++ tests check hand-derived vectors and compare the encoded datapath with the
-scalar reference.
+The Python oracles are written from published definitions or from the rules of this document and
+import no simulator code. The C++ tests check hand-derived vectors and compare the encoded
+datapath with the scalar reference.
 
 | CTest | Source | Oracle | Coverage |
 |---|---|---|---|
@@ -613,7 +614,7 @@ scalar reference.
 | `sim.gemm-oracle` | `tests/integration.py` | Python integers | Fixture generation, accumulation, requantization, saturation and ReLU; external tensor files with extreme operands |
 | `sim.quantization` | `tests/quantization_tests.py` | TFLite (`common.cc`), gemmlowp (`fixedpoint.h`) and CMSIS-NN (`arm_nnsupportfunctions.h`), each transcribed from its source | Golden vectors through all four formulations and `npu-sim`; 2,400 random in-range, tie, extreme and small-shift cases through `npu-sim` in both TOSA modes; TFLite against CMSIS-NN in both roundings; per-channel `NPUQ1` files; INT4; grouped and depthwise GEMMs at three tilings |
 | `sim.weight-compression` | `tests/mobile_compression_tests.py` | Python model of encoded size, $\nu$, $R$ and decode cycles | Every palette width with INT4 and INT8 sources, asymmetric zero points, odd INT4 panels, empty sparse payloads, decoder overlap, cache accounting, timing-mode equivalence, capacity rejection |
-| `tools.npuperf` | `tests/npuperf_tests.py` | Transcription of TOSA `apply_scale_32` | The TFLite formulation in `npuperf.quant` against TOSA at the edges of every shift 2..62 and on 20,000 random cases; `quantize_multiplier` round trip |
+| `tools.npuperf` | `tests/npuperf_tests.py` | Transcription of TOSA `apply_scale_32` | The TFLite formulation in `npuperf.quant` against TOSA at the edges of every shift 2 to 62 and on 20,000 random cases; `quantize_multiplier` round trip |
 | `soc.transformer` | `tests/transformer_tests.py` | Python float model: `struct` binary16, bfloat16 by nearest-neighbor search, binary64 operations rounded to binary32 | Full block in all three precisions and head groupings; every finite binary16 encoding round-trips; 22 edge words and 1,800 random binary32 words through the probe |
 
 The Python transformer oracle evaluates each operation in binary64 and rounds it to binary32. For
