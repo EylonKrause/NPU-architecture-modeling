@@ -109,8 +109,16 @@ class ReproduceTests(unittest.TestCase):
         self.assertEqual(studies.s10_pick(utilisation), 256)
         self.assertEqual(studies.s10_pick({64: 0.5, 128: 0.4}), 64)
         points = {point.name: point for point in studies.design_points()}
-        self.assertEqual(studies.s9_rates(points["edge-256"]), [0, 1, 2, 4, 8, 16, 32, 64, 128, 256])
+        self.assertEqual(studies.s9_sweep(points["edge-256"]), [1, 2, 4, 8, 16, 32, 64, 128, 256])
+        # The configured Arm-model rate runs beside the sweep; the rule picks from the sweep.
+        self.assertEqual(studies.s9_rates(points["edge-256"]),
+                         [0, 1, 2, 4, 8, 16, 24, 32, 64, 128, 256])
+        self.assertEqual(studies.s9_source(points["edge-256"]), (24, "Vela 5.2.0 3x3 rate"))
+        self.assertEqual(studies.s9_source(points["mobile-2k"])[0], 192)
+        self.assertEqual(studies.s9_source(points["client-16c"]), (0, "S9 rule"))
         self.assertEqual(studies.s9_rates(points["client-16c"])[-1], 1024)
+        self.assertEqual(studies.s9_rates(points["client-16c"]),
+                         [0] + studies.s9_sweep(points["client-16c"]))
 
     def test_compulsory_bytes_count_the_input_tensor_once(self):
         res3 = next(gemm for layer, gemm in studies.workloads.iter_calls(

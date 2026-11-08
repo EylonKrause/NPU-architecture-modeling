@@ -1229,22 +1229,38 @@ S9_TOLERANCE = 0.05
 S9_LOWEST = 1
 
 
-def s9_rates(point: Point) -> list[int]:
-    """0 (no depthwise datapath), then powers of two from S9_LOWEST to the core's array MACs."""
+def s9_sweep(point: Point) -> list[int]:
+    """Powers of two from S9_LOWEST to the core's array MACs: the rates the rule picks from."""
     top = point.design.array_macs_per_cycle // point.design.cores
-    rates, rate = [0], S9_LOWEST
+    rates, rate = [], S9_LOWEST
     while rate <= top:
         rates.append(rate)
         rate *= 2
     return rates
 
 
+def s9_rates(point: Point) -> list[int]:
+    """0 (no depthwise datapath), the sweep, and the configured rate when the sweep lacks it
+    (an Arm-model rate, designs.vela_depthwise_rate)."""
+    return sorted({0, point.design.depthwise_macs_per_cycle, *s9_sweep(point)})
+
+
 def s9_pick(latency: Mapping[int, float]) -> int:
-    """The S9 rule on {rate: MobileNetV2 latency} over nonzero rates: the smallest rate
+    """The S9 rule on {rate: MobileNetV2 latency} over the swept rates: the smallest rate
     within S9_TOLERANCE of the latency at the largest rate."""
     best = latency[max(latency)]
     return min(rate for rate, value in latency.items()
                if value <= (1 + S9_TOLERANCE) * best)
+
+
+def s9_source(point: Point) -> tuple[int, str]:
+    """(rate, source) the point's config must set: the Arm-model rate of the part it is sized
+    from, or the S9 rule's pick where there is none (returned as 0 here)."""
+    rate = designs.vela_depthwise_rate(point.name)
+    if rate is None:
+        return 0, "S9 rule"
+    model = "Vela 5.2.0" if point.name == "edge-256" else "Regor (Vela 5.2.0)"
+    return rate, f"{model} 3x3 rate"
 
 
 def is_depthwise(call: Call) -> bool:
@@ -1260,7 +1276,7 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
     planned = resolve(ctx, plans)
     results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
     out = StudyOutput()
-    raw, summary, curves = [], [], []
+    raw, summary, curves, choice = [], [], [], []
     cells: dict[tuple[int, str], str] = {}
     for point in points:
         latency, share = {}, {}
@@ -1280,14 +1296,20 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
                         "dram_bytes": whole.dram_bytes,
                         "mac_utilisation": whole.macs / (whole.cycles
                                                          * point.design.array_macs_per_cycle)})
-        pick = s9_pick({rate: value for rate, value in latency.items() if rate})
-        require(point.design.depthwise_macs_per_cycle == pick,
-                f"configs/{point.name}.json sets depthwise_macs_per_cycle "
-                f"{point.design.depthwise_macs_per_cycle}; the S9 rule picks {pick}")
+        pick = s9_pick({rate: latency[rate] for rate in s9_sweep(point)})
+        configured = point.design.depthwise_macs_per_cycle
+        model_rate, source = s9_source(point)
+        want = model_rate or pick
+        require(configured == want,
+                f"configs/{point.name}.json sets depthwise_macs_per_cycle {configured}; "
+                f"the {source} is {want}")
         top = max(latency)
-        summary.append([f"`{point.name}`", f"{pick:,}", fmt(latency[pick]), pct(share[pick]),
+        summary.append([f"`{point.name}`", f"{configured:,}", source, f"{pick:,}",
+                        fmt(latency[configured]), fmt(latency[pick]), pct(share[configured]),
                         f"{top:,}", fmt(latency[top]), fmt(latency[0]),
-                        f"{latency[0] / latency[pick]:.1f}x"])
+                        f"{latency[0] / latency[configured]:.1f}x"])
+        choice.append({"point": point.name, "configured": configured, "source": source,
+                       "rule_pick": pick})
         curves.append((point, latency, pick))
     rates = sorted({rate for point in points for rate in s9_rates(point)})
     rows = [["none: grouped GEMM on the array, im2col" if rate == 0 else f"{rate:,}"]
@@ -1295,18 +1317,21 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
     out.tables["s9-depthwise"] = markdown_table(
         ["Depthwise MAC/cycle per core"] + [f"`{point.name}`" for point in points], rows)
     out.tables["s9-choice"] = markdown_table(
-        ["Design point", "Rule's rate (MAC/cycle per core)", "MobileNetV2 latency (ms)",
+        ["Design point", "Configured rate (MAC/cycle per core)", "Source", "Rule's rate",
+         "Latency at the configured rate (ms)", "Latency at the rule's rate (ms)",
          "Depthwise share of cycles", "Array-wide rate", "Latency at the array-wide rate (ms)",
-         "Latency without the datapath (ms)", "Speedup over no datapath"], summary)
+         "Latency without the datapath (ms)", "Speedup over no datapath"], summary,
+        [False, True, False] + [True] * 8)
     top = max(latency[rate] / latency[max(latency)]
               for _, latency, _ in curves for rate in latency if rate)
     fig = svg.Figure(820, 500, title="MobileNetV2 latency vs depthwise datapath rate",
-                     subtitle="each point's latency over its latency with a depthwise datapath "
-                              "as wide as its array; tiles from npuperf.mapper per rate",
+                     subtitle="latency over latency with a depthwise datapath as wide as the "
+                              "array; diamonds: the rule's pick; squares: the configured "
+                              "Arm-model rate",
                      x_label="depthwise MAC/cycle per core", y_label="latency / latency at "
                      "the array-wide rate", x_scale="log", y_scale="log",
                      x_range=(S9_LOWEST, max(rates)), y_range=(0.9, 2 ** math.ceil(math.log2(top))),
-                     x_ticks=[rate for rate in rates if rate],
+                     x_ticks=[rate for rate in rates if rate and not rate & (rate - 1)],
                      y_ticks=[2 ** e for e in range(math.ceil(math.log2(top)) + 1)],
                      legend="upper right", id_prefix="s9")
     fig.x.tick_format = lambda v: f"{v:g}"
@@ -1314,14 +1339,23 @@ def s9_depthwise(ctx: Context) -> StudyOutput:
     fig.hline(1 + S9_TOLERANCE, f"rule: within {pct(S9_TOLERANCE, 0)} of the array-wide rate",
               color=svg.INK_MUTED, dash="4 4", width=1, text_anchor="end")
     for index, (point, latency, pick) in enumerate(curves):
-        swept = [rate for rate in latency if rate]
+        swept = s9_sweep(point)
         base = latency[max(latency)]
+        configured = point.design.depthwise_macs_per_cycle
+        label = f"{point.name} (rule picks {pick:,}"
+        label += ")" if configured == pick else f"; configured {configured:,})"
         fig.line(swept, [latency[rate] / base for rate in swept], color=svg.PALETTE[index],
-                 marker=svg.MARKERS[index], label=f"{point.name} (rule picks {pick})")
+                 marker=svg.MARKERS[index], label=label)
+        # Picks of several points can share a rate and nearly a latency: hollow rings that
+        # shrink with the draw order keep every one visible.
         fig.scatter([pick], [latency[pick] / base], color=svg.PALETTE[index],
-                    marker="diamond", size=8)
+                    marker="diamond", size=12 - 2 * index, hollow=True)
+        if configured != pick:
+            fig.scatter([configured], [latency[configured] / base], color=svg.PALETTE[index],
+                        marker="square", size=7)
     out.figures["s9-depthwise"] = fig
     out.raw["runs"] = raw
+    out.raw["choice"] = choice
     return out
 
 

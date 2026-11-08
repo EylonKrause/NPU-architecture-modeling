@@ -16,10 +16,13 @@ tests/design_point_tests.py:
   burst_rule   the shortest power-of-two burst with which the read outstanding limit covers
                the read latency, so a long run streams one beat per cycle
   weight cache the SRAM the slots leave free (cache_rule)
+  depthwise    on the two points sized from Arm parts, the 3x3 depthwise rate of Arm's
+               performance model of that part (vela_depthwise_rate)
 
-Two fields have no public figure and are sized by simulation, each study failing when a
-config disagrees with its rule: the depthwise datapath rate (npuperf.studies S9) and the
-cluster cores' SRAM (S10).
+Two cluster fields have no public figure and are sized by simulation, each study failing
+when a config disagrees with its rule: the depthwise datapath rate (npuperf.studies S9,
+which reports its rule beside the Arm-model rate on the other two points) and the cores'
+SRAM (S10).
 """
 from __future__ import annotations
 
@@ -46,6 +49,18 @@ MIN_PANEL_DEPTH = {"edge-256": 128, "mobile-2k": 128, "client-16c": 128, "workst
 # The memory behind each point's AXI port.
 EXTERNAL_MEMORY = {"edge-256": "DRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
                    "workstation-32c": "DRAM"}
+# Output microblock (height, width, channels) the depthwise operation runs on in Arm's
+# performance model of the part a point is sized from: Vela 5.2.0 architecture_features.py
+# for the Ethos-U55-256, and Regor ethos_u85.cpp for the Ethos-U85-2048, whose 8-bit
+# depthwise runs on its 4x4x16 microblock only. The clusters have no such model.
+DEPTHWISE_UBLOCK = {"edge-256": (2, 2, 8), "mobile-2k": (4, 4, 16)}
+# Both models (Vela npu_performance.py _estimate_conv_cycles, Regor
+# ethos_u85_performance.cpp EstimateMacCyclesPerBlock) take 4 cycles per microblock for each
+# step of 4 kernel taps.
+DEPTHWISE_TAPS_PER_STEP = 4
+DEPTHWISE_CYCLES_PER_STEP = 4
+# 3x3: every depthwise layer of the bundled workloads.
+DEPTHWISE_KERNEL_TAPS = 9
 
 
 def config_path(name: str | Path) -> Path:
@@ -62,6 +77,23 @@ def config_path(name: str | Path) -> Path:
 def min_panel_depth(name: str) -> int:
     """MIN_PANEL_DEPTH of a design point; 32 B (the smaller Vela burst) for any other."""
     return MIN_PANEL_DEPTH.get(name, 32)
+
+
+def vela_depthwise_rate(name: str, taps: int = DEPTHWISE_KERNEL_TAPS) -> int | None:
+    """MAC/cycle of a ``taps``-tap depthwise kernel in Arm's performance model of the part
+    ``name`` is sized from, or None for a point without one. Each step covers 4 taps for
+    every output of the microblock in 4 cycles, so a 3x3 kernel takes 3 steps and fills 9 of
+    their 12 tap slots: three quarters of the microblock's output count. npu-sim's
+    depthwise datapath has no kernel step, so the configs take this rate rather than the
+    microblock's peak."""
+    block = DEPTHWISE_UBLOCK.get(name)
+    if block is None:
+        return None
+    steps = -(-taps // DEPTHWISE_TAPS_PER_STEP)
+    macs, cycles = math.prod(block) * taps, DEPTHWISE_CYCLES_PER_STEP * steps
+    if macs % cycles:
+        raise ValueError(f"{name}: {macs} MACs over {cycles} cycles is no integer rate")
+    return macs // cycles
 
 
 def external_memory(name: str) -> str:
