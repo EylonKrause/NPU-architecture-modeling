@@ -76,7 +76,7 @@ std::vector<std::int8_t> im2col(const Config& config, const std::vector<std::int
 
 // Compressed panels are shared by all output-row tiles of a group. Each buffer
 // holds its four-byte codec header, LUT or bitmap, and the packed payload.
-// The expanded Problem::weights remain exclusively the independent reference.
+// With an encoded format, the expanded Problem::weights feed the reference only.
 struct EncodedWeightPanel {
     std::uint64_t group = 0, col = 0, cols = 0, k_start = 0, k = 0;
     std::vector<std::uint8_t> buffer;
@@ -106,7 +106,7 @@ void validate(const Config& config);
 std::uint64_t total_macs(const ShapeConfig& shape);
 // G * ceil(M / tile_m) * ceil(N / tile_n).
 std::uint64_t tile_count(const Config& config);
-// SRAM reserved for the slots and the weight cache.
+// SRAM reserved for the slots, the weight cache and the activation cache.
 std::uint64_t scratchpad_bytes(const Config& config);
 // Panel buffers in use per slot: mapping.panel_buffers, at most one per
 // reduction panel.
@@ -240,10 +240,10 @@ Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n);
 // cover all of K. With shape.conv the activation window holds the NHWC input
 // instead, and the runs are the panel's input rows (conv_input_spans): one run
 // per row over its column hull when the panel's channels are all of C, else
-// one run per pixel of its channel range. Addresses are
-// 64-bit and hold no data; they place burst splits. A --timing-only tensor
-// larger than its 256 MiB window runs past it, and since every base is 4 KiB
-// aligned its bursts split as they would in a disjoint window.
+// one run per pixel of its channel range. Addresses are 64-bit and hold no
+// data; they place burst splits. A --timing-only tensor larger than its
+// 256 MiB window runs past it, and since every base is 4 KiB aligned its
+// bursts split as they would in a disjoint window.
 constexpr std::uint64_t activation_base = 0x80000000;
 constexpr std::uint64_t weight_base = 0x90000000;
 constexpr std::uint64_t param_base = 0xA0000000;

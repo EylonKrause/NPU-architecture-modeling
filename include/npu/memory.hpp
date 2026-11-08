@@ -36,10 +36,10 @@ namespace npu {
 
 enum class MemDirection : std::uint8_t { Read, Write };
 
-// One DMA transfer. The issuing thread owns it, as a member of its module,
-// for as long as it is in flight: a coroutine stack can be released without
-// unwinding when the simulation stops paused. The port keeps a pointer only
-// until completion.
+// One DMA transfer. The issuing thread keeps it as a member of its module for
+// as long as it is in flight, off the coroutine stack: SystemC can release a
+// suspended thread's stack without unwinding it when the simulation stops.
+// The port keeps a pointer only until completion.
 struct MemRequest {
     MemDirection direction = MemDirection::Read;
     std::vector<AddressRun> runs;

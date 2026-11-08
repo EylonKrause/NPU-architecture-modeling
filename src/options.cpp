@@ -205,10 +205,10 @@ const std::vector<ConfigOption> option_table = {
 
 std::string quoted(std::string_view text) { return "'" + std::string(text) + "'"; }
 
-// The decimal forms strtod reads, as the flag always took them: a sign,
-// digits with an optional point on either side, an optional exponent. Hex,
-// inf, nan, whitespace and trailing text are rejected. Config files keep the
-// JSON number grammar of their parser.
+// The decimal forms strtod reads: a sign, digits with an optional point on
+// either side, an optional exponent. Hex, inf, nan, whitespace and trailing
+// text are rejected. Config files use the JSON number grammar of their
+// parser.
 bool decimal_grammar(std::string_view text) {
     std::size_t i = 0;
     const auto digits = [&]() {

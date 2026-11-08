@@ -473,9 +473,9 @@ void Core::compute() {
         compute_block_id_ = block;
         compute_busy_ = true;
         changed();
-        // Integer arithmetic is evaluated once at the final reduction panel;
-        // the timing model retains the partial-sum allocation across panels.
-        // Cores write disjoint tiles of the shared output.
+        // The tile's integer result is computed at its final reduction panel;
+        // earlier panels take time only, with the partial sums held in the
+        // slot. Cores write disjoint tiles of the shared output.
         if (block + 1 == blocks && !config_.sim.timing_only) {
             if (encoded) compute_tile_encoded(problem_, config_, encoded_weights_, tile, output_);
             else if (depthwise) compute_channel_tile(problem_, config_.quant, tile, output_);
@@ -518,8 +518,8 @@ void Core::store() {
     stats_.cycles = now();
     completed_ = true;
     changed();
-    // No free-running clock and no sc_stop: sc_start returns when every process
-    // finishes or blocks with no pending event. Final JSON stays on stdout.
+    // There is no free-running clock and no sc_stop: sc_start returns once every
+    // process has finished or blocks with no pending event.
 }
 
 Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,

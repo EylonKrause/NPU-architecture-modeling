@@ -59,8 +59,8 @@ struct PipelineView {
 // The cluster, then each core. Cluster counters add the cores' and its memory
 // combines their ports; cycles is the makespan once every core completes;
 // peak_inflight_tiles and the peak cached weight and activation bytes are the
-// largest core's, as slots and caches are per core; resource identifiers come from the
-// lowest-numbered busy core, else core 0. Tile ids are global.
+// largest core's, as slots and caches are per core; resource identifiers come
+// from the lowest-numbered busy core, else core 0. Tile ids are global.
 struct LiveSnapshot : PipelineView {
     std::vector<PipelineView> cores;
 };

@@ -12,8 +12,8 @@ namespace npu {
 
 // Strict RFC 8259 reader for configuration files. Rejects duplicate object
 // keys, trailing content, invalid UTF-8, unpaired surrogates and nesting
-// deeper than max_json_depth. Numbers keep their source text so integers
-// convert exactly instead of passing through a double.
+// deeper than max_json_depth. Numbers keep their source text, so integers
+// convert exactly without a round trip through double.
 struct JsonValue {
     enum class Type : std::uint8_t { Null, Boolean, Number, String, Array, Object };
     Type type = Type::Null;

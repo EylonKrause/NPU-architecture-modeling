@@ -97,9 +97,9 @@ private:
         const auto burst = config_.arch.memory.burst_bytes;
         while (true) {
             if (reads_.empty() && writes_.empty()) sc_core::wait(ready_);
-            // Load and store each queue within two delta cycles of the cycle
-            // they wake in; waiting two deltas sees both before choosing.
-            // Delta cycles cost no architecture time.
+            // The load and store threads enqueue within two delta cycles of the
+            // cycle they wake in, so waiting two deltas sees both queues before
+            // the choice. Delta cycles take no simulated time.
             sc_core::wait(sc_core::SC_ZERO_TIME);
             sc_core::wait(sc_core::SC_ZERO_TIME);
             if (reads_.empty() && writes_.empty()) continue;
@@ -246,7 +246,7 @@ private:
     // Next issue cycle of every channel, none while its queue is empty, in
     // grant order: port, then read before write. A channel's issue cycle moves
     // only when a request reaches the front of its queue or a burst issues, so
-    // the arbiter scans these instead of every channel's state.
+    // the arbiter scans this vector alone.
     std::vector<std::uint64_t> issue_at_;
     DramTimeline dram_;
 
@@ -288,10 +288,10 @@ private:
                 wait(sc_core::sc_time::from_value(step ? 1 : next - time), wake_);
                 continue;
             }
-            // Grant only after every other process has run in this cycle, so
-            // every request arriving now is queued and the fixed order below
-            // (core, then read before write) decides, not process evaluation
-            // order.
+            // Grant once every other process has run in this cycle: every
+            // request arriving in it is queued, and the grant follows the fixed
+            // order below (core, then read before write) whatever order SystemC
+            // evaluates the processes in.
             if (sc_core::sc_pending_activity_at_current_time()) {
                 wait(sc_core::SC_ZERO_TIME);
                 continue;

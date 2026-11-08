@@ -34,8 +34,8 @@ const std::string& dimension_range() {
     return text;
 }
 
-// Shift range of a rescale mode: native keeps the original 0..31; the TOSA
-// modes take the apply_scale_32 range 2..62.
+// Shift range of a rescale mode: native takes 0..31; the TOSA modes take the
+// apply_scale_32 range 2..62.
 struct ShiftRange { std::int32_t low, high; };
 ShiftRange shift_range(RescaleMode mode) {
     return mode == RescaleMode::Native ? ShiftRange{0, 31} : ShiftRange{2, 62};
@@ -91,8 +91,8 @@ void validate_quant_channels(const Requant& quant, std::uint64_t channels) {
         validate_channel_entry(quant, index);
 }
 
-// Checks the entries of the channels [first, first + count) only, so a tile
-// costs O(tile width) rather than O(G*N).
+// Checks only the entries of the channels [first, first + count), so a
+// per-tile check costs O(tile width).
 void validate_quant_range(const Requant& quant, std::uint64_t channels,
                           std::uint64_t first, std::uint64_t count) {
     validate_quant_scalars(quant);
@@ -186,7 +186,8 @@ void validate_mapping(const Config& config) {
             "weight decode rate must be in 1..1000000000");
     require(weights.encoding != WeightEncoding::Sparse ||
                 (compute.array_rows == 0 && compute.array_cols == 0),
-            "sparse zero-skipping is supported only by the throughput datapath, not systolic timing");
+            "sparse zero-skipping is supported only by the throughput datapath; a systolic "
+            "array takes dense or palette weights");
     if (config.mapping.tile_k > max_dimension)
         fail("reduction tile dimension must be zero (full K) or in " + dimension_range());
     require(config.mapping.panel_buffers == 1 || config.mapping.panel_buffers == 2,
@@ -242,8 +243,8 @@ std::uint64_t channel_metadata_bytes(const Config& config, std::uint64_t cols) {
     return checked_mul(checked_mul(4, cols), vectors);
 }
 
-// The weight panel bound and, on the first panel, the bias and channel
-// metadata of the tile's cols channels.
+// Upper bound on a weight panel's bytes plus, on the first panel, the bias and
+// channel metadata of the tile's cols channels.
 std::uint64_t weight_side_bytes(const Config& config, std::uint64_t k, std::uint64_t cols,
                                 bool first) {
     const auto weights = encoded_weight_bound(config, checked_mul(k, cols));
@@ -281,7 +282,7 @@ ConvExtent conv_extent(const std::vector<InputSpan>& spans) {
 }
 
 // Per reduction block, the largest footprint over every row tile, each field
-// maximised on its own: a bound on any panel of that block.
+// maximized on its own: an upper bound on any panel of that block.
 std::vector<ConvExtent> conv_extents(const Config& config) {
     const auto& shape = config.shape;
     const auto tile_m = config.mapping.tile_m;
@@ -666,9 +667,9 @@ void validate(const Config& config) {
         fail("estimated simulator working storage exceeds " +
              std::to_string(max_host_bytes >> 20) + " MiB");
 
-    // The serial schedule bounds every overlapped schedule. Four tile shape
-    // classes per group give the exact serial sum without iterating over huge
-    // tile lists; under shape.conv each panel takes its block's largest
+    // The serial schedule is an upper bound on every overlapped schedule. Four
+    // tile shape classes per group give the exact serial sum without walking
+    // the tile list; under shape.conv each panel takes its block's largest
     // footprint. The axi sum charges every burst its full latency.
     const bool axi = arch.memory.model == MemoryModel::Axi;
     const bool conv = implicit_conv(shape), channel_tiles = channel_wise(config);
@@ -733,8 +734,8 @@ void validate(const Config& config) {
                 serial_cycles <= std::numeric_limits<std::uint64_t>::max() /
                                      arch.memory.dram_bytes_per_cycle,
             "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
-    // Cycle mode performs one host wait per stage cycle. Bound the complete
-    // serial work even when overlap would make the reported makespan shorter.
+    // Cycle mode costs one host wait per stage cycle. The limit applies to the
+    // serial work, which is at least the makespan of any overlapped schedule.
     require(config.sim.timing != TimingMode::Cycle || serial_cycles <= 10000000,
             "cycle mode serial work must be at most 10000000 cycles; use event mode for larger runs");
 }
@@ -845,7 +846,7 @@ Output reference(const Problem& problem, const Requant& quant) {
     const auto size = static_cast<std::size_t>(problem.m * width);
     result.accumulators.resize(size);
     result.quantized.resize(size);
-    // Scalar reference: each complete dot product is evaluated independently.
+    // Scalar reference: one complete dot product per output, in K order.
     for (std::uint64_t row = 0; row < problem.m; ++row) {
         for (std::uint64_t group = 0; group < problem.groups; ++group) {
             for (std::uint64_t col = 0; col < problem.n; ++col) {
@@ -892,8 +893,8 @@ void compute_tile(const Problem& problem, const Requant& quant,
         for (std::uint64_t col = 0; col < tile.cols; ++col)
             sums[static_cast<std::size_t>(row * tile.cols + col)] =
                 problem.bias[static_cast<std::size_t>(base + col)];
-    // Tiled datapath uses K-major outer products, independent of the reference
-    // dot-product loop ordering, and only commits final INT32-safe values.
+    // K-major outer products, a loop order distinct from the reference's dot
+    // products. Only the final INT64 sums are range-checked to INT32.
     for (std::uint64_t k = 0; k < problem.k; ++k) {
         const auto weight_row = (tile.group * problem.k + k) * problem.n + tile.col;
         for (std::uint64_t row = 0; row < tile.rows; ++row) {

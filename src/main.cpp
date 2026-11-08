@@ -49,9 +49,8 @@ std::string nonempty_path(std::string_view flag, std::string_view value) {
     return std::string(value);
 }
 
-// Run-control flags choose inputs, outputs and the session mode. They are not
-// configuration: results do not echo them. A flag with an empty placeholder
-// takes no value.
+// Run-control flags choose inputs, outputs and the session mode; results do
+// not echo them. A flag with an empty placeholder takes no value.
 struct RunOption {
     std::string_view flag, placeholder, help;
     void (*apply)(Arguments& args, std::string_view value);

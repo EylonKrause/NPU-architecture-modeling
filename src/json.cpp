@@ -369,7 +369,7 @@ void write_json_number(std::ostream& stream, double value) {
     }
     std::ostringstream text;
     text.imbue(std::locale::classic());
-    // Integers below 2^53 print exactly without an exponent: 200, not 2e+02.
+    // Integral values of magnitude below 2^53 print in fixed notation: 200 as 200.
     if (value == std::floor(value) && std::fabs(value) < 9007199254740992.0) {
         text << std::fixed << std::setprecision(0) << value;
     } else {
