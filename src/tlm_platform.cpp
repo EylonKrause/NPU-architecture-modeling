@@ -49,7 +49,7 @@ struct Traffic {
 };
 
 // Targets never call wait(): initiators consume the annotated delay. Host and
-// engine DMA share one reservation timeline, so their accesses serialise.
+// engine DMA share one reservation timeline, so their accesses serialize.
 class Dram final : public sc_module {
 public:
     tlm_utils::simple_target_socket<Dram> host_socket{"host_socket"};
@@ -560,7 +560,7 @@ int sc_main(int argc, char* argv[]) {
             else if (value.empty()) throw std::invalid_argument("--vcd: empty path");
             else vcd = value;
         }
-        if (jobs == 0 || jobs > 100) throw std::invalid_argument("--jobs: must be between 1 and 100");
+        if (jobs == 0 || jobs > 100) throw std::invalid_argument("--jobs: must be 1..100");
         npu::Config config;
         config.shape.m = gemm_m; config.shape.n = gemm_n; config.shape.k = gemm_k;
         config.mapping.tile_m = 2; config.mapping.tile_n = 3;
@@ -592,7 +592,7 @@ int sc_main(int argc, char* argv[]) {
             sc_trace(trace, engine.busy_trace, "npu_busy"); sc_trace(trace, engine.done_trace, "npu_done");
             sc_trace(trace, engine.jobs_trace, "completed_jobs");
         }
-        // Watchdog: a lost IRQ or START handshake ends the run here instead of hanging.
+        // Watchdog: a lost IRQ or START handshake ends the run at 1 ms of simulated time.
         sc_start(sc_time(1, SC_MS));
         if (trace) sc_close_vcd_trace_file(trace);
         require(host.completed && host.results.size() == jobs,

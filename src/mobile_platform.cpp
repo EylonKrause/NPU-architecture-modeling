@@ -230,8 +230,8 @@ struct BusRecord {
 // wakes at the instant the bus frees (a core whose compute ends then). It
 // grants round-robin by core id, from a pointer advanced past the last
 // grantee, among requests issued before the decision delta: the order processes
-// run within one delta is unspecified (IEEE 1666), so a request from the
-// decision delta itself waits for the next decision instead of racing it.
+// run within one delta is unspecified (IEEE 1666), so a request raised in the
+// decision delta itself waits for the next decision.
 class SharedBus final : public sc_module {
 public:
     sc_signal<bool> busy{"busy"};
@@ -737,8 +737,8 @@ int sc_main(int argc, char* argv[]) {
                 sc_trace(trace.get(), core.voltage, prefix + "voltage_mv");
             }
         }
-        // Watchdog: the largest accepted configuration finishes far inside this
-        // simulated time.
+        // Watchdog on simulated time; every accepted configuration finishes
+        // within it.
         sc_start(sc_time(600, SC_SEC));
         trace.reset();
         require(platform.finished && platform.completed == options.jobs, "mobile platform timed out");

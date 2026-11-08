@@ -24,7 +24,7 @@ using Sequence = std::vector<Vector>;
 using U64 = std::uint64_t;
 using namespace sc_core;
 static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559,
-              "the storage contract requires IEEE-754 binary32");
+              "fp32 storage requires IEEE-754 binary32");
 
 void diagnostic_report(const sc_report& report, const sc_actions& actions) {
     if (actions & SC_DISPLAY) std::cerr << report.what() << '\n';
@@ -47,7 +47,8 @@ float from_bits(std::uint32_t value) {
     return result;
 }
 
-// Integer conversion is independent of the host floating-point rounding mode.
+// Round-half-to-even right shift in integer arithmetic, independent of the
+// host floating-point rounding mode.
 std::uint32_t round_shift(std::uint32_t value, unsigned shift) {
     const auto truncated = value >> shift;
     const auto remainder = value & ((std::uint32_t{1} << shift) - 1U);
@@ -111,7 +112,8 @@ float store(float value, Precision precision) {
     return value;
 }
 
-// volatile: force separate binary32 mul/add (no FMA contraction) to match the oracle.
+// volatile keeps every binary32 multiply and add separate (no FMA contraction),
+// as the Python oracle evaluates them.
 float add(float lhs, float rhs) { volatile float result = lhs + rhs; return result; }
 float mul(float lhs, float rhs) { volatile float result = lhs * rhs; return result; }
 float div32(float lhs, float rhs) { volatile float result = lhs / rhs; return result; }
@@ -145,8 +147,8 @@ struct Config {
         return U64{layers} * (tokens * layer_weight_count() + U64{dim} * tokens * (tokens + 1));
     }
     // Live per-row tensors at storage precision, at the peak of each half of a
-    // layer: x, Q, K, V and the normalised input or the attention output during
-    // attention (3d + 2kv); the residual, normalised input, gate and up during
+    // layer: x, Q, K, V and the normalized input or the attention output during
+    // attention (3d + 2kv); the residual, normalized input, gate and up during
     // the FFN (2d + 2ff).
     U64 activation_buffer_bytes() const {
         const U64 attention = U64{3} * dim + U64{2} * kv_dim(), ffn = U64{2} * dim + U64{2} * ff_dim;
@@ -193,9 +195,10 @@ Vector fixture_input(const Config& c, unsigned position) {
 }
 
 // Fixture weights are integers in -15..15 over 8 * 2^e, where 4^e <= rows < 4^(e+1)
-// and e >= 3: 64 up to 255 rows, then twice as small per factor of four in the
-// reduction depth, so dot products over 2048 or 8192 rows keep fp16 activations
-// finite. Power-of-two divisors keep every weight exact in fp16 and bf16.
+// and e >= 3: the divisor is 64 below 256 rows and doubles per factor of four in
+// the reduction depth, so dot products over 2048 or 8192 rows keep fp16
+// activations finite. Power-of-two divisors keep every weight exact in fp16 and
+// bf16.
 float weight_divisor(unsigned rows) {
     unsigned exponent = 3;
     while ((U64{4} << (2U * exponent)) <= rows) ++exponent;
@@ -473,7 +476,7 @@ private:
             << ",\"tensor_macs\":" << stats.tensor_macs << ",\"vector_ops\":" << stats.vector_ops
             << ",\"dma_read_bytes\":" << stats.dma_read_bytes
             << ",\"dma_write_bytes\":" << stats.dma_write_bytes << "}\n" << std::flush;
-        if (!*progress_) throw std::runtime_error("could not write progress stream");
+        if (!*progress_) throw std::runtime_error("cannot write progress stream");
     }
 
     // DMA, tensor and vector stages run back to back; 1 cycle = 1 ns.
@@ -522,8 +525,8 @@ private:
             stage(Kind::dma, rows * c.dim * c.storage_bytes(), true);
             request.outputs = std::move(outputs);
         } catch (...) {
-            // The sequence position does not advance: K/V rows written past it
-            // are dead and the next request overwrites them.
+            // The sequence position does not advance: the K/V rows this request
+            // wrote are dropped, and the next request writes those positions.
             for (auto& layer : cache) {
                 layer.keys.resize(committed);
                 layer.values.resize(committed);
@@ -693,7 +696,8 @@ U64 parse_unsigned(const std::string& flag, const std::string& text) {
     return result;
 }
 
-unsigned bounded(const std::string& flag, const std::string& text, unsigned minimum, unsigned maximum) {
+unsigned in_range(const std::string& flag, const std::string& text, unsigned minimum,
+                  unsigned maximum) {
     const auto value = parse_unsigned(flag, text);
     if (value < minimum || value > maximum)
         throw std::invalid_argument(flag + ": must be " + std::to_string(minimum) + ".." +
@@ -785,22 +789,22 @@ int sc_main(int argc, char* argv[]) {
                 throw std::invalid_argument("unknown argument: " + flag);
             if (i + 1 == argc) throw std::invalid_argument(flag + ": missing value");
             const std::string value(argv[++i]);
-            if (flag == "--dim") c.dim = bounded(flag, value, 2, max_dim);
-            else if (flag == "--heads") c.heads = bounded(flag, value, 1, max_heads);
-            else if (flag == "--kv-heads") c.kv_heads = bounded(flag, value, 1, max_heads);
-            else if (flag == "--ff-dim") c.ff_dim = bounded(flag, value, 1, max_ff);
-            else if (flag == "--layers") c.layers = bounded(flag, value, 1, max_layers);
-            else if (flag == "--context") c.context = bounded(flag, value, 1, max_tokens);
-            else if (flag == "--prefill") c.prefill = bounded(flag, value, 1, max_tokens);
-            else if (flag == "--decode") c.decode = bounded(flag, value, 0, max_tokens);
-            else if (flag == "--seed") c.seed = bounded(flag, value, 0, std::numeric_limits<unsigned>::max());
-            else if (flag == "--tensor-macs-per-cycle") c.tensor_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--vector-ops-per-cycle") c.vector_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--dma-bytes-per-cycle") c.dma_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--dma-startup") c.dma_startup = bounded(flag, value, 0, 1000);
-            else if (flag == "--sram-bytes") c.sram_bytes = bounded(flag, value, 1, 67108864);
+            if (flag == "--dim") c.dim = in_range(flag, value, 2, max_dim);
+            else if (flag == "--heads") c.heads = in_range(flag, value, 1, max_heads);
+            else if (flag == "--kv-heads") c.kv_heads = in_range(flag, value, 1, max_heads);
+            else if (flag == "--ff-dim") c.ff_dim = in_range(flag, value, 1, max_ff);
+            else if (flag == "--layers") c.layers = in_range(flag, value, 1, max_layers);
+            else if (flag == "--context") c.context = in_range(flag, value, 1, max_tokens);
+            else if (flag == "--prefill") c.prefill = in_range(flag, value, 1, max_tokens);
+            else if (flag == "--decode") c.decode = in_range(flag, value, 0, max_tokens);
+            else if (flag == "--seed") c.seed = in_range(flag, value, 0, std::numeric_limits<unsigned>::max());
+            else if (flag == "--tensor-macs-per-cycle") c.tensor_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--vector-ops-per-cycle") c.vector_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--dma-bytes-per-cycle") c.dma_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--dma-startup") c.dma_startup = in_range(flag, value, 0, 1000);
+            else if (flag == "--sram-bytes") c.sram_bytes = in_range(flag, value, 1, 67108864);
             else if (flag == "--inject-output-fault") {
-                c.fault_row = bounded(flag, value, 0, max_tokens);
+                c.fault_row = in_range(flag, value, 0, max_tokens);
                 c.inject_fault = true;
             }
             else if (flag == "--vcd") { require(!value.empty(), "--vcd: empty basename"); c.vcd = value; }
@@ -875,7 +879,7 @@ int sc_main(int argc, char* argv[]) {
         sc_start();
         if (trace) sc_close_vcd_trace_file(trace);
         if (!driver.failure.empty()) throw std::runtime_error(driver.failure);
-        require(driver.completed, "simulation watchdog expired");
+        require(driver.completed, "simulation stopped before the driver completed");
         const auto& s = driver.workload;
         const U64 live_bytes = U64{2} * c.layers * (c.prefill + c.decode) * c.kv_dim() * c.storage_bytes();
         const auto decoded = driver.decode_token_cycles.size();
