@@ -3,7 +3,7 @@
 This document reports the ten studies of `npuperf/studies.py` on the four design points of
 [design points](design-points.md), hypothetical configurations sized from public data. Every
 table between `generated` markers and every figure in [figures/](figures) is written by
-`python -m npuperf.reproduce` from `npu-sim` runs; the text around the markers interprets
+`python3 -m npuperf.reproduce` from `npu-sim` runs; the text around the markers interprets
 them. The tables were generated at commit `94e0574`. The CI job `results-drift` regenerates the
 quick studies (S3, S4, S5, S6 and S8) and fails on any difference. The mechanisms the analyses
 cite are specified in [architecture](architecture.md); model scope is stated in
@@ -18,7 +18,7 @@ cite are specified in [architecture](architecture.md); model scope is stated in
 | DRAM bytes | Whole AXI beats, as the DRAM timeline charges them: a partial beat counts in full |
 | MAC utilization | MACs over cycles times the array's peak MACs per cycle, the depthwise layers' MACs included |
 | TOP/s | Two operations per MAC |
-| Bound class | A layer is compute-bound when its busiest core's compute-busy cycles exceed that core's memory time (`analytic.observed_bound`), and memory-bound otherwise |
+| Bound class | `analytic.observed_bound`: compute-bound when the busiest core's compute-busy cycles are at least its memory time; otherwise bandwidth-bound when the data cycles of its busier channel are at least the compute-busy cycles, and latency-bound when they are not. S1 counts bandwidth- and latency-bound layers as memory-bound |
 | Sanity checks | A result above a roof, a utilization above 1, a speedup above the core count or a bandwidth above the bus stops the study (`SanityError`) |
 
 | Study | Question | Figure |
@@ -28,7 +28,7 @@ cite are specified in [architecture](architecture.md); model scope is stated in
 | S3 | Read bandwidth against AXI outstanding transactions | [s3-outstanding](figures/s3-outstanding.svg) |
 | S4 | Cluster speedup for the m and n partitions | [s4-scaling-conv](figures/s4-scaling-conv.svg), [s4-scaling-gemv](figures/s4-scaling-gemv.svg) |
 | S5 | Output- against weight-stationary array utilization | [s5-dataflow](figures/s5-dataflow.svg) |
-| S6 | Accuracy of the closed-form model against npu-sim | [s6-analytic](figures/s6-analytic.svg) |
+| S6 | Accuracy of the closed-form model against `npu-sim` | [s6-analytic](figures/s6-analytic.svg) |
 | S7 | LLM decode with palette-compressed weights | [s7-compression](figures/s7-compression.svg) |
 | S8 | Cycles against SRAM over a tiling search | [s8-pareto](figures/s8-pareto.svg) |
 | S9 | Sizing the depthwise datapath | [s9-depthwise](figures/s9-depthwise.svg) |
@@ -61,12 +61,10 @@ tensor arena by default ([`platform.ld`, tag 26.08][corstone]).
 <!-- end:s1-networks -->
 
 Only ResNet-50 has compute-bound layers, 11% to 33% of them; every MobileNetV2 and BERT layer
-is memory-bound on every point. An $a \times b$ GEMM tile moves $(a + b)K_p$ operand bytes per
-panel for $abK_p$ MACs, $ab/(a + b)$ MAC per byte: 16 for the configured $32 \times 32$ tiles
-of `edge-256` and 32 for the $64 \times 64$ tiles of the other points, against ridges of 32,
-85.33, 163.8 and 49.13 MAC per byte ([design points](design-points.md) section 6). Only cache
-hits and the input footprints of convolutions raise a layer's intensity above that of its
-tiles.
+is memory-bound on every point. The configured tiles' operand intensity, 16 MAC per byte on
+`edge-256` and 32 on the other points, lies below every ridge ([design points](design-points.md)
+section 6); only cache hits and the input footprints of convolutions raise a layer's intensity
+above that of its tiles.
 
 The DRAM rate a network sustains is its DRAM bytes per inference over its latency, from the
 table above:
@@ -92,8 +90,8 @@ inference, 7.3x the 25.5 MB of weights, where `mobile-2k`, with 5.3x the SRAM, m
 smaller tiles re-read each operand more often (the traffic table of
 [architecture](architecture.md) section 4.3). `workstation-32c` moves 130 MB against 76.3 MB
 on `client-16c`: a cluster split re-reads a group's weights on every core that holds its row
-tiles, or its activations on every core that holds its column tiles (section 6.2), and twice
-the cores re-read more.
+tiles, or its activations on every core that holds its column tiles (architecture section
+6.2), and twice the cores re-read more.
 
 ### S1.2 Depthwise layers
 
@@ -170,10 +168,11 @@ per cycle, and falls to 49.13 on `workstation-32c`, whose 32 cores share 667.
 ## S3 AXI outstanding transactions
 
 An INT4 GEMV of $1 \times 4096 \times 4096$ streams its weights through one core's read
-channel: 16-byte beats, 16-beat bursts, unlimited DRAM, read and write latency $L$ of 100 and
-400 cycles, and read outstanding limit $N$ from 1 to 32, in the default $8 \times 8$ tiles. The
-formula column is the channel's steady state, equation 5.5 of
-[architecture](architecture.md), $\min(D, NBD/(L + B))$ with $D = 16$ and $B = 16$.
+channel: 16-byte beats, 16-beat bursts, unlimited DRAM, read and write latencies both $L$, at
+100 and at 400 cycles, and read outstanding limit $N$ from 1 to 32, in the default
+$8 \times 8$ tiles. The formula column is the channel's steady state, equation 5.5 of
+[architecture](architecture.md) in bytes per cycle, $\min(D, NbD/(L + b))$ with $D = 16$ bytes
+and $b = 16$ beats.
 
 ![AXI outstanding](figures/s3-outstanding.svg)
 
@@ -189,19 +188,19 @@ formula column is the channel's steady state, equation 5.5 of
 | 32 | 14.84 | 16.00 | 12.19 | 16.00 |
 <!-- end:s3-outstanding -->
 
-Below saturation npu-sim runs 0.9% to 4.5% under the formula for $N \le 4$. The formula reaches
-the 16 B/cycle bus from $N = 8$ at $L = 100$ and from $N = 26$ at $L = 400$; npu-sim reaches
+Below saturation `npu-sim` runs 0.9% to 4.5% under the formula for $N \le 4$. The formula reaches
+the 16 B/cycle bus from $N = 8$ at $L = 100$ and from $N = 26$ at $L = 400$; `npu-sim` reaches
 14.84 B/cycle from $N = 8$ at $L = 100$ and 12.19 B/cycle at $N = 32$ for $L = 400$. The
 plateau is a request boundary: the load process issues one panel request and waits for its
 completion before the next ([architecture](architecture.md) section 5.2), so the read latency
 is exposed once per request.
-A $1 \times 8$ tile's panel moves 20,512 bytes in 1,282 beats, and npu-sim reports a mean
+A $1 \times 8$ tile's panel moves 20,512 bytes in 1,282 beats, and `npu-sim` reports a mean
 request latency of 1,382 cycles at $L = 100$ and 1,682 at $L = 400$, the beats plus $L$:
 
 $$\frac{20{,}512}{1{,}282 + 100} = 14.84, \qquad \frac{20{,}512}{1{,}282 + 400} = 12.19 \ \text{B/cycle}$$
 
-A panel of $B$ bytes therefore sustains at most $B / (L + B/D)$ bytes per cycle per core,
-whatever the outstanding limit; deeper panels and wider tiles raise the plateau.
+A panel request of $x$ bytes therefore sustains at most $x / (L + x/D)$ bytes per cycle per
+core, whatever the outstanding limit; deeper panels and wider tiles raise the plateau.
 
 ## S4 Multi-core scaling
 
@@ -242,7 +241,7 @@ on one core (`results/studies/s4.json`).
 
 The GEMV has one row tile, so the m split runs it on one core at every core count. The n split
 divides up to 128 column tiles of 64. One core is compute-bound: the output-stationary array
-keeps one of its 32 rows busy, and npu-sim reports 532,736 compute-busy cycles of the 535,608
+keeps one of its 32 rows busy, and `npu-sim` reports 532,736 compute-busy cycles of the 535,608
 of the one-core run. Cores divide that compute until the shared DRAM binds: at 100 B/cycle the
 speedup is 5.44 at 8 cores and 5.87 at 32 against a ceiling of 6.35, and at 667 B/cycle 27.12
 at 32 cores against 42.37.
@@ -286,7 +285,7 @@ against 76.4% on pointwise layers, as memory time fills part of both schedules.
 
 ## S6 Analytic model vs SystemC
 
-`npuperf.analytic` against npu-sim on seeded random configurations and on the distinct S1 layer
+`npuperf.analytic` against `npu-sim` on seeded random configurations and on the distinct S1 layer
 runs of each design point. The random dense set draws read latencies up to 300 cycles, at most
 16 outstanding reads, DRAM up to 64 B/cycle and up to 8 cores; the random conv set draws
 convolutions on their input footprint, a third of them on the depthwise datapath and half with
@@ -309,22 +308,18 @@ cores on the clusters.
 | `workstation-32c` network layers | 82 | 6.9% | 23.4% | 28.5% | 82/82 | 75/82 | 82/82 | 82/82 |
 <!-- end:s6-analytic -->
 
-`schedule()` equals npu-sim on all 648 runs, and the closed-form traffic and compute-busy
+`schedule()` equals `npu-sim` on all 648 runs, and the closed-form traffic and compute-busy
 cycles of `analyze()` are exact on all of them. `analyze()` times every request alone on the
 memory system and charges the shared DRAM only as an aggregate byte bound, so it misses the
 queueing of channels and cores on one DRAM timeline. Its error grows with that queueing: the
 median is 0.0% to 0.5% on the random sets and the single-core points, 6.9% on
-`workstation-32c` and 19.2% on `client-16c`, where the estimate falls below npu-sim on 82 of 82
+`workstation-32c` and 19.2% on `client-16c`, where the estimate falls below `npu-sim` on 82 of 82
 layer runs. Its bound class disagrees on 5, 4 and 7 layer runs of `mobile-2k`, `client-16c` and
 `workstation-32c`, which it calls latency-bound against an observed bandwidth bound, or
 compute-bound against an observed latency bound (`results/studies/s6.json`).
 
-`npuperf.mapper` uses both: it ranks its candidates by the `analyze()` estimate and replays them
-with `schedule()` in that order, skipping a candidate whose `analyze()` lower bound cannot beat
-the fewest cycles so far, so it keeps the fastest replay of its whole candidate set.
-`tests/mapper_tests.py` checks that on a GEMV and a convolution, and holds the pick for
-ResNet-50 res3 3x3 on `mobile-2k`, caches off, within 10% of the fastest mapping of a 48-point
-npu-sim search.
+`npuperf.mapper` uses both ([usage](usage.md) section 9.7): it ranks its candidates by the
+`analyze()` estimate and keeps the fastest `schedule()` replay of its whole candidate set.
 
 ## S7 Weight compression for LLM decode
 
@@ -408,7 +403,7 @@ sized from. Vela 5.2.0 runs the Ethos-U55-256's depthwise on its 2x2x8 output mi
 its Regor compiler the Ethos-U85-2048's on its 4x4x16 one; both take 4 cycles per microblock
 for each step of 4 kernel taps ([`npu_performance.py`][vela-perf],
 [`ethos_u85_performance.cpp`][regor-perf]). That is 32 and 256 MAC/cycle, and 24 and 192 for a
-3x3 kernel, whose 9 taps take 3 steps. The two points take the 3x3 rates: npu-sim's datapath has
+3x3 kernel, whose 9 taps take 3 steps. The two points take the 3x3 rates: `npu-sim`'s datapath has
 no kernel step, and every depthwise layer of the workloads is 3x3. Apple publishes no Neural
 Engine microarchitecture, so this study sizes the clusters' rate by a latency rule and reports
 the same rule on the Arm-sized points beside their Arm-model rate.
@@ -499,7 +494,8 @@ ResNet-50 sets the pick on both points. Its MAC utilization climbs from 9.7% at 
 at 256 KiB on `client-16c` and from 13.7% to 25.6% on `workstation-32c`, then gains at most 0.6
 points up to 4 MiB: 256 KiB is the first size at or above 90% of the highest, 21.0% on
 `client-16c`, where 128 KiB gives 15.4%. Equation 4.3 of [architecture](architecture.md) bounds
-the tiles by the SRAM, and a tile's operand intensity $ab/(a + b)$ grows with its edge (S1.1).
+the tiles by the SRAM, and a tile's operand intensity $ab/(a + b)$ grows with its edge
+([design points](design-points.md) section 6).
 MobileNetV2 stays between 5.0% and 5.7% at every size, and its picks are 128 and 64 KiB.
 
 [corstone]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform/-/blob/26.08/targets/corstone-300/platform.ld

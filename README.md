@@ -78,7 +78,7 @@ and opens the live dashboard.
 
 | Path | Content |
 |---|---|
-| `src/`, `include/npu/` | C++17 SystemC model: core pipeline, memory models, cluster, option table, numerics, convolution geometry, TLM, multicore and transformer platforms |
+| `src/`, `include/npu/` | C++17 SystemC model: core pipeline, memory models, cluster, option table, numerics, convolution geometry, TLM, multi-core and transformer platforms |
 | `npuperf/` | Python tools: analytic model, mapper, studies, sweeps, roofline, energy, graph runtime, ONNX importer, live dashboard server |
 | `configs/` | The four design points and an example configuration |
 | `workloads/` | Layer tables of MobileNetV2, ResNet-50, BERT-base and Llama-3.2-1B |
@@ -94,18 +94,18 @@ and opens the live dashboard.
 |---|---|
 | [architecture](docs/architecture.md) | Datapaths, tiling and loop nest, SRAM budget, caches, address map, serial DMA and AXI models, cluster, scheduling, observability |
 | [numerics](docs/numerics.md) | Integer datapath, requantization and its TOSA, TFLite and CMSIS-NN equivalences, file formats, weight compression, floating point |
-| [soc-integration](docs/soc-integration.md) | TLM-2.0 coprocessor, multicore QoS and DVFS platform, transformer engine, energy estimate |
+| [soc-integration](docs/soc-integration.md) | TLM-2.0 coprocessor, multi-core QoS and DVFS platform, transformer engine, energy estimate |
 | [design points](docs/design-points.md) | Derivation of the four configurations from public data |
 | [results](docs/results.md) | Studies S1 to S10 with analysis |
 | [methodology](docs/methodology.md) | Modeling approach, validation, model fidelity, calibration plan, related work |
 | [usage](docs/usage.md) | Build, command line, config files, result schema, traces, dashboard, Python tools, file formats |
 | [examples](examples/README.md), [changelog](CHANGELOG.md), [contributing](CONTRIBUTING.md) | Worked examples, release notes, contribution rules |
 
-## Scope
+## Model scope
 
-`npu-sim` is a transaction-level, cycle-approximate model whose timing parameters are not
-calibrated against RTL or silicon; [model fidelity](docs/methodology.md#model-fidelity) lists
-what is modeled, approximated and not modeled.
+[Model fidelity](docs/methodology.md#model-fidelity) lists what the model simulates, what it
+approximates and what it omits, and the [calibration plan](docs/methodology.md#calibration-plan)
+maps each timing parameter to the measurement that fits it.
 
 ## License
 

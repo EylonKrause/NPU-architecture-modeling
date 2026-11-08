@@ -13,7 +13,7 @@ rates. A run loads a point with `--config`; later flags override the file:
 npu-sim --config configs/mobile-2k.json --m 196 --n 256 --k 2304
 ```
 
-`python -m npuperf.designs` prints the table below from the config files.
+`python3 -m npuperf.designs` prints the table below from the config files.
 `sim.design-points` (`tests/design_point_tests.py`) checks the table, the derivations and the
 sizing rules against the files and the simulator, accepts every layer of every bundled workload
 on every point, and runs one GEMM per point bit-exact.
@@ -33,7 +33,7 @@ on every point, and runs one GEMM per point bit-exact.
 | Peak TOP/s | 2 x MAC/cycle x clock: one INT8 MAC is two operations, the convention of Arm's figures (2048 MACs, 4 TOP/s at 1 GHz). The clusters apply the same convention to Apple's operations-per-second figure, whose precision and operation count Apple does not state |
 | SRAM, depthwise MAC/cycle, AXI | Per core. Each core has its own SRAM, slots, weight and activation caches, depthwise datapath and AXI port (read and write channels); all cores share one DRAM timeline |
 | DRAM GB/s | DRAM B/cycle x clock. Every point holds every tensor in DRAM |
-| Ridge | MAC/cycle over the memory roof min(DRAM B/cycle, 2 x cores x AXI bytes), which npu-sim reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all four points |
+| Ridge | MAC/cycle over the memory roof min(DRAM B/cycle, 2 x cores x AXI bytes), which `npu-sim` reports as `peak_memory_bytes_per_cycle`. The DRAM rate is the roof on all four points |
 
 KB in Arm's documents is 1024 B: the Ethos-U55-256 has 48 SHRAM banks of 1024 B plus a 2048 B
 LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product brief states as
@@ -49,7 +49,7 @@ LUT ([Vela `architecture_features.py`][vela-arch]), 51,200 B, which the product 
 | `tile_k` | The largest power of two that fits with T |
 | Minimum panel depth | The minimum efficient burst of the DRAM behind the port, Vela's `Dram_burst_length` (128 B). Each row of a GEMM's activation panel is one `tile_k`-byte run, so a shallower panel issues shorter runs |
 | `weight_cache_bytes` | The SRAM the slots leave free. `npuperf.mapper`, which the studies use, splits the free SRAM between this cache and the activation cache per layer |
-| `depthwise_macs_per_cycle` | On `edge-256` and `mobile-2k`, the 3x3 rate of Arm's performance model of the part: Vela 5.2.0 ([`npu_performance.py`][vela-perf]) and its Regor compiler ([`ethos_u85_performance.cpp`][regor-perf]) take 4 cycles per output microblock for each step of 4 kernel taps, so the rate is the microblock's output count, and a 3x3 kernel's 9 taps in 3 steps reach three quarters of it. npu-sim's depthwise datapath has no kernel step, so the points take the 3x3 rate, the only depthwise kernel of the bundled workloads. On the clusters, which have no such model, the S9 rule: the smallest power of two at which MobileNetV2 runs within 5% of its latency with a depthwise datapath as wide as the array (array MACs per core), with tiles from `npuperf.mapper` at every rate |
+| `depthwise_macs_per_cycle` | On `edge-256` and `mobile-2k`, the 3x3 rate of Arm's performance model of the part: Vela 5.2.0 ([`npu_performance.py`][vela-perf]) and its Regor compiler ([`ethos_u85_performance.cpp`][regor-perf]) take 4 cycles per output microblock for each step of 4 kernel taps, so the rate is the microblock's output count, and a 3x3 kernel's 9 taps in 3 steps reach three quarters of it. `npu-sim`'s depthwise datapath has no kernel step, so the points take the 3x3 rate, the only depthwise kernel of the bundled workloads. On the clusters, which have no such model, the S9 rule: the smallest power of two at which MobileNetV2 runs within 5% of its latency with a depthwise datapath as wide as the array (array MACs per core), with tiles from `npuperf.mapper` at every rate |
 | `axi.max_burst_beats` | The shortest power of two B with read outstanding x B >= read latency + B. A read burst holds an outstanding slot for latency + B cycles, so N slots stream one beat per cycle once N x B >= latency + B |
 | Units of the memory figures | A figure keeps the unit of its source. Vela states a system per NPU cycle: latencies in cycles, the DRAM rate as port bytes x ports x `Dram_clock_scale` per cycle, from which it derives GB/s at its configured clock ([`architecture_features.py`][vela-arch]); it uses the same cycle counts at 500 MHz and 1 GHz (DRAM 500 read, 250 write in `Ethos_U65_Mid_End` at 500 MHz and in `Ethos_U85_SYS_DRAM_High` at 1 GHz). The points take Vela's latencies, outstanding limits and DRAM rates in cycles, unchanged at their own clock. Apple states GB/s, which the clusters convert at their clock |
 | `pipeline_cycles` | 4, the simulator default; no public figure |
@@ -58,11 +58,11 @@ A slot reserves 4T B of bias, two panel buffers of T x `tile_k` activation and `
 weight bytes, and 5 B per output (INT32 partial sum and INT8 result), equation 4.3 of
 [architecture](architecture.md). Partial tiles at the matrix edges and single-panel tiles
 reserve less, so every layer fits once full tiles do. `sim.design-points` checks that full
-tiles fill each point's SRAM exactly and that npu-sim rejects the next larger T or `tile_k`.
+tiles fill each point's SRAM exactly and that `npu-sim` rejects the next larger T or `tile_k`.
 
 `npuperf.designs` implements the rules (`tile_rule`, `burst_rule`, `cache_rule`);
 `npuperf.studies` implements the S9 and S10 rules (`s9_pick`, `s10_pick`), and
-`python -m npuperf.reproduce` stops when a config file disagrees with them.
+`python3 -m npuperf.reproduce` stops when a config file disagrees with them.
 
 ## 2 edge-256
 
@@ -115,7 +115,7 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 | Field | Value | Derivation |
 |---|---|---|
 | Cores, array | 16 x 32x32, 16,384 MAC/cycle | M4's Neural Engine: "16-core design", "capable of 38 trillion operations per second" ([Apple, May 2024][m4]). Apple does not state the precision; this model's MACs are INT8. 38 T ops/s over 16 cores of 1024 MACs at 2 ops/MAC is 1.16 GHz |
-| Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (npu-sim takes integer bytes per cycle). Peak 2 x 16,384 x 1.2 GHz = 39.3216 TOP/s, 3.5% above 38 |
+| Clock | 1200 MHz | 1.16 GHz rounded up so that 120 GB/s is a whole 100 B/cycle (`npu-sim` takes integer bytes per cycle). Peak 2 x 16,384 x 1.2 GHz = 39.3216 TOP/s, 3.5% above 38 |
 | DRAM rate | 100 B/cycle, 120 GB/s | M4 "has higher memory bandwidth of 120GB/s" ([Apple, Oct 2024][m4-pro]). That is the SoC's rate, shared with the CPU and GPU; Apple publishes no rate attainable by the Neural Engine |
 | SRAM | 262,144 B (256 KiB) per core | Apple publishes no Neural Engine SRAM size. The S10 rule ([results](results.md#s10-per-core-sram-of-the-cluster-core)): the smallest power of two from 64 KiB to 4 MiB at which ResNet-50 and MobileNetV2 each reach 90% of their highest MAC utilization in the sweep, taken on this point and on `workstation-32c`, which shares the core |
 | AXI | One 256-bit port per core | One core design serves both clusters: the narrowest AXI width whose read channels, one per core, carry `workstation-32c`'s 667 B/cycle. 32 x 16 B = 512 falls short; 32 x 32 B = 1024 does not. Here 16 x 32 B = 512 B/cycle against 100 |
@@ -124,7 +124,7 @@ Client-SoC point in the class of the 16-core Neural Engine Apple states for M4.
 | Tiles | 64x64x256 | Minimum depth 128 B. T = 128 needs 295,936 B at depth 128; at T = 64, depth 512 needs 303,616 B |
 | Weight cache | 89,600 B per core | 262,144 - 2 x 86,272 |
 | Depthwise datapath | 128 MAC/cycle per core | The S9 rule; Apple publishes no Neural Engine microarchitecture to take a rate from |
-| Partition | `auto` | npu-sim picks the m or n split per GEMM |
+| Partition | `auto` | `npu-sim` picks the m or n split per GEMM |
 
 ## 5 workstation-32c
 
@@ -155,8 +155,8 @@ every point: the SRAM sets $T$, and no point's SRAM holds the two slots of a til
 reach its ridge. A convolution on its input footprint reads an input pixel once per reduction
 panel whose kernel rows touch it, where the im2col matrix holds it once per kernel tap, and the
 activation cache lets the column tiles of a row tile share its panels. With both, some of the
-`npuperf.mapper` tilings that the results use are compute-bound: the busiest core computes for
-longer than it waits on memory, the count in the compute-bound column of S1 in
+`npuperf.mapper` tilings that the results use are compute-bound: the busiest core computes at
+least as long as it waits on memory, the count in the compute-bound column of S1 in
 [results](results.md). On the clusters some of those layers have fewer work units than cores,
 so their MAC utilization stays low.
 

@@ -29,7 +29,7 @@ context: `npu-sim` receives one job, a grouped GEMM, and runs it to completion.*
 
 An NPU cluster holds $N_c$ identical cores. Each core holds a tile sequencer, a DMA engine with
 one memory port (serial DMA, or AXI read and write channels), an SRAM partitioned into tile
-slots and panel caches, a weight decoder, a MAC datapath with a depthwise path, and a
+slots and panel caches, a weight decoder, a MAC datapath with a depthwise datapath, and a
 requantization unit. All cores share one DRAM through the system interconnect.
 
 ### 1.2 Unit of work
@@ -66,7 +66,7 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 | $K_\pi$ | Panel depth: `mapping.tile_k`, or $K$ when it is 0 | `mapping.tile_k` |
 | $n_k$ | Reduction panels per tile, $\lceil K / K_\pi \rceil$ | |
 | $K_p$ | Depth of panel $p$: $K_\pi$, or the remainder for the last panel | |
-| $S$ | Tile slots per core | `mapping.buffer_slots` |
+| $N_s$ | Tile slots per core | `mapping.buffer_slots` |
 | $P_b$ | Panel buffers per slot: `mapping.panel_buffers`, at most $n_k$ | `mapping.panel_buffers` |
 | $P$ | Vector-datapath MACs per cycle | `arch.compute.macs_per_cycle` |
 | $A_r, A_c$ | Systolic array rows and columns | `arch.compute.array_rows`, `array_cols` |
@@ -76,8 +76,10 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 | $b_w$ | Weight bits | `weights.bits` |
 | $b_p$ | Palette index bits | `weights.palette_bits` |
 | $B_s$ | Sparse bitmap block length | `weights.sparse_block` |
+| $\mu_c, S_c$ | Requantization multiplier and right shift of output channel $c$ | `quant.multiplier`, `shift`, `multipliers`, `shifts` |
+| $z_a, z_{w,c}, z_o$ | Activation, weight and output zero points | `quant.input_zero`, `weight_zero`, `weight_zero_points`, `output_zero` |
 | $Q$ | Per-channel parameter vectors present, 0 to 3 | `quant.weight_zero_points`, `multipliers`, `shifts` |
-| $W, L, \Lambda$ | Serial DMA bytes per cycle, latency per burst, burst bytes | `arch.memory.bytes_per_cycle`, `latency`, `burst_bytes` |
+| $R_{\mathrm{dma}}, L, \Lambda$ | Serial DMA bytes per cycle, latency per burst, burst bytes | `arch.memory.bytes_per_cycle`, `latency`, `burst_bytes` |
 | $D$ | AXI bytes per beat | `arch.memory.axi.data_bytes` |
 | $b_{\max}$ | Longest AXI burst in beats | `arch.memory.axi.max_burst_beats` |
 | $N_r, N_w$ | AXI read and write bursts in flight | `arch.memory.axi.read_outstanding`, `write_outstanding` |
@@ -107,7 +109,7 @@ section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the check
 | `arch.compute.weight_decode_values_per_cycle` | `--weight-decode-values-per-cycle` | values/cycle | 1 to $10^9$ | 16 | Decoder throughput $V$ |
 | `arch.compute.depthwise_macs_per_cycle` | `--depthwise-macs-per-cycle` | MAC/cycle | 0 to $10^9$ | 0 | Depthwise datapath throughput $P_{\mathrm{dw}}$, section 3.5; 0 runs depthwise problems as grouped GEMMs |
 | `arch.memory.model` | `--memory-model` | enumeration | `serial`, `axi` | `serial` | Memory model, sections 5.3 and 5.4 |
-| `arch.memory.bytes_per_cycle` | `--memory-bytes-per-cycle` | B/cycle | 1 to $10^9$ | 16 | Serial DMA rate $W$ |
+| `arch.memory.bytes_per_cycle` | `--memory-bytes-per-cycle` | B/cycle | 1 to $10^9$ | 16 | Serial DMA rate $R_{\mathrm{dma}}$ |
 | `arch.memory.latency` | `--memory-latency` | cycles | 0 to $10^9$ | 12 | Serial DMA latency $L$, charged per burst |
 | `arch.memory.burst_bytes` | `--dma-burst-bytes` | bytes | 0 to $10^9$ | 0 | Serial burst size $\Lambda$; 0 moves each request as one burst |
 | `arch.memory.dram_bytes_per_cycle` | `--dram-bytes-per-cycle` | B/cycle | 0 to $10^9$ | 0 | DRAM rate $R$ shared by all AXI channels; 0 is unlimited |
@@ -125,7 +127,7 @@ section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the check
 | `mapping.tile_m` | `--tile-m` | rows | 1 to 1,048,576 | 8 | Tile rows $T_m$ |
 | `mapping.tile_n` | `--tile-n` | columns | 1 to 1,048,576 | 8 | Tile columns $T_n$ |
 | `mapping.tile_k` | `--tile-k` | elements | 0, or 1 to 1,048,576 | 0 | Panel depth $K_\pi$; 0 is one panel of depth $K$ |
-| `mapping.buffer_slots` | `--buffer-slots` | tiles | 1 to 64 | 2 | Tile slots $S$ |
+| `mapping.buffer_slots` | `--buffer-slots` | tiles | 1 to 64 | 2 | Tile slots $N_s$ |
 | `mapping.panel_buffers` | `--panel-buffers` | buffers per slot | 1, 2 | 2 | Reduction-panel buffers per slot |
 | `mapping.partition` | `--partition` | enumeration | `m`, `n`, `auto` | `auto` | Cluster work split, section 6.2 |
 | `weights.bits` | `--weight-bits` | bits | 4, 8 | 8 | Signed weight precision $b_w$ |
@@ -144,7 +146,6 @@ section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the check
 | A problem on the depthwise datapath requires dense weights | `validate_mapping` |
 | `shape.conv` sets all three input extents; $C$ is a multiple of $G$; $M = H_o W_o$ and $K = k_h k_w C_g$ (section 4.4); the kernel reach fits the padded input | `conv_geometry`, `src/conv.cpp` |
 | With `shape.conv`, `mapping.tile_k` is 0 or a multiple of $k_w C_g$ | `validate_mapping` |
-| `--input` is rejected with `shape.conv`, whose input tensor is generated | `input_problem`, `src/main.cpp` |
 | `arch.cores` above 1 requires `arch.memory.model axi` | `validate` |
 | Serial-only flags are rejected under `axi` and AXI flags under `serial`; config files may carry both groups | `parse` |
 | `arch.sram_bytes` is at least the SRAM budget of section 4.6 | `validate` |
@@ -261,17 +262,17 @@ against $n_k C_{\mathrm{pipe}}$ cycles per tile.
 
 Weights are stored in one of three formats (`weights.encoding`); the format sets the bytes a
 panel load moves and the decoder work per panel. [Numerics](numerics.md) section 4 specifies
-the byte formats.
+the byte formats and their encoded sizes $B_W(E)$ for a panel of $E = K_p N_t$ elements.
 
-| Format | Panel bytes for $E = K_p N_t$ elements | Decoder cycles $C_{\mathrm{dec}}$ | MAC cycles |
-|---|---|---|---|
-| `dense` | $\lceil E b_w / 8 \rceil$ | 0, the decoder is bypassed | Equations 3.2 to 3.4 |
-| `palette` | $4 + n_{\mathrm{LUT}} + \lceil E b_p / 8 \rceil$, $n_{\mathrm{LUT}} \le 2^{b_p}$ LUT entries | $\lceil E / V \rceil$ | Equations 3.2 to 3.4 |
-| `sparse` | $4 + \lceil \beta / 8 \rceil + \lceil R_s b_w / 8 \rceil$ | $\lceil \beta / V \rceil + \lceil R_s / V \rceil$ | $\lceil M_t \nu / P \rceil$, vector datapath only |
+| Format | Decoder cycles $C_{\mathrm{dec}}$ | MAC cycles |
+|---|---|---|
+| `dense` | 0, the decoder is bypassed | Equations 3.2 to 3.4 |
+| `palette` | $\lceil E / V \rceil$ | Equations 3.2 to 3.4 |
+| `sparse` | $\lceil \beta / V \rceil + \lceil E_r / V \rceil$ | $\lceil M_t \nu / P \rceil$, vector datapath only |
 
-Here $\beta = \lceil E / B_s \rceil$ is the number of bitmap blocks, $R_s$ the elements of
+Here $\beta = \lceil E / B_s \rceil$ is the number of bitmap blocks, $E_r$ the elements of
 retained blocks, and $\nu$ the elements that differ from their channel's weight zero point. The
-decoder runs ahead of the MAC array and streams decoded values into it, so equation 3.1 takes
+decoder runs ahead of the MAC datapath and streams decoded values into it, so equation 3.1 takes
 the larger of the two terms (`encoded_panel_compute_cycles`,
 `src/core.cpp`). Decode work repeats for every output-row tile that uses a panel, including tiles
 whose panel hits the weight cache. `executed_macs` counts $M_t \nu$ per sparse panel and the full
@@ -284,21 +285,21 @@ an odd element count carries one padding nibble.
 
 The datapath accumulates
 
-$$a_{r,c} = b_c + \sum_{k=0}^{K-1} (x_{r,k} - z_x)(w_{k,c} - z_{w,c}) \tag{3.6}$$
+$$a_{r,c} = b_c + \sum_{k=0}^{K-1} (x_{r,k} - z_a)(w_{k,c} - z_{w,c}) \tag{3.6}$$
 
 exactly and requires the final value to fit INT32. Partial sums stay in the slot's INT32
 accumulator across the tile's $n_k$ panels; the bias enters once. The requantization unit runs on
 the final panel only and maps each accumulator to INT8:
 
-$$q_{r,c} = \operatorname{clamp}_{[-128,\,127]}\big(\max(z_y + \operatorname{scale}(a_{r,c}, M_c, s_c),\; \zeta)\big), \qquad \zeta = \begin{cases} z_y & \text{ReLU} \\ -\infty & \text{otherwise} \end{cases} \tag{3.7}$$
+$$q_{r,c} = \operatorname{clamp}_{[-128,\,127]}\big(\max(z_o + \rho(a_{r,c}; \mu_c, S_c),\; \zeta)\big), \qquad \zeta = \begin{cases} z_o & \text{ReLU} \\ -\infty & \text{otherwise} \end{cases} \tag{3.7}$$
 
-| `quant.rescale` | $\operatorname{scale}(a, M, s)$ | Shift range |
+| `quant.rescale` | Rescale $\rho(a; \mu, S)$ | Shift range |
 |---|---|---|
-| `native` | $\operatorname{sgn}(aM)\,\operatorname{round}_\rho\left(\lvert aM \rvert / 2^s\right)$, ties away from zero or to even (`quant.rounding`) | 0 to 31 |
-| `tosa-single` | $\lfloor (aM + 2^{s-1}) / 2^s \rfloor$, TOSA 1.0.2 `apply_scale_32` without double rounding; $a$ outside $[-2^{s-1}, 2^{s-1})$ is rejected | 2 to 62 |
-| `tosa-double` | As `tosa-single`, with the rounding term moved $2^{30}$ away from zero when $s > 31$ | 2 to 62 |
+| `native` | $\operatorname{sgn}(a\mu)\,\operatorname{round}_t\left(\lvert a\mu \rvert / 2^S\right)$, ties away from zero or to even (`quant.rounding`) | 0 to 31 |
+| `tosa-single` | $\lfloor (a\mu + 2^{S-1}) / 2^S \rfloor$, TOSA 1.0.2 `apply_scale_32` without double rounding; $a$ outside $[-2^{S-1}, 2^{S-1})$ is rejected | 2 to 62 |
+| `tosa-double` | As `tosa-single`, with the rounding term moved $2^{30}$ away from zero when $S > 31$ | 2 to 62 |
 
-$M_c$, $s_c$ and $z_{w,c}$ are per-channel when the vectors are present ($Q > 0$). The
+$\mu_c$, $S_c$ and $z_{w,c}$ are per-channel when the vectors are present ($Q > 0$). The
 requantization unit has no timing term of its own: the final panel's duration is $C_p$.
 [Numerics](numerics.md) sections 1 and 2 give the complete arithmetic, the equivalences of the
 TOSA modes with TFLite, gemmlowp and CMSIS-NN, and the golden vectors.
@@ -354,7 +355,7 @@ A load of panel $p$ of a tile moves
 
 $$B_{\mathrm{load}}(p) = \underbrace{B_A(p)}_{\text{activations, unless cached}} + \underbrace{B_W(K_p N_t)}_{\text{weights, unless cached}} + \underbrace{[p = 0]\; 4 N_t (1 + Q)}_{\text{bias and per-channel records}} \tag{4.1}$$
 
-where $B_W(E)$ is the panel bytes of section 3.7 and $B_A(p)$ the activation bytes: $M_t K_p$
+where $B_W(E)$ is the encoded size of section 3.7 and $B_A(p)$ the activation bytes: $M_t K_p$
 for a GEMM tile, $M_t C_t K_p$ for a depthwise-datapath tile, and the input footprint of
 section 4.4 under `shape.conv`. A depthwise-datapath tile has $N_t = C_t$ in the weight and
 record terms. A tile store moves $M_t N_t$ bytes of INT8 outputs. INT32 accumulators never
@@ -453,7 +454,7 @@ sized for the largest panel, and the INT32 accumulators plus INT8 outputs of a f
 $\hat M = \min(T_m, M)$, $\hat N = \min(T_n, N)$ ($\min(T_n, G)$ on the depthwise datapath) and
 $\hat K = \min(K_\pi, K)$ (`scratchpad_bytes`, `src/core.cpp`):
 
-$$B_{\mathrm{SRAM}} = S\Big(4\hat N(1 + Q) + P_b\big(\hat B_A + \bar B_W(\hat K \hat N)\big) + 5 \hat M \hat N\Big) + C_w + C_a \tag{4.3}$$
+$$B_{\mathrm{SRAM}} = N_s\Big(4\hat N(1 + Q) + P_b\big(\hat B_A + \bar B_W(\hat K \hat N)\big) + 5 \hat M \hat N\Big) + C_w + C_a \tag{4.3}$$
 
 | Operand | Activation panel bound $\hat B_A$ |
 |---|---|
@@ -461,15 +462,14 @@ $$B_{\mathrm{SRAM}} = S\Big(4\hat N(1 + Q) + P_b\big(\hat B_A + \bar B_W(\hat K 
 | Depthwise datapath | $\hat M \hat N \hat K$ |
 | `shape.conv` | The largest span-width sum of any panel of any row tile, times $C_g$, or $\hat N C_g$ on the depthwise datapath |
 
-$\bar B_W(E)$ is the worst-case panel size of the weight format: $\lceil E b_w / 8 \rceil$ dense,
-$4 + \min(E, 2^{b_p}) + \lceil E b_p / 8 \rceil$ palette, and
-$4 + \lceil \lceil E / B_s \rceil / 8 \rceil + \lceil E b_w / 8 \rceil$ sparse. The factor 5 is
+$\bar B_W(E)$ is the worst-case panel size of the weight format ([numerics](numerics.md)
+section 4.6); for dense weights it equals $B_W(E) = \lceil E b_w / 8 \rceil$. The factor 5 is
 four accumulator bytes and one output byte per element. $B_{\mathrm{SRAM}}$ must not exceed
 `arch.sram_bytes`; a configuration that exceeds it is rejected, and the model has no spill path.
 The result reports $B_{\mathrm{SRAM}}$ per core as `scratchpad_bytes`.
 
 For the `client-16c` design point, sized from public data in [design points](design-points.md)
-($T_m = T_n = 64$, $K_\pi = 256$, $S = P_b = 2$, $Q = 0$, dense INT8, $C_w = 89{,}600$,
+($T_m = T_n = 64$, $K_\pi = 256$, $N_s = P_b = 2$, $Q = 0$, dense INT8, $C_w = 89{,}600$,
 $C_a = 0$):
 
 $$2\big(256 + 2(16{,}384 + 16{,}384) + 20{,}480\big) + 89{,}600 = 262{,}144$$
@@ -575,7 +575,7 @@ One non-preemptive DMA server moves reads and writes, one request at a time (`Se
 `src/memory.cpp`). A request of $x$ bytes splits into bursts of $\Lambda$ bytes and a remainder,
 or one burst when $\Lambda = 0$; each burst pays the latency and its data cycles:
 
-$$C_{\mathrm{DMA}}(x) = \sum_{\text{bursts } i} \left(L + \left\lceil \frac{x_i}{W} \right\rceil\right) \tag{5.2}$$
+$$C_{\mathrm{DMA}}(x) = \sum_{\text{bursts } i} \left(L + \left\lceil \frac{x_i}{R_{\mathrm{dma}}} \right\rceil\right) \tag{5.2}$$
 
 The request completes $C_{\mathrm{DMA}}(x)$ cycles after the server starts it. Address runs do
 not affect the serial model; it counts bytes.
@@ -717,8 +717,8 @@ bytes, applying the cyclic-LRU property of section 4.7 to the weight cache. The 
 $$C_{\mathrm{bound}} = \max\left(\max_c C^{\mathrm{comp}}_c,\; \max_c C^{\mathrm{port}}_c,\; \left\lceil \frac{\sum_c (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c)}{R} \right\rceil\right) \tag{6.2}$$
 
 with $C^{\mathrm{port}}_c = \max(\lceil B^{\mathrm{rd}}_c / D \rceil, \lceil B^{\mathrm{wr}}_c / D \rceil)$
-under AXI and $\lceil (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c) / W \rceil$ under the serial model;
-the DRAM term applies when $R > 0$. The result echoes both predictions under
+under AXI and $\lceil (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c) / R_{\mathrm{dma}} \rceil$ under the
+serial model; the DRAM term applies when $R > 0$. The result echoes both predictions under
 `cluster.predicted`.
 
 ### 6.4 Aggregate semantics
@@ -735,7 +735,7 @@ The top level of a result describes the cluster; `cores` lists every core (`repo
 | `effective_macs_per_cycle` | $N_c$ times the per-core peak of the engine the job runs on |
 | `depthwise_peak_macs_per_cycle` | $N_c P_{\mathrm{dw}}$ |
 | `mac_utilization` | `executed_macs` over `effective_macs_per_cycle` $\cdot$ `cycles` |
-| `peak_memory_bytes_per_cycle` | AXI: $\min(2 N_c D, R)$, or $2 N_c D$ when $R = 0$; serial: $W$ |
+| `peak_memory_bytes_per_cycle` | AXI: $\min(2 N_c D, R)$, or $2 N_c D$ when $R = 0$; serial: $R_{\mathrm{dma}}$ |
 | `resource_lower_bound_cycles` | Largest of the per-core compute busy cycles, the per-core memory busy cycles and, under AXI with $R > 0$, $\lceil$DRAM bytes$/R\rceil$ |
 | `memory` channel statistics | Counters add; maximum latency and peak outstanding take the largest port; mean latency is total latency over requests |
 | `scratchpad_bytes` | Per core |
@@ -763,9 +763,9 @@ compute and store threads, then the memory model's thread, then the observer.
 
 | Channel | Type | Depth | Token | Producer, consumer |
 |---|---|---|---|---|
-| `free_slots` | `sc_fifo` | $S$, initially full | Slot | `store`, `load` |
-| `loaded` | `sc_fifo` | $S P_b$ | Panel job $t\,n_k + p$ | `load`, `compute` |
-| `computed` | `sc_fifo` | $S$ | Tile | `compute`, `store` |
+| `free_slots` | `sc_fifo` | $N_s$, initially full | Slot | `store`, `load` |
+| `loaded` | `sc_fifo` | $N_s P_b$ | Panel job $t\,n_k + p$ | `load`, `compute` |
+| `computed` | `sc_fifo` | $N_s$ | Tile | `compute`, `store` |
 
 | Event | Notified by | Wakes |
 |---|---|---|
@@ -834,82 +834,55 @@ and the serial server waits two delta cycles before choosing between a read and 
 
 ## 8 Observability
 
-[Usage](usage.md) sections 5 to 7 give the complete result, trace and snapshot formats. This
-section defines what the architectural quantities measure.
+[Usage](usage.md) sections 5 to 7 define every field of the result, the stage trace, the
+waveforms and the live snapshots. This section maps the observed quantities to the mechanisms
+above and states when each is sampled.
 
 ### 8.1 Result statistics
 
-| Field | Definition |
+| Fields | Mechanism |
 |---|---|
-| `cycles` | Makespan in cycles |
-| `macs`, `executed_macs`, `skipped_macs` | $GMNK$; MACs performed; the difference (section 3.7) |
-| `read_bytes`, `write_bytes` | Payload bytes of all requests |
-| `weight_read_bytes` | Weight bytes loaded, after cache hits |
-| `encoded_weight_storage_bytes`, `dense_weight_storage_bytes` | Weight footprint in DRAM in the configured format and as packed dense |
-| `compute_busy_cycles` | Sum of $C_p$ over computed panels |
-| `dma_busy_cycles` | Serial: sum of request durations. AXI: cycles with a request in flight on either channel of a port |
-| `peak_inflight_tiles`, `slot_wait_cycles`, `panel_wait_cycles` | Slot occupancy and the waits of section 7.3 |
-| `dma_requests`, `dma_bursts` | Requests and bursts on both channels |
-| `weight_cache_hits`, `weight_cache_misses`, `weight_bytes_saved`, `peak_cached_weight_bytes` | Section 4.7 |
-| `activation_read_bytes`, `activation_cache_hits`, `activation_cache_misses`, `activation_bytes_saved`, `peak_cached_activation_bytes` | Section 4.8 |
-| `depthwise_macs`, `depthwise_peak_macs_per_cycle`, `depthwise_mac_utilization` | MACs run on the depthwise datapath; $N_c P_{\mathrm{dw}}$; `depthwise_macs` over `depthwise_peak_macs_per_cycle` $\cdot$ `cycles` (section 3.5) |
-| `weight_decode_cycles`, `decoded_weight_values` | Decoder occupancy and output values, summed over computed panels |
-| `reduction_blocks`, `scratchpad_bytes` | $n_k$; $B_{\mathrm{SRAM}}$ of equation 4.3 |
-| `effective_macs_per_cycle`, `peak_memory_bytes_per_cycle` | Cluster peaks (section 6.4) |
-| `compute_utilization`, `memory_utilization`, `mac_utilization` | Section 6.4 |
-| `dma_payload_utilization` | (`read_bytes` + `write_bytes`) over `peak_memory_bytes_per_cycle` $\cdot$ `cycles` |
-| `arithmetic_intensity_macs_per_byte` | `macs` over (`read_bytes` + `write_bytes`) |
-| `resource_lower_bound_cycles` | Section 6.4 |
-| `modeled_latency_ns` | `cycles` at `arch.frequency_mhz` |
-| `memory.read`, `memory.write` | Per channel: requests, bursts, beats, payload bytes, busy cycles (data-phase cycles), mean and maximum request latency (arrival to completion), burst efficiency, achieved bytes per cycle, peak outstanding bursts |
-| `memory.dram` | AXI: $R$, bytes moved ($D$ times beats), utilization |
-| `cluster`, `cores` | Section 6 |
-| `numerics`, `numerical_match`, `output_hash` | `bit-exact` runs compare every accumulator and output with the scalar reference before reporting |
+| `cycles`, `resource_lower_bound_cycles`, `cluster`, `cores` | Makespan and cluster aggregation, section 6.4 |
+| `macs`, `executed_macs`, `skipped_macs`, `compute_busy_cycles` | Panel compute, equation 3.1; sparse zero skipping, section 3.7 |
+| `weight_decode_cycles`, `decoded_weight_values`, `encoded_weight_storage_bytes`, `dense_weight_storage_bytes` | Weight decoder, section 3.7 |
+| `depthwise_macs`, `depthwise_peak_macs_per_cycle`, `depthwise_mac_utilization` | Depthwise datapath, section 3.5 |
+| `reduction_blocks`, `scratchpad_bytes` | $n_k$ of section 4.1; $B_{\mathrm{SRAM}}$ of equation 4.3 |
+| `read_bytes`, `write_bytes`, `weight_read_bytes`, `activation_read_bytes` | Traffic, equation 4.1, after cache hits |
+| `weight_cache_hits`, `weight_cache_misses`, `weight_bytes_saved`, `peak_cached_weight_bytes` | Weight cache, section 4.7 |
+| `activation_cache_hits`, `activation_cache_misses`, `activation_bytes_saved`, `peak_cached_activation_bytes` | Activation cache, section 4.8 |
+| `dma_busy_cycles`, `dma_requests`, `dma_bursts`, `memory.read`, `memory.write` | Serial DMA, section 5.3, or AXI channels, section 5.4 |
+| `memory.dram` | DRAM timeline, section 5.4.3: $D$ times all beats, against $R$ |
+| `peak_inflight_tiles`, `slot_wait_cycles`, `panel_wait_cycles` | Slot and panel-buffer protocol, section 7.3 |
+| `effective_macs_per_cycle`, `peak_memory_bytes_per_cycle`, utilizations | Peaks and means of section 6.4 |
+| `numerics`, `numerical_match`, `output_hash` | A `bit-exact` run compares every accumulator and output with the scalar reference before it reports ([numerics](numerics.md) section 6.1) |
 
 ### 8.2 Stage trace
 
-`--trace PATH` writes one CSV row per completed stage span: `stage` (`load`, `compute`,
-`store`), `tile_id`, `start_cycle`, `end_cycle`, `bytes` (request payload, 0 for compute),
-`block_id` (reduction panel; a store carries the final panel) and `core`. A load or store span
-runs from the cycle the serial server starts the request, or the cycle the AXI port receives it,
-to the request's completion. Figure 2(b) is drawn from two such traces.
+`--trace PATH` records one span per load, compute and store stage ([usage](usage.md) section
+6.1); a compute span is one reduction panel of $C_p$ cycles. Figure 2(b) is drawn from two such
+traces.
 
 ### 8.3 Waveforms
 
-`--vcd PATH.vcd` traces 25 `sc_signal` values per core: five flags (`done`, `dma_busy`,
-`compute_busy`, `dma_read`, `dma_write`) and 20 64-bit counters (`cycles`, occupancy of slots and
-FIFOs, queue depths, traffic, MACs, the tile and block each resource serves, busy cycles,
-requests, bursts, executed and skipped MACs, decode cycles). One core traces under the module
-name, a cluster under one scope per core. The VCD time unit is 1 ps and delta cycles are traced,
-so cycle $c$ appears at time $1000c$ and same-cycle updates at picosecond offsets. One passive
-`SC_METHOD`, sensitive to `state_changed`, writes every signal; the scheduling processes never
-write signals, so simultaneous updates in one cycle cannot conflict. Traffic and MAC counters
-commit when their operation completes; busy-cycle counters include the elapsed part of an
-operation in flight.
+`--vcd PATH.vcd` traces five flags and 20 counters per core ([usage](usage.md) section 6.2).
+One passive `SC_METHOD`, sensitive to `state_changed`, writes every signal; the scheduling
+processes never write signals, so simultaneous updates in one cycle cannot conflict. Traffic
+and MAC counters commit when their operation completes; busy-cycle counters include the elapsed
+part of an operation in flight.
 
 ### 8.4 Live snapshots
 
-`--live-stdio` pauses the kernel between commands (`advance N`, `snapshot`, `stop`) and answers
-each with a snapshot; `--progress-jsonl` writes the same snapshot after every `--slice-cycles`
-cycles of a batch run. A snapshot carries the full effective configuration and
-`memory.peak_bytes_per_cycle`, which place the run on a roofline, and the state at the current
-cycle:
-
-| Group | Fields |
-|---|---|
-| Resource state | `dma_busy`, `dma_read`, `dma_write`, `compute_busy`, `dma_tile_id`, `dma_block_id`, `compute_tile_id`, `compute_block_id`, `active_stages` |
-| Occupancy | `inflight_tiles`, `read_queue_depth`, `write_queue_depth`; per channel `active`, `outstanding`, `queued` |
-| Progress | `tiles_total`, `tiles_completed`, `panels_total`, `panels_completed`, `loaded_panels` |
-| Counters | As in a result, committed so far |
-| Cluster | `cluster` (`cores`, `partition`, `split`, `units`) and one `cores` entry per core |
-| Validation | `validated` turns true, and `numerical_match` and `output_hash` turn non-null, when a completed bit-exact output matches the reference |
-
-Cluster-level resource identifiers come from the lowest-numbered busy core.
+`--live-stdio` pauses the kernel between commands and answers each with a snapshot, and
+`--progress-jsonl` writes the same snapshot after every `--slice-cycles` cycles of a batch run
+([usage](usage.md) section 7). A snapshot carries the full effective configuration and
+`memory.peak_bytes_per_cycle`, which place the run on a roofline, and the resource state,
+occupancy and progress at the current cycle, with the commit rules of section 8.3. Cluster-level
+resource identifiers come from the lowest-numbered busy core.
 
 ### 8.5 Invariant monitor
 
 At every observation the monitor checks, per core, that in-flight tiles and computed tiles do not
-exceed $S$, loaded panels do not exceed $S P_b$, cached weight and activation bytes do not
-exceed $C_w$ and $C_a$, a busy
-resource has an in-flight tile, and a completed core has no tile in flight, no busy resource and
-no queued request. A violation stops the run with `SC_REPORT_FATAL("NPU/invariant", ...)`.
+exceed $N_s$, loaded panels do not exceed $N_s P_b$, cached weight and activation bytes do not
+exceed $C_w$ and $C_a$, a busy resource has an in-flight tile, and a completed core has no tile in
+flight, no busy resource and no queued request. A violation stops the run with
+`SC_REPORT_FATAL("NPU/invariant", ...)`.

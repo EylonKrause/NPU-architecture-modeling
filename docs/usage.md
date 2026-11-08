@@ -111,7 +111,7 @@ and `npuperf` search (section 9.1).
 | `npu-sim` | `src/main.cpp`, `src/model.cpp`, `src/memory.cpp` | Tiled GEMM accelerator model; sections 3 to 7 |
 | `npu-tlm-demo` | `src/tlm_platform.cpp` | TLM-2.0 host and accelerator platform |
 | `npu-transformer-demo` | `src/transformer.cpp` | Transformer layer with prefill, decode and KV cache |
-| `npu-mobile-demo` | `src/mobile_platform.cpp` | Multicore platform with a shared bus and operating points |
+| `npu-mobile-demo` | `src/mobile_platform.cpp` | Multi-core platform with a shared bus and operating points |
 
 All four link `npu_core` (`src/core.cpp`, `src/conv.cpp`, `src/json.cpp`, `src/options.cpp`).
 
@@ -125,7 +125,7 @@ Test names are `<area>.<what>`. The area is a CTest label; C++ executables add t
 | `core` | Arithmetic, weight codec and option table (C++ unit tests) |
 | `sim` | `npu-sim` against independent oracles: GEMM, quantization, memory hierarchy, compression, observability, config files, memory model, cluster, design points, convolution traffic |
 | `graph` | Graph runtime and fusion |
-| `soc` | TLM, transformer and multicore platforms |
+| `soc` | TLM, transformer and multi-core platforms |
 | `live` | Live stdio protocol and dashboard |
 | `tools` | Launcher, energy, autotune, `npuperf`, analytic model, mapper, studies |
 | `docs` | Generated option tables of this document |
@@ -201,19 +201,15 @@ port, startup check); 2 is a rejected argument or a missing executable.
 `--version` prints `npu-sim <version> (<git describe>)`; the describe string is captured at
 configure time and reads `unknown` when git is unavailable.
 
-The parser rejects these combinations (`src/main.cpp`, `src/core.cpp`):
+[Architecture](architecture.md) section 2.2 lists the cross-parameter rules of the
+configuration, the command-line ones included. The parser also rejects these combinations of
+inputs, outputs and session modes (`src/main.cpp`):
 
 | Combination | Rule |
 |---|---|
-| `--macs-per-cycle` on the command line with a nonzero array geometry | The vector datapath and the array are alternatives |
-| `--dataflow` without `--array-rows` and `--array-cols` | Dataflow applies to the array |
-| A serial-model memory flag with `--memory-model axi`, or an AXI flag without it | Each model reads its own keys; config files may carry both groups, as every echoed config does |
-| `--cores` above 1 with the serial memory model | Cores share one DRAM timeline, which the AXI model keeps |
 | `--live-stdio` with `--trace` or `--dump-output` | A live session reports through snapshots |
 | `--timing-only` with `--input`, `--dump-output` or compressed weights | A timing-only run has no tensors |
 | `--input` with `shape.conv` | The convolution's NHWC input tensor is generated |
-| `shape.conv` with `--tile-k` other than 0 or a multiple of kernel_w·input_c/groups | A panel covers whole kernel rows |
-| A depthwise-datapath problem with palette or sparse weights | The depthwise datapath reads dense weights |
 | `--quantization-file` with per-channel config keys | One source for the per-channel vectors |
 | `--input` with `--m`, `--n` or `--k` on the command line | The `NPU1` header gives the shape; a config file may restate it when it agrees |
 | Two output paths that name one file, or an output path equal to an input | Outputs never overwrite inputs or each other |
@@ -443,21 +439,8 @@ mechanisms are specified in [architecture](architecture.md) sections 3.5, 4.4 an
 | `arch.compute.depthwise_macs_per_cycle` | Depthwise datapath, used when the rate is above 0, `shape.groups` above 1 and `shape.n` 1. Tiles span `tile_n` channels; dense weights only |
 | `arch.activation_cache_bytes` | Per-core LRU activation-panel cache with the policy of the weight cache; the capacity counts in `scratchpad_bytes` |
 
-On the depthwise datapath one reduction panel of a tile takes
-
-```math
-C_p^{\mathrm{dw}} = \left\lceil \frac{M_t \, C_t \, K_p}{P_{\mathrm{dw}}} \right\rceil + C_{\mathrm{pipe}}
-```
-
-| Symbol | Meaning |
-|---|---|
-| $M_t$ | Output rows of the tile |
-| $C_t$ | Channels of the tile, at most `tile_n` |
-| $K_p$ | Depth of the reduction panel |
-| $P_{\mathrm{dw}}$ | `arch.compute.depthwise_macs_per_cycle` |
-| $C_{\mathrm{pipe}}$ | `arch.compute.pipeline_cycles` |
-
-A 3x3 depthwise layer of 96 channels with stride 2 on a 56 x 56 input, read from its input
+A reduction panel on the depthwise datapath takes the cycles of architecture equation 3.5. A 3x3
+depthwise layer of 96 channels with stride 2 on a 56 x 56 input, read from its input
 footprint on the depthwise datapath of the `mobile-2k` design point:
 
 ```sh
@@ -501,8 +484,8 @@ versions 1 and 2; version 1 carried a flat `config` whose keys are the flag name
 | `depthwise_macs` | integer | MACs run on the depthwise datapath |
 | `depthwise_peak_macs_per_cycle` | integer | `depthwise_macs_per_cycle` times cores |
 | `depthwise_mac_utilization` | number | `depthwise_macs / (depthwise_peak_macs_per_cycle · cycles)`; 0 when the rate is 0 |
-| `compute_busy_cycles` | integer | Cycles the datapath computes, summed over cores |
-| `dma_busy_cycles` | integer | Cycles with a request in flight on either memory channel, summed over cores |
+| `compute_busy_cycles` | integer | Panel durations $C_p$ (architecture equation 3.1) summed over computed panels and cores |
+| `dma_busy_cycles` | integer | Serial: request service durations; AXI: cycles with a request in flight on either channel of a port; summed over cores |
 | `peak_inflight_tiles` | integer | Most tiles holding slots at once in any core |
 | `slot_wait_cycles` | integer | Cycles the loader waited for a free slot |
 | `panel_wait_cycles` | integer | Cycles the loader waited for a panel buffer of the slot it holds |
@@ -587,9 +570,9 @@ One object per core, in core order:
 |---|---|
 | `stage` | `load` (activation, weight and, for the first panel, per-channel parameter read), `compute` (one reduction panel), `store` (output tile write) |
 | `tile_id` | Global tile index: group-major, then tile row, then tile column; on the depthwise datapath tile row, then channel tile |
-| `start_cycle`, `end_cycle` | Span in cycles |
-| `bytes` | DRAM bytes moved; 0 for `compute` |
-| `block_id` | Reduction panel index within the tile |
+| `start_cycle`, `end_cycle` | Span in cycles: a load or store from the cycle the serial server starts the request, or the cycle the AXI port receives it, to its completion |
+| `bytes` | Request payload bytes; 0 for `compute` |
+| `block_id` | Reduction panel index within the tile; a store carries the final panel |
 | `core` | Core that ran the span |
 
 The first rows of `npu-sim --m 16 --n 16 --k 32 --trace t.csv`:
@@ -665,9 +648,9 @@ $ printf 'advance 100\nsnapshot\nstop\n' | npu-sim --live-stdio --m 16 --n 16 --
 
 ### 7.2 Snapshot fields
 
-A snapshot is the state of the model at the current cycle. Traffic and MAC counters commit
-when an operation completes; busy-cycle counters include the elapsed part of an operation in
-flight (`PipelineView` in `include/npu/model.hpp`).
+A snapshot is the state of the model at the current cycle (`PipelineView` in
+`include/npu/model.hpp`); its counters follow the commit rules of
+[architecture](architecture.md) section 8.3.
 
 | Field | Definition |
 |---|---|
@@ -848,7 +831,7 @@ python3 scripts/sweep.py --binary build/release/npu-sim      # same tool
 | `npuperf.mapper` | | Per-layer tile mapping by the analytic model | stdout |
 | `npuperf.compare_modes` | `scripts/compare_modes.py` | Event against cycle timing: equal results, host time | `compare_modes.json`, `.csv` |
 | `npuperf.mlp_demo` | `scripts/mlp_demo.py` | Two-layer INT8 MLP through `NPU1` files | stdout |
-| `npuperf.mobile_suite` | `scripts/mobile_suite.py` | Compression, transformer and multicore examples | `results/mobile/` |
+| `npuperf.mobile_suite` | `scripts/mobile_suite.py` | Compression, transformer and multi-core examples | `results/mobile/` |
 | `npuperf.live` | `scripts/live_dashboard.py` | Live dashboard (section 8) | |
 | `npuperf.graph` | `scripts/graph_runtime.py` | Graph runtime (section 10) | stdout |
 | `npuperf.graph_optimize` | `scripts/graph_optimize.py` | Graph optimizer (section 11) | graph with `--output` |
@@ -940,33 +923,17 @@ documents and prints a unified diff per differing table; CI runs it as the drift
 ### 9.6 energy
 
 `npuperf.energy` estimates energy from one result file with coefficients supplied on the
-command line:
-
-```math
-E = N_{\text{exec}} \, e_{\text{MAC}} + (B_{\text{read}} + B_{\text{write}}) \, e_{\text{DRAM}} + P_{\text{static}} \, t
-```
-
-| Symbol | Source | Unit |
-|---|---|---|
-| $N_{\text{exec}}$ | `executed_macs` | MAC |
-| $B_{\text{read}}$ | `read_bytes` | byte |
-| $B_{\text{write}}$ | `write_bytes` | byte |
-| $t$ | `modeled_latency_ns` | ns |
-| $e_{\text{MAC}}$ | `--mac-pj` | pJ |
-| $e_{\text{DRAM}}$ | `--dram-byte-pj` | pJ per byte |
-| $P_{\text{static}}$ | `--static-mw` | mW; mW times ns is pJ |
+command line. [SoC integration](soc-integration.md) section 4 specifies the model, the
+accepted results, the report and the provenance of each coefficient.
 
 ```sh
 npu-sim --m 64 --n 64 --k 128 > result.json
 python3 -m npuperf.energy --result result.json --mac-pj 0.2 --dram-byte-pj 20 --static-mw 5
 ```
 
-The coefficients above are placeholders. The tool accepts a bit-exact or timing-only result
-of schema version 1 or 2, checks that `modeled_latency_ns` agrees with `cycles` and
-`frequency_mhz`, and reports `component_pj` (`mac`, `dram_read`, `dram_write`, `static`),
-`component_share`, `total_pj`, `total_nj`, `average_power_mw`, the inputs, and `scope`:
-included terms `mac`, `dram_read`, `dram_write`, `static`; excluded `sram`, `register_file`,
-`clock_tree`, `interconnect`, `dma_control`, `weight_decode`, `host`.
+The coefficients above are placeholders. The report's `component_pj` holds the `mac`,
+`dram_read`, `dram_write` and `static` terms; `component_share`, `total_pj`, `total_nj` and
+`average_power_mw` follow from them.
 
 ### 9.7 designs and mapper
 
@@ -992,7 +959,7 @@ slot counts and cache splits for one layer on one design point (`npuperf/mapper.
 |---|---|
 | `compare_modes` | Runs 17 x 13 x 31, 64 x 64 x 128 and 128 x 128 x 256 under `--timing event` and `--timing cycle`, `--repeats` times each (default 3, order alternated), requires identical cycles, traffic, busy cycles, hash and utilizations, and reports median host time per mode |
 | `mlp_demo` | Runs a 2 x 3 x 4 dense layer with ReLU and a 2 x 2 x 3 dense layer from `NPU1` files and checks the outputs `[1, 0, 5, 1, 3, 0]` and `[4, 3, -1, 3]` |
-| `mobile_suite` | Runs a 17 x 13 x 31 GEMM dense and with 2-bit palette or sparse (block 4) weights against a Python integer reference, the transformer demo at FP32, FP16 and BF16, and the multicore demo with 1 and 2 cores; writes per-case JSON and `summary.json` to `--output-dir` (default `results/mobile`) |
+| `mobile_suite` | Runs a 17 x 13 x 31 GEMM dense and with 2-bit palette or sparse (block 4) weights against a Python integer reference, the transformer demo at FP32, FP16 and BF16, and the multi-core platform with 1 and 2 cores; writes per-case JSON and `summary.json` to `--output-dir` (default `results/mobile`) |
 
 ## 10 Graph runtime
 
@@ -1241,18 +1208,9 @@ that needs shift 32, are rejected.
 
 ### 13.1 NPU1 tensor file
 
-`--input PATH` reads whitespace-separated decimal tokens (`input_problem` in `src/main.cpp`;
-writer `npuperf/npufile.py`):
-
-| Order | Content | Count | Range |
-|---|---|---|---|
-| 1 | `NPU1 M N K` | header | M, N, K as in section 3.4 |
-| 2 | Activations, row-major M x G·K | M·G·K | -128..127 |
-| 3 | Weights, G blocks of K x N, each row-major | G·K·N | -128..127; -8..7 with `--weight-bits 4` |
-| 4 | Bias | G·N | signed 32-bit |
-
-G is `--groups`. Tokens are at most 32 characters; a missing or trailing token is an error.
-`examples/tiny-dense.npu` is a 1 x 2 x 3 layer:
+`--input PATH` reads an `NPU1` tensor file (`input_problem` in `src/main.cpp`; writer
+`npuperf/npufile.py`), whose header, token rules, tensor order and value ranges are specified in
+[numerics](numerics.md) section 3.2. `examples/tiny-dense.npu` is a 1 x 2 x 3 layer:
 
 ```text
 NPU1 1 2 3
@@ -1273,10 +1231,10 @@ outputs are `[125,0]`.
 
 ### 13.2 NPUQ1 per-channel quantization file
 
-`--quantization-file PATH` reads `NPUQ1 C`, where C equals G·N, then C lines of
-`weight_zero multiplier shift`, one per output channel. Shifts are signed and take the range of
-the rescale mode (section 3.4). The file sets `quant.weight_zero_points`, `quant.multipliers`
-and `quant.shifts` together.
+`--quantization-file PATH` reads an `NPUQ1` file ([numerics](numerics.md) section 3.3): `NPUQ1 C`
+with C equal to G·N, then one `weight_zero multiplier shift` line per output channel. The file
+sets `quant.weight_zero_points`, `quant.multipliers` and `quant.shifts` together; a two-channel
+file for `native` rescale:
 
 ```text
 NPUQ1 2
@@ -1288,7 +1246,7 @@ NPUQ1 2
 
 `workloads/*.json` describe networks layer by layer (generator `tools/gen_workloads.py`;
 loader and lowering `npuperf/workloads.py`): MobileNetV2 1.0 224, ResNet-50 v1.5 224, BERT-base
-encoder layer at sequence length 128, and Llama 3.2 1B prefill at 128 tokens and decode at KV
+encoder layer at sequence length 128, and Llama-3.2-1B prefill at 128 tokens and decode at KV
 length 129.
 
 | Field | Content |
