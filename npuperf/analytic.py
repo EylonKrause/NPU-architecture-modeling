@@ -10,11 +10,24 @@ panels of tile_k (0 = all of k). Per panel the core loads
     params   4 * b * (1 + vectors)   on the first panel only (INT32 bias + per-channel vectors)
 
 computes it, and after the last panel stores a * b output bytes. A weight panel the core's
-LRU weight cache holds is not loaded again.
+LRU weight cache holds is not loaded again, nor an activation panel its LRU activation cache
+holds (lines: group, row tile, reduction panel, so the column tiles of a row tile share
+them).
+
+Depthwise datapath (depthwise_macs_per_cycle > 0, G > 1, N = 1): the grid is one group of
+G columns, so a tile spans b consecutive groups (channels), its A panel is a * b * c bytes
+and it computes in ceil(a * b * c / depthwise rate) + pipeline_cycles.
+
+Implicit convolution (conv geometry): the activation window holds the NHWC input and an A
+panel is the input footprint of its output pixels over its kernel rows (tile_k is whole
+kernel rows): per input row the hull of the needed columns, clipped to the image, times the
+panel's input channels. Its runs are one per input row when the panel holds all C
+channels, else one per pixel of the hull.
 
 Compute cycles per panel (c = panel depth, P = MACs per cycle, A_r x A_c array), plus
 pipeline_cycles; a compressed panel takes max(MAC cycles, decoder cycles) because the
 weight decoder runs ahead of the array:
+    depthwise    ceil(a * b * c / depthwise rate)
     vector       ceil(a * b * c / P)
     os           ceil(a/A_r) * ceil(b/A_c) * c + (A_r + A_c - 2)
     ws           A_r + (F - 1) * max(a, A_r) + a + (A_r + A_c - 2),
@@ -27,7 +40,7 @@ weight decoder runs ahead of the array:
 Two models share these rules.
 
 ``analyze()`` is closed form over panel classes: exact traffic, request counts and
-compute busy cycles (cluster and weight cache included), lower bounds, and a three-stage
+compute busy cycles (cluster and both caches included), lower bounds, and a three-stage
 pipeline estimate (first load + the slowest stage's remaining work + last compute and
 store) in which every request takes its time alone on the memory system: under the
 serial model ``latency + ceil(bytes / bytes_per_cycle)`` per burst, under the AXI model
@@ -36,7 +49,7 @@ schedule cannot overlap (one buffer slot and one panel per slot buffer).
 
 ``schedule()`` replays every request in order: slots, panel buffers, the serial server's
 alternation, each AXI channel's outstanding window, the shared DRAM byte timeline and its
-fixed arbitration order, the cluster split and each core's LRU cache. It returns the
+fixed arbitration order, the cluster split and each core's two LRU caches. It returns the
 cycle count and the counters npu-sim reports.
 
 ``observed()`` reads the same quantities from an npu-sim result (schema_version 2:
@@ -49,7 +62,9 @@ import bisect
 import collections
 import dataclasses
 import difflib
+import functools
 import heapq
+import itertools
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -104,6 +119,21 @@ class Design:
     partition: str = "auto"
     sram_bytes: int = 262144
     frequency_mhz: float = 200.0
+    depthwise_macs_per_cycle: int = 0
+    activation_cache_bytes: int = 0
+    conv_input_h: int = 0
+    conv_input_w: int = 0
+    conv_input_c: int = 0
+    conv_kernel_h: int = 1
+    conv_kernel_w: int = 1
+    conv_stride_h: int = 1
+    conv_stride_w: int = 1
+    conv_dilation_h: int = 1
+    conv_dilation_w: int = 1
+    conv_pad_top: int = 0
+    conv_pad_left: int = 0
+    conv_pad_bottom: int = 0
+    conv_pad_right: int = 0
 
     @classmethod
     def field_name(cls, key: str) -> str | None:
@@ -152,7 +182,9 @@ class Design:
         dataflow key are os-per-wave). Every other key the model reads must be present."""
         config = result["config"]
         legacy = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
-                  "partition": "auto", "dram_bytes_per_cycle": 0}
+                  "partition": "auto", "dram_bytes_per_cycle": 0,
+                  "depthwise_macs_per_cycle": 0, "activation_cache_bytes": 0,
+                  **{name: _FIELDS[name].default for name in CONV_FIELDS}}
         optional = {"dataflow", "per_channel_vectors"} | {name for name in _FIELDS
                                                           if name.startswith("axi_")}
         values: dict[str, Any] = {}
@@ -183,7 +215,35 @@ class Design:
         return self.array_rows > 0 and self.array_cols > 0
 
     @property
+    def channel_wise(self) -> bool:
+        """The depthwise datapath runs the problem: a rate is set, G > 1 and N = 1."""
+        return self.depthwise_macs_per_cycle > 0 and self.groups > 1 and self.n == 1
+
+    @property
+    def grid_groups(self) -> int:
+        """Groups of the output tile grid: one on the depthwise datapath, else G."""
+        return 1 if self.channel_wise else self.groups
+
+    @property
+    def grid_columns(self) -> int:
+        """Columns per grid group: the G channels on the depthwise datapath, else N."""
+        return self.groups if self.channel_wise else self.n
+
+    @property
+    def conv(self) -> bool:
+        """Implicit convolution: the activations are an NHWC input's im2col view."""
+        return bool(self.conv_input_h or self.conv_input_w or self.conv_input_c)
+
+    @property
     def peak_macs_per_cycle(self) -> int:
+        if self.channel_wise:
+            return self.depthwise_macs_per_cycle * self.cores
+        per_core = self.array_rows * self.array_cols if self.array else self.macs_per_cycle
+        return per_core * self.cores
+
+    @property
+    def array_macs_per_cycle(self) -> int:
+        """Peak of the array or vector datapath, whichever datapath runs the problem."""
         per_core = self.array_rows * self.array_cols if self.array else self.macs_per_cycle
         return per_core * self.cores
 
@@ -217,6 +277,7 @@ class Design:
 
 
 _FIELDS = {field.name: field for field in dataclasses.fields(Design)}
+CONV_FIELDS = tuple(name for name in _FIELDS if name.startswith("conv_"))
 
 
 def _coerce(field: dataclasses.Field, value: Any) -> Any:
@@ -227,6 +288,161 @@ def _coerce(field: dataclasses.Field, value: Any) -> Any:
     if isinstance(value, bool):
         raise ValueError(f"{field.name} must be a number")
     return int(value)
+
+
+# ---------------------------------------------------------------- implicit convolution --
+# The activation window holds an NHWC INT8 input of H x W x C. GEMM row m is output pixel
+# (m // W_o, m % W_o); a group's K index is (ky * kernel_w + kx) * C_g + ci, so one kernel
+# row is kernel_w * C_g consecutive K and tile_k is 0 or whole kernel rows. A panel reads,
+# per input row it touches, the hull of the columns its output pixels need over the
+# panel's kernel rows, clipped to the image: padding reads nothing.
+
+@dataclass(frozen=True)
+class ConvGeometry:
+    output_h: int
+    output_w: int
+    group_channels: int     # C_g = input channels / G
+    kernel_row_k: int       # kernel_w * C_g
+
+
+def _output_extent(size: int, kernel: int, stride: int, dilation: int, low: int,
+                   high: int) -> int:
+    reach = dilation * (kernel - 1) + 1
+    if reach > size + low + high:
+        raise ValueError(f"conv kernel reach {reach} exceeds the padded input {size + low + high}")
+    return (size + low + high - reach) // stride + 1
+
+
+def conv_geometry(design: Design) -> ConvGeometry:
+    """Output extents and K layout of ``design``'s convolution, checked against M, K, G."""
+    if not design.conv:
+        raise ValueError("the design has no conv geometry")
+    d = design
+    if d.conv_input_c % d.groups:
+        raise ValueError(f"conv input channels {d.conv_input_c} are not a multiple of "
+                         f"groups {d.groups}")
+    oh = _output_extent(d.conv_input_h, d.conv_kernel_h, d.conv_stride_h, d.conv_dilation_h,
+                        d.conv_pad_top, d.conv_pad_bottom)
+    ow = _output_extent(d.conv_input_w, d.conv_kernel_w, d.conv_stride_w, d.conv_dilation_w,
+                        d.conv_pad_left, d.conv_pad_right)
+    channels = d.conv_input_c // d.groups
+    row_k = d.conv_kernel_w * channels
+    if d.m != oh * ow or d.k != d.conv_kernel_h * row_k:
+        raise ValueError(f"conv geometry gives M = {oh * ow} and K = {d.conv_kernel_h * row_k}, "
+                         f"the design has M = {d.m} and K = {d.k}")
+    return ConvGeometry(oh, ow, channels, row_k)
+
+
+def _conv_key(design: Design) -> tuple[int, ...]:
+    return tuple(getattr(design, name) for name in CONV_FIELDS)
+
+
+@functools.lru_cache(maxsize=1 << 16)
+def _column_hull(key: tuple[int, ...], first: int, last: int) -> tuple[int, int] | None:
+    """Input columns read by output columns first..last over every kernel column."""
+    _, width, _, _, kernel_w, _, stride, _, dilation, _, left, _, _ = key
+    low = high = None
+    for kx in range(kernel_w):
+        offset = kx * dilation - left
+        # The smallest output column whose input column is >= 0, and the largest whose
+        # input column is <= width - 1.
+        lo = max(first, ceil_div(-offset, stride))
+        if lo <= last and lo * stride + offset < width:
+            value = lo * stride + offset
+            low = value if low is None else min(low, value)
+        hi = min(last, (width - 1 - offset) // stride)
+        if hi >= first and hi * stride + offset >= 0:
+            value = hi * stride + offset
+            high = value if high is None else max(high, value)
+    if low is None or high is None or low > high:
+        return None
+    return low, high
+
+
+def _spans(key: tuple[int, ...], output_w: int, first_output: int, outputs: int,
+           kernel_first: int, kernel_rows: int) -> tuple[tuple[int, int, int], ...]:
+    height = key[0]
+    stride_h, dilation_h, top = key[5], key[7], key[9]
+    last_output = first_output + outputs - 1
+    hulls: dict[int, list[int]] = {}
+    for oy in range(first_output // output_w, last_output // output_w + 1):
+        first = first_output % output_w if oy == first_output // output_w else 0
+        last = last_output % output_w if oy == last_output // output_w else output_w - 1
+        columns = _column_hull(key, first, last)
+        if columns is None:
+            continue
+        for ky in range(kernel_first, kernel_first + kernel_rows):
+            iy = oy * stride_h + ky * dilation_h - top
+            if 0 <= iy < height:
+                hull = hulls.setdefault(iy, [columns[0], columns[1]])
+                hull[0], hull[1] = min(hull[0], columns[0]), max(hull[1], columns[1])
+    return tuple((row, hulls[row][0], hulls[row][1]) for row in sorted(hulls))
+
+
+def kernel_rows(design: Design, block: int) -> tuple[int, int]:
+    """(first kernel row, kernel rows) of reduction panel ``block``."""
+    geometry = conv_geometry(design)
+    if design.tile_k % geometry.kernel_row_k:
+        raise ValueError(f"with conv geometry tile_k must be 0 or a multiple of "
+                         f"{geometry.kernel_row_k} (whole kernel rows)")
+    per_block = design.tile_k // geometry.kernel_row_k if design.tile_k else design.conv_kernel_h
+    first = block * per_block
+    return first, min(per_block, design.conv_kernel_h - first)
+
+
+def input_spans(design: Design, first_output: int, outputs: int,
+                block: int) -> tuple[tuple[int, int, int], ...]:
+    """(input row, first column, last column) of every input row that output pixels
+    first_output..first_output + outputs - 1 read over the kernel rows of ``block``."""
+    geometry = conv_geometry(design)
+    first, count = kernel_rows(design, block)
+    return _spans(_conv_key(design), geometry.output_w, first_output, outputs, first, count)
+
+
+def footprint_pixels(spans: Sequence[tuple[int, int, int]]) -> int:
+    return sum(last - first + 1 for _, first, last in spans)
+
+
+@dataclass(frozen=True)
+class Footprint:
+    """One activation panel's input footprint: its spans, hull pixels and hull widths."""
+
+    spans: tuple[tuple[int, int, int], ...]
+    pixels: int
+    widths: tuple[int, ...]
+
+
+@functools.lru_cache(maxsize=1024)
+def _footprint_table(key: tuple[int, ...], m: int, k: int, groups: int, tile_m: int,
+                     tile_k: int) -> tuple[ConvGeometry, tuple[tuple[Footprint, ...], ...]]:
+    design = Design(m=m, k=k, groups=groups, tile_m=tile_m, tile_k=tile_k,
+                    **dict(zip(CONV_FIELDS, key)))
+    geometry = conv_geometry(design)
+    blocks = [kernel_rows(design, block) for block in range(design.reduction_blocks)]
+    table = []
+    for row in range(0, m, tile_m):
+        entry = []
+        for first, count in blocks:
+            spans = _spans(key, geometry.output_w, row, min(tile_m, m - row), first, count)
+            entry.append(Footprint(spans, footprint_pixels(spans),
+                                   tuple(high - low for _, low, high in spans)))
+        table.append(tuple(entry))
+    return geometry, tuple(table)
+
+
+def footprints(design: Design) -> tuple[ConvGeometry, tuple[tuple[Footprint, ...], ...]]:
+    """The conv geometry and, per row tile and reduction block, the panel footprint."""
+    return _footprint_table(_conv_key(design), design.m, design.k, design.groups,
+                            design.tile_m, design.tile_k)
+
+
+def tile_footprint(design: Design, row: int, rows: int, block: int) -> Footprint:
+    """Footprint of output rows row..row + rows - 1 over the kernel rows of ``block``."""
+    if row % design.tile_m == 0 and rows == min(design.tile_m, design.m - row):
+        return footprints(design)[1][row // design.tile_m][block]
+    spans = input_spans(design, row, rows, block)
+    return Footprint(spans, footprint_pixels(spans),
+                     tuple(high - low for _, low, high in spans))
 
 
 @dataclass(frozen=True)
@@ -266,16 +482,16 @@ def _block_classes(design: Design) -> list[tuple[int, int, bool, bool]]:
 
 def panel_classes(design: Design) -> Iterator[PanelClass]:
     for rows, row_count in _extent_classes(design.m, design.tile_m):
-        for cols, col_count in _extent_classes(design.n, design.tile_n):
+        for cols, col_count in _extent_classes(design.grid_columns, design.tile_n):
             for depth, count, first, last in _block_classes(design):
                 yield PanelClass(rows, cols, depth, first, last,
-                                 row_count * col_count * count * design.groups)
+                                 row_count * col_count * count * design.grid_groups)
 
 
 def tile_classes(design: Design) -> Iterator[tuple[int, int, int]]:
     for rows, row_count in _extent_classes(design.m, design.tile_m):
-        for cols, col_count in _extent_classes(design.n, design.tile_n):
-            yield rows, cols, row_count * col_count * design.groups
+        for cols, col_count in _extent_classes(design.grid_columns, design.tile_n):
+            yield rows, cols, row_count * col_count * design.grid_groups
 
 
 def lut_entries(design: Design, depth: int, cols: int) -> int:
@@ -301,17 +517,35 @@ def param_record_bytes(design: Design) -> int:
     return 4 * (1 + design.per_channel_vectors)
 
 
-def load_bytes(design: Design, rows: int, cols: int, depth: int, first: bool) -> int:
-    params = cols * param_record_bytes(design) if first else 0
-    return rows * depth + weight_bytes(design, depth, cols) + params
-
-
 def store_bytes(rows: int, cols: int) -> int:
     return rows * cols
 
 
+def activation_bytes(design: Design, row: int, rows: int, cols: int, block: int) -> int:
+    """Activation bytes of a panel load of output rows row..row + rows - 1 and ``cols``
+    columns: rows x depth for a GEMM tile, rows x channels x depth on the depthwise
+    datapath, or with conv geometry the input footprint times the panel's channels."""
+    width = cols if design.channel_wise else 1
+    if not design.conv:
+        return rows * width * block_extent(design, block)[1]
+    pixels = tile_footprint(design, row, rows, block).pixels
+    return pixels * footprints(design)[0].group_channels * width
+
+
+def largest_activation_bytes(design: Design, cols: int) -> int:
+    """The largest activation panel of any row tile and reduction block, ``cols`` wide."""
+    if not design.conv:
+        return activation_bytes(design, 0, min(design.tile_m, design.m), cols, 0)
+    geometry, table = footprints(design)
+    pixels = max(panel.pixels for entry in table for panel in entry)
+    return pixels * geometry.group_channels * (cols if design.channel_wise else 1)
+
+
 def mac_cycles(design: Design, rows: int, cols: int, depth: int) -> int:
-    """MAC-array cycles of one panel, without the per-panel pipeline charge."""
+    """MAC-array cycles of one panel, without the per-panel pipeline charge. The depthwise
+    datapath takes rows x channels x depth MACs at its own rate."""
+    if design.channel_wise:
+        return ceil_div(rows * cols * depth, design.depthwise_macs_per_cycle)
     if not design.array:
         return ceil_div(rows * cols * depth, design.macs_per_cycle)
     ar, ac = design.array_rows, design.array_cols
@@ -328,7 +562,7 @@ def mac_cycles(design: Design, rows: int, cols: int, depth: int) -> int:
 
 def decode_cycles(design: Design, depth: int, cols: int) -> int:
     """Weight-decoder cycles of one panel; dense weights need none."""
-    if design.weight_encoding == "dense":
+    if design.weight_encoding == "dense" or design.channel_wise:
         return 0
     return ceil_div(depth * cols, design.weight_decode_values_per_cycle)
 
@@ -359,16 +593,19 @@ def dma_bursts(design: Design, nbytes: int) -> int:
 
 def scratchpad_bytes(design: Design, panel_buffers: int | None = None) -> int:
     """SRAM reserved per core: slots x (parameters + panel buffers x panel bytes + 5 B per
-    output) plus the weight cache. A slot holds the tile's bias and channel vectors once, for
-    its lifetime, and no more panel buffers than the tile has panels. 5 B per output = INT32
-    partial sum + INT8 result."""
+    output) plus the weight and activation caches. A slot holds the tile's bias and channel
+    vectors once, for its lifetime, and no more panel buffers than the tile has panels; a
+    panel buffer holds the largest activation panel (with conv geometry, the largest input
+    footprint of any panel) and the deepest weight panel. 5 B per output = INT32 partial
+    sum + INT8 result."""
     buffers = design.panel_buffers if panel_buffers is None else panel_buffers
     buffers = min(buffers, design.reduction_blocks)
-    rows, cols = min(design.tile_m, design.m), min(design.tile_n, design.n)
-    panel = load_bytes(design, rows, cols, design.panel_depth, False)
-    params = load_bytes(design, rows, cols, design.panel_depth, True) - panel
+    rows, cols = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
+    panel = (largest_activation_bytes(design, cols)
+             + weight_bytes(design, design.panel_depth, cols))
+    params = cols * param_record_bytes(design)
     return (design.buffer_slots * (params + buffers * panel + 5 * rows * cols)
-            + design.weight_cache_bytes)
+            + design.weight_cache_bytes + design.activation_cache_bytes)
 
 
 # ------------------------------------------------------------------- closed-form model --
@@ -400,6 +637,8 @@ class CoreAnalysis:
     one_slot_cycles: int    # the tiles back to back, each its own load-compute-store chain
     one_slot: bool
     panel_chain: bool       # one panel buffer: each panel load waits for the previous compute
+    activation_read_bytes: int = 0
+    activation_cache_hits: int = 0
 
     @property
     def estimate_cycles(self) -> int:
@@ -437,6 +676,8 @@ class Analysis:
     scratchpad_bytes: int
     compute_cycles_per_core: int = 0
     weight_cache_hits: int = 0
+    activation_read_bytes: int = 0
+    activation_cache_hits: int = 0
     partition: str = "n"
     cores: tuple[CoreAnalysis, ...] = ()
     dma_bursts: int | None = None
@@ -506,7 +747,8 @@ def _core_segments(design: Design, plan: ClusterPlan,
                    core: int) -> list[tuple[int, int, int, int, int, int]]:
     """(groups, first group, row tiles first..end, column tiles first..end) of one core's
     tiles: whole groups, or the per-group pieces of a run of row or column tiles."""
-    row_tiles, col_tiles = ceil_div(design.m, design.tile_m), ceil_div(design.n, design.tile_n)
+    row_tiles = ceil_div(design.m, design.tile_m)
+    col_tiles = ceil_div(design.grid_columns, design.tile_n)
     first = plan.first_unit(core)
     end = first + plan.unit_count(core)
     if first == end:
@@ -536,9 +778,12 @@ def _block_kind(design: Design, block_first: bool, block_last: bool) -> int:
 
 def _segment_shape(design: Design, plan: ClusterPlan, core: int) -> tuple:
     """What analyze_core's totals depend on: per segment its group count and the tile
-    count along each axis, and whether it holds the short edge tile."""
-    row_tiles, col_tiles = ceil_div(design.m, design.tile_m), ceil_div(design.n, design.tile_n)
-    return tuple((groups, row1 - row0, row1 == row_tiles, col1 - col0, col1 == col_tiles)
+    count along each axis, and whether it holds the short edge tile. With conv geometry
+    every row tile has its own footprint, so the row range itself."""
+    row_tiles = ceil_div(design.m, design.tile_m)
+    col_tiles = ceil_div(design.grid_columns, design.tile_n)
+    return tuple((groups, (row0, row1) if design.conv else row1 - row0, row1 == row_tiles,
+                  col1 - col0, col1 == col_tiles)
                  for groups, _, row0, row1, col0, col1 in _core_segments(design, plan, core))
 
 
@@ -559,30 +804,86 @@ def analyze_cores(design: Design, plan: ClusterPlan,
 
 def _request_time(design: Design, direction: int,
                   runs: Sequence[tuple[int, int]]) -> tuple[int, int, int]:
-    """(cycles, bursts, beats) of one AXI request alone on the memory system, from the
-    channel recurrence with a private DRAM timeline."""
-    channel = _AxiChannel(design, direction)
-    dram = DramTimeline() if design.dram_bytes_per_cycle else None
-    issue = channel.begin(0, runs)
-    completion = 0
-    while not channel.done:
-        completion = channel.grant(issue, dram)
-        issue = channel.next_issue()
-    return completion, channel.stats.bursts, channel.stats.beats
+    """(cycles, bursts, beats) of one AXI request alone on the memory system: the channel
+    recurrence of _AxiChannel with a private DRAM timeline. Alone, each burst reaches the
+    DRAM after the previous one has left it, so the timeline only stretches a burst to its
+    DRAM transfer time."""
+    write = direction == WRITE
+    latency = (design.axi_write_latency if write else design.axi_read_latency) or 0
+    outstanding = (design.axi_write_outstanding if write else design.axi_read_outstanding) or 1
+    db = design.axi_data_bytes or 16
+    reach = (design.axi_max_burst_beats or 16) * db
+    rate = design.dram_bytes_per_cycle
+    lead, tail = (0, latency) if write else (latency, 0)
+    key = (lead, tail, outstanding, db, reach, rate, tuple(runs))
+    if key in _REQUEST_TIMES:
+        return _REQUEST_TIMES[key]
+    if len(_REQUEST_TIMES) > 1 << 16:
+        _REQUEST_TIMES.clear()
+    window: collections.deque[int] = collections.deque()
+    last_issue, data_free, completion, bursts, beats = -1, 0, 0, 0, 0
+    for base, length in runs:
+        address, end = base, base + length
+        while address < end:
+            slot = address - address % db
+            stop = min(end, (address // KIB4 + 1) * KIB4, slot + reach)
+            count = ceil_div(stop, db) - slot // db
+            address = stop
+            issue = last_issue + 1
+            if len(window) == outstanding:
+                issue = max(issue, window.popleft())
+            last_issue = issue
+            busy = max(count, ceil_div(count * db, rate)) if rate else count
+            data_free = max(issue + lead, data_free) + busy
+            completion = data_free + tail
+            window.append(completion)
+            bursts += 1
+            beats += count
+    _REQUEST_TIMES[key] = completion, bursts, beats
+    return completion, bursts, beats
+
+
+# Request times by memory parameters and runs, shared by the analyses of one mapper search.
+_REQUEST_TIMES: dict[tuple, tuple[int, int, int]] = {}
+
+
+def _row_classes(design: Design, row0: int, row1: int) -> list[tuple[int, int, int]]:
+    """(rows, count, first index) of row tiles row0..row1-1. With conv geometry the classes
+    are row tiles of equal footprint hull widths in every block, in order of first
+    appearance; a class's first index is its first member."""
+    row_tiles = ceil_div(design.m, design.tile_m)
+    if not design.conv:
+        return _range_classes(row0, row1, row_tiles, design.tile_m, design.m)
+    table = footprints(design)[1]
+    classes: dict[tuple, list[int]] = {}
+    for index in range(row0, row1):
+        rows = min(design.tile_m, design.m - index * design.tile_m)
+        key = (rows, tuple(panel.widths for panel in table[index]))
+        if key in classes:
+            classes[key][1] += 1
+        else:
+            classes[key] = [rows, 1, index]
+    return [tuple(entry) for entry in classes.values()]
 
 
 def analyze_core(design: Design, plan: ClusterPlan, core: int,
                  timing: bool = True) -> CoreAnalysis:
-    """Closed form over the tile and panel classes of one core's tiles. The weight cache
-    follows the LRU rule for one cycle of column panels repeated once per row tile: after a
-    group's first row tile every cacheable panel hits if the cacheable panels of the
-    core's columns fit the cache together, and every one misses otherwise. ``timing``
-    False skips the request times (choose_plan needs bytes and compute only)."""
+    """Closed form over the tile and panel classes of one core's tiles.
+
+    Both caches are LRUs that see one cycle of panels repeated: the weight cache, per
+    group, the core's column panels once per row tile; the activation cache, per row tile,
+    that row tile's panels once per column tile the core runs. After the first pass every
+    cacheable panel (one no larger than the cache) hits if the cacheable panels of the
+    cycle fit the cache together, and every one misses otherwise. Depthwise-datapath tiles
+    never share an activation panel. ``timing`` False skips the request times (choose_plan
+    needs bytes and compute only)."""
     axi = design.memory_model == "axi"
-    row_tiles, col_tiles = ceil_div(design.m, design.tile_m), ceil_div(design.n, design.tile_n)
+    col_tiles = ceil_div(design.grid_columns, design.tile_n)
     blocks = _block_classes(design)
     record = param_record_bytes(design)
     capacity = design.weight_cache_bytes
+    act_capacity = design.activation_cache_bytes
+    shared = act_capacity > 0 and not design.channel_wise
     bandwidth = design.memory_bytes_per_cycle
     overlap_panels = design.panel_buffers > 1 and len(blocks) > 1
     memo: dict[tuple, tuple[int, int, int]] = {}
@@ -598,9 +899,15 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
             memo[key] = _request_time(design, direction, runs_of())
         return memo[key]
 
+    def footprint(row: int, rows: int, block: int) -> tuple | None:
+        """What a panel's activation runs depend on besides its size: the hull widths."""
+        if not design.conv:
+            return None
+        return tile_footprint(design, row, rows, block).widths
+
     for groups, group, row0, row1, col0, col1 in _core_segments(design, plan, core):
-        rows = _range_classes(row0, row1, row_tiles, design.tile_m, design.m)
-        cols = _range_classes(col0, col1, col_tiles, design.tile_n, design.n)
+        rows = _row_classes(design, row0, row1)
+        cols = _range_classes(col0, col1, col_tiles, design.tile_n, design.grid_columns)
         sizes = {(c, depth): weight_bytes(design, depth, c)
                  for c, _, _ in cols for depth, _, _, _ in blocks}
         cacheable = {key: capacity > 0 and size <= capacity for key, size in sizes.items()}
@@ -609,40 +916,61 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
                        if cacheable[(c, depth)])
         fits = capacity > 0 and resident <= capacity
         for a, n_a, row_index in rows:
-            # The segment's first row tile is a cold pass over the columns.
+            row = row_index * design.tile_m
+            # One channel's activation panel per block, and whether this row tile's
+            # cacheable panels fit the activation cache together.
+            act = [activation_bytes(design, row, a, 1, b) for b in range(design.reduction_blocks)]
+            act_fits = shared and sum(v for v in act if v <= act_capacity) <= act_capacity
+            # The segment's first row tile is a cold weight pass over the columns, and
+            # the core's first column tile of a row tile a cold activation pass.
             passes = [(1, False), (n_a - 1, True)] if row_index == row0 else [(n_a, True)]
             for c, n_c, col_index in cols:
-                tile = Tile(group, row_index * design.tile_m, col_index * design.tile_n, a, c)
-                for repeat, warm in passes:
-                    if not repeat:
+                tile = Tile(group, row, col_index * design.tile_n, a, c)
+                width = c if design.channel_wise else 1
+                act_passes = ([(1, False), (n_c - 1, True)] if col_index == col0
+                              else [(n_c, True)])
+                for (repeat, warm), (act_repeat, act_warm) in itertools.product(passes,
+                                                                                 act_passes):
+                    if not repeat or not act_repeat:
                         continue
-                    tiles = groups * repeat * n_c
+                    tiles = groups * repeat * act_repeat
                     # One tile of this class: its loads, compute and the last panel's compute.
                     loads = later = compute = 0
                     for depth, n_b, block_first, block_last in blocks:
-                        block = _block_kind(design, block_first, block_last)
+                        kind = _block_kind(design, block_first, block_last)
                         hit = warm and fits and cacheable[(c, depth)]
                         size = sizes[(c, depth)]
-                        nbytes = a * depth + (0 if hit else size) + (c * record
-                                                                     if block_first else 0)
-                        cycles, bursts, beats = time(
-                            READ, nbytes, lambda: panel_read_runs(design, tile, block, hit),
-                            (READ, a, c, depth, block_first, block_last, hit))
                         panel = panel_compute_cycles(design, a, c, depth)
-                        count = tiles * n_b
-                        totals["read_bytes"] += count * nbytes
-                        totals["weight_bytes"] += 0 if hit else count * size
-                        totals["hits"] += count if hit else 0
-                        totals["read_beats"] += count * beats
-                        totals["data_cycles"] += count * ceil_div(nbytes, bandwidth)
-                        totals["bursts"] += count * bursts
-                        totals["requests"] += count
-                        loads += n_b * cycles
-                        later += 0 if block_first else n_b * cycles
-                        compute += n_b * panel
-                        if first_load is None:
-                            first_load = cycles
-                        last_compute = panel
+                        # Blocks of one kind differ only in their footprint: conv geometry
+                        # takes each block on its own.
+                        members = range(kind, kind + n_b) if design.conv else (kind,)
+                        per = 1 if design.conv else n_b
+                        for block in members:
+                            act_hit = act_warm and act_fits and act[block] <= act_capacity
+                            moved = 0 if act_hit else act[block] * width
+                            nbytes = moved + (0 if hit else size) + (c * record
+                                                                     if block_first else 0)
+                            cycles, bursts, beats = time(
+                                READ, nbytes,
+                                lambda: panel_read_runs(design, tile, block, hit, act_hit),
+                                (READ, a, c, depth, block_first, block_last, hit, act_hit,
+                                 footprint(row, a, block)))
+                            count = tiles * per
+                            totals["read_bytes"] += count * nbytes
+                            totals["activation_bytes"] += count * moved
+                            totals["activation_hits"] += count if act_hit else 0
+                            totals["weight_bytes"] += 0 if hit else count * size
+                            totals["hits"] += count if hit else 0
+                            totals["read_beats"] += count * beats
+                            totals["data_cycles"] += count * ceil_div(nbytes, bandwidth)
+                            totals["bursts"] += count * bursts
+                            totals["requests"] += count
+                            loads += per * cycles
+                            later += 0 if block_first else per * cycles
+                            compute += per * panel
+                            if first_load is None:
+                                first_load = cycles
+                            last_compute = panel
                     cycles, bursts, beats = time(WRITE, a * c,
                                                  lambda: tile_store_runs(design, tile),
                                                  (WRITE, a, c))
@@ -664,13 +992,20 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
                              if overlap_panels else loads + compute)
                     totals["one_slot"] += tiles * (chain + cycles)
                     last_store = cycles
-    return CoreAnalysis(core, totals["tiles"], totals["macs"], totals["compute"],
-                        totals["read_bytes"], totals["write_bytes"], totals["weight_bytes"],
-                        totals["hits"], totals["requests"], totals["read_cycles"],
-                        totals["write_cycles"], totals["read_beats"], totals["write_beats"],
-                        totals["bursts"], first_load or 0, last_compute or 0, last_store or 0,
-                        totals["later_loads"], totals["data_cycles"], totals["one_slot"],
-                        design.buffer_slots == 1, design.panel_buffers == 1 and len(blocks) > 1)
+    return CoreAnalysis(
+        core=core, tiles=totals["tiles"], macs=totals["macs"], compute_cycles=totals["compute"],
+        read_bytes=totals["read_bytes"], write_bytes=totals["write_bytes"],
+        weight_bytes=totals["weight_bytes"], weight_cache_hits=totals["hits"],
+        requests=totals["requests"], read_cycles=totals["read_cycles"],
+        write_cycles=totals["write_cycles"], read_beats=totals["read_beats"],
+        write_beats=totals["write_beats"], bursts=totals["bursts"],
+        first_load=first_load or 0, last_compute=last_compute or 0,
+        last_store=last_store or 0, later_loads=totals["later_loads"],
+        data_cycles=totals["data_cycles"], one_slot_cycles=totals["one_slot"],
+        one_slot=design.buffer_slots == 1,
+        panel_chain=design.panel_buffers == 1 and len(blocks) > 1,
+        activation_read_bytes=totals["activation_bytes"],
+        activation_cache_hits=totals["activation_hits"])
 
 
 def closed_form_plan(design: Design) -> ClusterPlan:
@@ -703,6 +1038,8 @@ def analyze(design: Design) -> Analysis:
                   compute_busy_cycles=compute, scratchpad_bytes=scratchpad_bytes(design),
                   compute_cycles_per_core=per_core,
                   weight_cache_hits=sum(core.weight_cache_hits for core in cores),
+                  activation_read_bytes=sum(core.activation_read_bytes for core in cores),
+                  activation_cache_hits=sum(core.activation_cache_hits for core in cores),
                   partition=plan.partition, cores=cores)
     if design.memory_model == "axi":
         db = design.axi_data_bytes or 16
@@ -711,7 +1048,8 @@ def analyze(design: Design) -> Analysis:
         dram = ceil_div(beats * db, rate) if rate else 0
         memory = max([dram] + [max(c.read_cycles, c.write_cycles) for c in busy])
         payload = max([dram] + [max(c.read_beats, c.write_beats) for c in busy])
-        lower = axi_bounds(design, compute, common["weight_bytes"])["lower_bound_cycles"]
+        lower = axi_bounds(design, compute, common["weight_bytes"],
+                           common["activation_read_bytes"])["lower_bound_cycles"]
         estimate = max([lower, dram] + [core.estimate_cycles for core in busy])
         return Analysis(**common, memory_cycles=memory, memory_data_cycles=payload,
                         lower_bound_cycles=lower, estimate_cycles=estimate,
@@ -733,8 +1071,9 @@ def analyze(design: Design) -> Analysis:
                    + max(compute - core.last_compute, dma - core.first_load - core.last_store))
     if design.buffer_slots == 1:
         estimate = max(lower, core.one_slot_cycles)
-    rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.n)
-    one_tile = design.groups == 1 and rows0 == design.m and cols0 == design.n
+    rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
+    one_tile = (design.grid_groups == 1 and rows0 == design.m
+                and cols0 == design.grid_columns)
     no_overlap = ((design.buffer_slots == 1 or one_tile)
                   and (design.reduction_blocks == 1 or design.panel_buffers == 1))
     return Analysis(**common, memory_cycles=dma, memory_data_cycles=data,
@@ -748,8 +1087,35 @@ def _store_cycles(design: Design) -> int:
                for rows, cols, count in tile_classes(design))
 
 
+def activation_run_lengths(design: Design) -> list[tuple[int, int]]:
+    """(length, count) of every activation run of every panel load, no cache hits."""
+    runs: list[tuple[int, int]] = []
+    if not design.conv:
+        for p in panel_classes(design):
+            if not design.channel_wise:
+                runs.append((p.depth, p.rows * p.count))
+            elif p.depth == design.k:
+                runs.append((p.cols * design.k, p.rows * p.count))
+            else:
+                runs.append((p.depth, p.rows * p.cols * p.count))
+        return runs
+    geometry, table = footprints(design)
+    columns = _extent_classes(design.grid_columns, design.tile_n)
+    for entry in table:
+        for panel in entry:
+            for cols, count in columns:
+                channels = geometry.group_channels * (cols if design.channel_wise else 1)
+                tiles = count * design.grid_groups
+                if channels == design.conv_input_c:
+                    runs += [((width + 1) * channels, tiles) for width in panel.widths]
+                else:
+                    runs.append((channels, tiles * panel.pixels))
+    return runs
+
+
 def axi_bounds(design: Design, compute_cycles: int | None = None,
-               weight_read_bytes: int | None = None) -> dict[str, int]:
+               weight_read_bytes: int | None = None,
+               activation_read_bytes: int | None = None) -> dict[str, int]:
     """Lower bounds for the AXI model, valid for any burst split and address alignment.
 
     Per channel: every beat takes one data cycle, one burst issues per cycle, and a burst
@@ -775,18 +1141,25 @@ def axi_bounds(design: Design, compute_cycles: int | None = None,
         return {"beats": beats, "bursts": bursts,
                 "cycles": max(beats, bursts, ceil_div(slot_time, outstanding))}
 
-    # With a weight cache the panels read are known only in total: one run of that many
-    # bytes needs no more beats, bursts or slot time than the panels it stands for.
+    # With a cache the panels read are known only in total: one run of that many bytes
+    # needs no more beats, bursts or slot time than the panels it stands for.
     lumped = design.weight_cache_bytes > 0
+    act_lumped = design.activation_cache_bytes > 0
+    if (lumped and weight_read_bytes is None) or (act_lumped and activation_read_bytes is None):
+        model = analyze(design)
+        weight_read_bytes = model.weight_bytes if weight_read_bytes is None else weight_read_bytes
+        if activation_read_bytes is None:
+            activation_read_bytes = model.activation_read_bytes
     reads: list[tuple[int, int]] = []
-    if lumped:
-        if weight_read_bytes is None:
-            weight_read_bytes = analyze(design).weight_bytes
-        if weight_read_bytes:
-            reads.append((weight_read_bytes, 1))
+    if lumped and weight_read_bytes:
+        reads.append((weight_read_bytes, 1))
+    if act_lumped:
+        if activation_read_bytes:
+            reads.append((activation_read_bytes, 1))
+    else:
+        # One run per activation row or footprint run, even where runs are contiguous.
+        reads += activation_run_lengths(design)
     for p in panel_classes(design):
-        # One run per activation row, even where rows are contiguous.
-        reads.append((p.depth, p.rows * p.count))
         if not lumped:
             reads.append((weight_bytes(design, p.depth, p.cols), p.count))
         if p.first:
@@ -801,9 +1174,12 @@ def axi_bounds(design: Design, compute_cycles: int | None = None,
     if compute_cycles is None:
         compute_cycles = sum(p.count * panel_compute_cycles(design, p.rows, p.cols, p.depth)
                              for p in panel_classes(design))
-    rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.n)
-    first = load_bytes(design, rows0, cols0, design.panel_depth, True)
-    last = store_bytes(design.m % design.tile_m or rows0, design.n % design.tile_n or cols0)
+    rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
+    first = (activation_bytes(design, 0, rows0, cols0, 0)
+             + weight_bytes(design, design.panel_depth, cols0)
+             + cols0 * param_record_bytes(design))
+    last = store_bytes(design.m % design.tile_m or rows0,
+                       design.grid_columns % design.tile_n or cols0)
     chain = (design.axi_read_latency or 0) + ceil_div(first, db) + compute_cycles \
         + ceil_div(last, db) + (design.axi_write_latency or 0)
     per_core = max(ceil_div(read["cycles"], design.cores), ceil_div(write["cycles"], design.cores))
@@ -849,7 +1225,9 @@ def axi_bursts(base: int, length: int, data_bytes: int, max_beats: int) -> list[
 
 @dataclass(frozen=True)
 class Tile:
-    """An output tile of one group; ``col`` is the column within the group's N."""
+    """An output tile of one grid group; ``col`` is the column within the group's N. On the
+    depthwise datapath the grid is one group of G columns: ``col`` and ``cols`` select
+    output channels, each its own group's single column."""
 
     group: int
     row: int
@@ -859,13 +1237,14 @@ class Tile:
 
 
 def make_tiles(design: Design) -> list[Tile]:
-    """Every output tile in issue order: group, then row, then column."""
+    """Every output tile in issue order: grid group, then row, then column."""
     tiles = []
-    for group in range(design.groups):
+    columns = design.grid_columns
+    for group in range(design.grid_groups):
         for row in range(0, design.m, design.tile_m):
-            for col in range(0, design.n, design.tile_n):
+            for col in range(0, columns, design.tile_n):
                 tiles.append(Tile(group, row, col, min(design.tile_m, design.m - row),
-                                  min(design.tile_n, design.n - col)))
+                                  min(design.tile_n, columns - col)))
     return tiles
 
 
@@ -878,7 +1257,7 @@ def block_extent(design: Design, block: int) -> tuple[int, int]:
 def weight_panel_offset(design: Design, tile: Tile, block: int) -> int:
     """Offset of a weight panel from WEIGHT_BASE. Panels are packed in the order the loader
     first reads them: group, column panel, reduction panel."""
-    full_cols, edge_cols = divmod(design.n, design.tile_n)
+    full_cols, edge_cols = divmod(design.grid_columns, design.tile_n)
 
     def column_bytes(cols: int) -> int:
         return sum(weight_bytes(design, block_extent(design, b)[1], cols)
@@ -889,14 +1268,53 @@ def weight_panel_offset(design: Design, tile: Tile, block: int) -> int:
             + block * weight_bytes(design, design.panel_depth, tile.cols))
 
 
-def panel_read_runs(design: Design, tile: Tile, block: int,
-                    weight_cached: bool = False) -> list[tuple[int, int]]:
-    """(base, length) runs of one panel load: the tile's activation rows, its weight panel
-    unless the weight cache holds it, and on the first panel its parameter records."""
+def activation_runs(design: Design, tile: Tile, block: int) -> list[tuple[int, int]]:
+    """(base, length) activation runs of one panel load.
+
+    GEMM operand (M x G*K, row-major): per tile row its group's depth-byte slice; on the
+    depthwise datapath the slices of the tile's channels, one run when the panel covers
+    all of K. Conv geometry (NHWC input): per input row of the footprint one run over the
+    column hull when the panel's channels are all C, else one run per pixel of the hull."""
     start, depth = block_extent(design, block)
-    stride = design.groups * design.k
-    runs = [(ACTIVATION_BASE + (tile.row + i) * stride + tile.group * design.k + start, depth)
-            for i in range(tile.rows)]
+    first, count = (tile.col, tile.cols) if design.channel_wise else (tile.group, 1)
+    if not design.conv:
+        stride = design.groups * design.k
+        runs = []
+        for row in range(tile.row, tile.row + tile.rows):
+            base = ACTIVATION_BASE + row * stride
+            if depth == design.k:
+                runs.append((base + first * design.k, count * design.k))
+            else:
+                runs += [(base + group * design.k + start, depth)
+                         for group in range(first, first + count)]
+        return runs
+    width = footprints(design)[0].group_channels
+    channels, channel = count * width, first * width
+    c, w = design.conv_input_c, design.conv_input_w
+    runs = []
+    for row, low, high in tile_footprint(design, tile.row, tile.rows, block).spans:
+        base = ACTIVATION_BASE + row * w * c
+        if channels == c:
+            runs.append((base + low * c, (high - low + 1) * c))
+        else:
+            runs += [(base + x * c + channel, channels) for x in range(low, high + 1)]
+    return runs
+
+
+def activation_key(design: Design, tile: Tile, block: int) -> tuple[int, int, int]:
+    """Activation-cache line: (group, or channel tile on the depthwise datapath; row tile;
+    reduction block). Column tiles of one row tile share their group's lines."""
+    unit = tile.col // design.tile_n if design.channel_wise else tile.group
+    return unit, tile.row // design.tile_m, block
+
+
+def panel_read_runs(design: Design, tile: Tile, block: int, weight_cached: bool = False,
+                    activations_cached: bool = False) -> list[tuple[int, int]]:
+    """(base, length) runs of one panel load: the tile's activation runs unless the
+    activation cache holds them, its weight panel unless the weight cache holds it, and on
+    the first panel its parameter records."""
+    depth = block_extent(design, block)[1]
+    runs = [] if activations_cached else activation_runs(design, tile, block)
     if not weight_cached:
         runs.append((WEIGHT_BASE + weight_panel_offset(design, tile, block),
                      weight_bytes(design, depth, tile.cols)))
@@ -1043,14 +1461,15 @@ class _AxiChannel:
         self.intervals.append((self.arrival, completion))
 
 
-class _WeightCache:
-    """LRU cache of weight panels; a panel larger than the cache is never cached."""
+class _PanelCache:
+    """LRU cache of weight or activation panels; a panel larger than the cache is never
+    cached, and capacity 0 counts nothing."""
 
     def __init__(self, capacity: int):
         self.capacity = capacity
         self.entries: collections.OrderedDict[tuple[int, int, int], int] = \
             collections.OrderedDict()
-        self.used = self.hits = self.misses = 0
+        self.used = self.hits = self.misses = self.saved = self.peak = 0
 
     def access(self, key: tuple[int, int, int], size: int) -> bool:
         if not self.capacity:
@@ -1058,6 +1477,7 @@ class _WeightCache:
         if key in self.entries:
             self.entries.move_to_end(key)
             self.hits += 1
+            self.saved += size
             return True
         self.misses += 1
         if size <= self.capacity:
@@ -1065,6 +1485,7 @@ class _WeightCache:
                 self.used -= self.entries.popitem(last=False)[1]
             self.entries[key] = size
             self.used += size
+            self.peak = max(self.peak, self.used)
         return False
 
 
@@ -1093,12 +1514,13 @@ class ClusterPlan:
 def cluster_plan(design: Design, partition: str) -> ClusterPlan:
     if partition not in ("m", "n"):
         raise ValueError("a cluster plan splits by m or n")
-    cores = design.cores
-    if design.groups >= cores:
-        return ClusterPlan(partition, "groups", cores, design.groups)
+    cores, groups = design.cores, design.grid_groups
+    if groups >= cores:
+        return ClusterPlan(partition, "groups", cores, groups)
     if partition == "m":
-        return ClusterPlan("m", "rows", cores, design.groups * ceil_div(design.m, design.tile_m))
-    return ClusterPlan("n", "columns", cores, design.groups * ceil_div(design.n, design.tile_n))
+        return ClusterPlan("m", "rows", cores, groups * ceil_div(design.m, design.tile_m))
+    return ClusterPlan("n", "columns", cores,
+                       groups * ceil_div(design.grid_columns, design.tile_n))
 
 
 def tile_unit(design: Design, plan: ClusterPlan, tile: Tile) -> int:
@@ -1106,7 +1528,7 @@ def tile_unit(design: Design, plan: ClusterPlan, tile: Tile) -> int:
         return tile.group
     if plan.split == "rows":
         return tile.group * ceil_div(design.m, design.tile_m) + tile.row // design.tile_m
-    return tile.group * ceil_div(design.n, design.tile_n) + tile.col // design.tile_n
+    return tile.group * ceil_div(design.grid_columns, design.tile_n) + tile.col // design.tile_n
 
 
 def core_tiles(design: Design, plan: ClusterPlan) -> list[list[Tile]]:
@@ -1176,6 +1598,12 @@ class CoreSchedule:
     weight_read_bytes: int = 0
     weight_cache_hits: int = 0
     weight_cache_misses: int = 0
+    activation_read_bytes: int = 0
+    activation_cache_hits: int = 0
+    activation_cache_misses: int = 0
+    activation_bytes_saved: int = 0
+    peak_cached_activation_bytes: int = 0
+    depthwise_macs: int = 0
     dma_requests: int = 0
     dma_bursts: int = 0
     read: ChannelStats = dataclasses.field(default_factory=ChannelStats)
@@ -1228,7 +1656,8 @@ class _Core:
         self.tiles = tiles
         self.blocks = design.reduction_blocks
         self.buffers = min(design.panel_buffers, self.blocks)
-        self.cache = _WeightCache(design.weight_cache_bytes)
+        self.cache = _PanelCache(design.weight_cache_bytes)
+        self.activation_cache = _PanelCache(design.activation_cache_bytes)
         self.next_load = 0                     # flat panel index: tile * blocks + block
         self.loading = False
         self.load_free = 0
@@ -1261,7 +1690,11 @@ class _Core:
         hit = self.cache.access((tile.group, tile.col, block), size)
         if not hit:
             self.out.weight_read_bytes += size
-        runs = panel_read_runs(self.design, tile, block, hit)
+        act = activation_bytes(self.design, tile.row, tile.rows, tile.cols, block)
+        act_hit = self.activation_cache.access(activation_key(self.design, tile, block), act)
+        if not act_hit:
+            self.out.activation_read_bytes += act
+        runs = panel_read_runs(self.design, tile, block, hit, act_hit)
         self.loading = True
         return arrival, runs, sum(length for _, length in runs)
 
@@ -1275,6 +1708,8 @@ class _Core:
         self.out.compute_busy_cycles += cycles
         if block == 0:
             self.out.macs += tile.rows * tile.cols * self.design.k
+            if self.design.channel_wise:
+                self.out.depthwise_macs += tile.rows * tile.cols * self.design.k
         self.loading = False
         self.load_free = completion
         self.next_load += 1
@@ -1328,6 +1763,15 @@ def _run_axi(design: Design, cores: list[_Core]) -> None:
         else:
             core.out.write_bytes += payload
         core.out.dma_requests += 1
+        if not payload:
+            # A load whose panels the caches all hold moves nothing: it completes on
+            # arrival without a burst.
+            channel.arrival = arrival
+            channel.finish(arrival)
+            core.load_done(arrival)
+            start(core, READ)
+            start(core, WRITE)
+            return
         heapq.heappush(heap, (channel.begin(arrival, runs), core.out.core, direction))
 
     for core in cores:
@@ -1408,6 +1852,11 @@ def schedule(design: Design) -> Schedule:
     for core in cores:
         core.out.weight_cache_hits = core.cache.hits
         core.out.weight_cache_misses = core.cache.misses
+        cache = core.activation_cache
+        core.out.activation_cache_hits = cache.hits
+        core.out.activation_cache_misses = cache.misses
+        core.out.activation_bytes_saved = cache.saved
+        core.out.peak_cached_activation_bytes = cache.peak
     return Schedule(design, plan, predicted, max(core.out.cycles for core in cores),
                     [core.out for core in cores])
 

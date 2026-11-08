@@ -1,13 +1,18 @@
 """Canonical network workloads (workloads/*.json) lowered to npu-sim GEMM calls.
 
 A layer becomes one ``Gemm``: an M x N x K GEMM per group, G groups (npu-sim --groups G),
-run ``calls`` times. Convolutions lower by im2col (M = out_h*out_w, N = out_c/G,
-K = kh*kw*in_c/G); depthwise is G = channels; attention matmuls run per KV head.
+run ``calls`` times. Convolutions are M = out_h*out_w, N = out_c/G, K = kh*kw*in_c/G and
+carry their geometry (``Gemm.conv``): run with it, the activation operand is the NHWC
+input's im2col view and a panel load reads the input footprint (npu-sim --conv-*); run
+without it (``flags(conv=False)``), the operand is the materialised im2col matrix.
+Depthwise is G = channels and N = 1, which a design with a depthwise datapath runs
+channel-wise. Attention matmuls run per KV head.
 ``split`` cuts a call only when it exceeds a per-call simulator limit, along groups first,
 then N, then M; a reduction too deep for one call cannot be split (the simulator does not
-accumulate partial sums across calls). ``call_options(binary)`` gives the limits of one
-npu-sim build: builds without --timing-only have the smaller legacy limits, and builds
-without --groups run a grouped layer as one call per group.
+accumulate partial sums across calls), and a split piece of a convolution is a plain GEMM.
+``call_options(binary)`` gives the limits of one npu-sim build: builds without --timing-only
+have the smaller legacy limits, builds without --groups run a grouped layer as one call per
+group, and builds without --conv-input-h run every convolution on its im2col matrix.
 """
 from __future__ import annotations
 
@@ -17,7 +22,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from . import jsonio, sim
+from . import analytic, jsonio, sim
 from .binary import ROOT
 
 WORKLOAD_DIR = ROOT / "workloads"
@@ -41,6 +46,8 @@ class Gemm:
     groups: int = 1
     calls: int = 1
     op: str = "dense"
+    # analytic.CONV_FIELDS values of a convolution's geometry; () for a plain operand.
+    conv: tuple[int, ...] = ()
 
     @property
     def macs(self) -> int:
@@ -50,11 +57,31 @@ class Gemm:
     def total_macs(self) -> int:
         return self.macs * self.calls
 
-    def flags(self) -> dict[str, int]:
+    def conv_flags(self) -> dict[str, int]:
+        """npu-sim --conv-* flags of the geometry, those that differ from the defaults."""
+        defaults = analytic.Design()
+        return {name: value for name, value in zip(analytic.CONV_FIELDS, self.conv)
+                if value != getattr(defaults, name)}
+
+    def flags(self, conv: bool = True) -> dict[str, int]:
+        """npu-sim shape flags; with ``conv`` the convolution geometry too."""
         flags = {"m": self.m, "n": self.n, "k": self.k}
         if self.groups != 1:
             flags["groups"] = self.groups
+        if conv:
+            flags.update(self.conv_flags())
         return flags
+
+    def plain(self) -> "Gemm":
+        """The same GEMM on its im2col operand, without the convolution geometry."""
+        return replace(self, conv=())
+
+    @property
+    def pointwise(self) -> bool:
+        """A 1x1 convolution: its im2col rows are input pixels, so the plain operand reads
+        each needed pixel once, as one run per output pixel."""
+        fields = dict(zip(analytic.CONV_FIELDS, self.conv))
+        return bool(self.conv) and fields["conv_kernel_h"] == fields["conv_kernel_w"] == 1
 
     @property
     def op_class(self) -> str:
@@ -81,6 +108,22 @@ def load(name: str | Path, directory: Path = WORKLOAD_DIR) -> dict[str, Any]:
     return document
 
 
+def conv_geometry(layer: dict[str, Any]) -> tuple[int, ...]:
+    """analytic.CONV_FIELDS values of a convolution layer, or () when it does not give its
+    input extents, stride and padding."""
+    if not all(key in layer for key in ("in_h", "in_w", "stride", "pad")):
+        return ()
+    pad = layer["pad"]
+    top, bottom, left, right = layer.get("pad_tblr", (pad, pad, pad, pad))
+    geometry = {"conv_input_h": layer["in_h"], "conv_input_w": layer["in_w"],
+                "conv_input_c": layer["in_c"], "conv_kernel_h": layer["kernel_h"],
+                "conv_kernel_w": layer["kernel_w"], "conv_stride_h": layer["stride"],
+                "conv_stride_w": layer["stride"], "conv_dilation_h": 1, "conv_dilation_w": 1,
+                "conv_pad_top": top, "conv_pad_left": left, "conv_pad_bottom": bottom,
+                "conv_pad_right": right}
+    return tuple(geometry[name] for name in analytic.CONV_FIELDS)
+
+
 def lower(layer: dict[str, Any]) -> Gemm:
     """The npu-sim call for one layer, recomputed from its shape fields."""
     op = layer["op"]
@@ -88,7 +131,7 @@ def lower(layer: dict[str, Any]) -> Gemm:
         groups = layer["groups"]
         gemm = Gemm(layer["name"], layer["out_h"] * layer["out_w"], layer["out_c"] // groups,
                     layer["kernel_h"] * layer["kernel_w"] * (layer["in_c"] // groups), groups,
-                    layer["repeat"], op)
+                    layer["repeat"], op, conv_geometry(layer))
     elif op in ("dense", "matmul"):
         record = layer.get("lowered", {})
         groups = record.get("G", 1)
@@ -112,9 +155,13 @@ def host_bytes(gemm: Gemm, tile_m: int = 8, tile_n: int = 8, tile_k: int = 0) ->
     g = gemm.groups
     tiles = math.ceil(gemm.m / tile_m) * math.ceil(gemm.n / tile_n) * g
     panels = math.ceil(gemm.k / tile_k) if tile_k else 1
+    fields = dict(zip(analytic.CONV_FIELDS, gemm.conv))
+    # Conv geometry also holds the NHWC input the operand is built from.
+    image = (fields["conv_input_h"] * fields["conv_input_w"] * fields["conv_input_c"]
+             if gemm.conv else 0)
     return (gemm.m * g * gemm.k + g * gemm.k * gemm.n + 4 * g * gemm.n
             + 10 * gemm.m * g * gemm.n + 8 * min(gemm.m, tile_m) * min(gemm.n, tile_n)
-            + 512 * tiles * panels)
+            + 512 * tiles * panels + image)
 
 
 def fits(gemm: Gemm, timing_only: bool = True, max_dimension: int = MAX_DIMENSION,
@@ -140,6 +187,7 @@ def split(gemm: Gemm, timing_only: bool = True, **limits: Any) -> list[Gemm]:
     """Cut ``gemm`` into the fewest even pieces that each fit the per-call limits."""
     if fits(gemm, timing_only, **limits):
         return [gemm]
+    gemm = gemm.plain()
     max_dimension = limits.get("max_dimension", MAX_DIMENSION)
     if gemm.k > max_dimension:
         raise ValueError(f"{gemm.name}: K={gemm.k} exceeds the per-call limit of "
@@ -167,23 +215,26 @@ def split(gemm: Gemm, timing_only: bool = True, **limits: Any) -> list[Gemm]:
 
 def ungroup(gemm: Gemm) -> Gemm:
     """The same work as one call per group, for builds without --groups."""
-    return replace(gemm, groups=1, calls=gemm.calls * gemm.groups)
+    return replace(gemm, groups=1, calls=gemm.calls * gemm.groups, conv=())
 
 
 def call_options(binary: Path | str) -> dict[str, Any]:
     """``iter_calls`` options for one npu-sim build, probed from its --help."""
     timing_only = sim.supports(binary, "--timing-only")
     options: dict[str, Any] = {"timing_only": timing_only,
-                               "grouped": sim.supports(binary, "--groups")}
+                               "grouped": sim.supports(binary, "--groups"),
+                               "conv": sim.supports(binary, "--conv-input-h")}
     if not timing_only:
         options.update(LEGACY_LIMITS)
     return options
 
 
 def iter_calls(workload: dict[str, Any], timing_only: bool = True, grouped: bool = True,
-               **limits: Any) -> Iterator[tuple[dict[str, Any], Gemm]]:
+               conv: bool = True, **limits: Any) -> Iterator[tuple[dict[str, Any], Gemm]]:
     for layer in workload["layers"]:
         gemm = lower(layer)
+        if not conv:
+            gemm = gemm.plain()
         if not grouped and gemm.groups > 1:
             gemm = ungroup(gemm)
         for piece in split(gemm, timing_only, **limits):

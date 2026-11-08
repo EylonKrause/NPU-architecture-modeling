@@ -33,6 +33,8 @@ Statistics sum_statistics(const std::vector<Statistics>& cores) {
         total.peak_inflight_tiles = std::max(total.peak_inflight_tiles, s.peak_inflight_tiles);
         total.peak_cached_weight_bytes =
             std::max(total.peak_cached_weight_bytes, s.peak_cached_weight_bytes);
+        total.peak_cached_activation_bytes =
+            std::max(total.peak_cached_activation_bytes, s.peak_cached_activation_bytes);
         for (auto [sum, value] : {
                  std::pair{&total.macs, s.macs},
                  std::pair{&total.read_bytes, s.read_bytes},
@@ -55,7 +57,12 @@ Statistics sum_statistics(const std::vector<Statistics>& cores) {
                  std::pair{&total.decoded_weight_values, s.decoded_weight_values},
                  std::pair{&total.weight_read_bytes, s.weight_read_bytes},
                  std::pair{&total.encoded_weight_storage_bytes, s.encoded_weight_storage_bytes},
-                 std::pair{&total.dense_weight_storage_bytes, s.dense_weight_storage_bytes}})
+                 std::pair{&total.dense_weight_storage_bytes, s.dense_weight_storage_bytes},
+                 std::pair{&total.activation_cache_hits, s.activation_cache_hits},
+                 std::pair{&total.activation_cache_misses, s.activation_cache_misses},
+                 std::pair{&total.activation_bytes_saved, s.activation_bytes_saved},
+                 std::pair{&total.activation_read_bytes, s.activation_read_bytes},
+                 std::pair{&total.depthwise_macs, s.depthwise_macs}})
             *sum = checked_add(*sum, value);
     }
     return total;
@@ -93,10 +100,55 @@ PipelineView combine_views(const std::vector<PipelineView>& cores) {
     return total;
 }
 
+// An LRU of panels held in SRAM, keyed by cache line. A panel larger than the
+// capacity is never kept; capacity 0 disables the cache and counts nothing.
+class PanelCache {
+public:
+    explicit PanelCache(std::uint64_t capacity) : capacity_(capacity) {}
+
+    // A hit moves the line to the front and saves the panel's bytes; a miss
+    // inserts it, evicting least recently used lines until it fits.
+    bool lookup(std::uint64_t key, std::uint64_t bytes) {
+        if (!capacity_) return false;
+        const auto found = lines_.find(key);
+        if (found != lines_.end()) {
+            lru_.splice(lru_.begin(), lru_, found->second);
+            ++hits;
+            saved = checked_add(saved, bytes);
+            return true;
+        }
+        ++misses;
+        if (bytes > capacity_) return false;
+        while (cached_ > capacity_ - bytes) {
+            const auto& last = lru_.back();
+            cached_ -= last.bytes;
+            lines_.erase(last.key);
+            lru_.pop_back();
+        }
+        lru_.push_front({key, bytes});
+        lines_[key] = lru_.begin();
+        cached_ += bytes;
+        peak = std::max(peak, cached_);
+        return false;
+    }
+    bool overfull() const { return cached_ > capacity_; }
+
+    std::uint64_t hits = 0, misses = 0, saved = 0, peak = 0;
+
+private:
+    struct Line {
+        std::uint64_t key, bytes;
+    };
+    std::uint64_t capacity_, cached_ = 0;
+    std::list<Line> lru_;
+    std::unordered_map<std::uint64_t, std::list<Line>::iterator> lines_;
+};
+
 }  // namespace
 
 // One core pipeline: load, compute and store threads over the core's own
-// slots, panel buffers and weight cache, issuing requests on its memory port.
+// slots, panel buffers, weight cache and activation cache, issuing requests on
+// its memory port.
 // Each issuing thread owns its memory request as a member, so a simulation
 // stopped while a transfer is in flight releases it with the module. The
 // cluster's observer drives the core's signals.
@@ -139,10 +191,7 @@ private:
     sc_core::sc_fifo<std::uint64_t> loaded_;
     sc_core::sc_fifo<std::uint64_t> computed_;
     sc_core::sc_event panel_consumed_;
-    struct WeightLine { std::uint64_t key, bytes; };
-    std::list<WeightLine> weight_lru_;
-    std::unordered_map<std::uint64_t, std::list<WeightLine>::iterator> weight_lines_;
-    std::uint64_t cached_bytes_ = 0;
+    PanelCache weight_cache_, activation_cache_;
     std::uint64_t inflight_ = 0;
     bool completed_ = false, compute_busy_ = false, dirty_ = true;
     std::uint64_t compute_start_ = 0, compute_duration_ = 0;
@@ -183,7 +232,6 @@ private:
     void compute();
     void store();
     void transfer(const Tile& tile, bool read, std::uint64_t block = 0);
-    bool weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes);
     void advance(std::uint64_t cycles);
 };
 
@@ -199,7 +247,9 @@ Core::Core(sc_core::sc_module_name name, std::uint64_t index, const Config& conf
       free_slots_("free_slots", static_cast<int>(config.mapping.buffer_slots)),
       // Every loaded panel waiting for compute occupies one panel buffer.
       loaded_("loaded_tiles", static_cast<int>(config.mapping.buffer_slots * panel_buffers_)),
-      computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)) {
+      computed_("computed_tiles", static_cast<int>(config.mapping.buffer_slots)),
+      weight_cache_(config.arch.weight_cache_bytes),
+      activation_cache_(config.arch.activation_cache_bytes) {
     if (record_spans_)
         spans_.reserve(static_cast<std::size_t>(
             checked_mul(checked_mul(3, tiles_.size()), reduction_blocks(config))));
@@ -217,6 +267,14 @@ Core::Core(sc_core::sc_module_name name, std::uint64_t index, const Config& conf
 Statistics Core::statistics(const MemoryView& memory) const {
     auto stats = stats_;
     merge_memory(stats, memory);
+    stats.weight_cache_hits = weight_cache_.hits;
+    stats.weight_cache_misses = weight_cache_.misses;
+    stats.weight_bytes_saved = weight_cache_.saved;
+    stats.peak_cached_weight_bytes = weight_cache_.peak;
+    stats.activation_cache_hits = activation_cache_.hits;
+    stats.activation_cache_misses = activation_cache_.misses;
+    stats.activation_bytes_saved = activation_cache_.saved;
+    stats.peak_cached_activation_bytes = activation_cache_.peak;
     return stats;
 }
 
@@ -256,7 +314,7 @@ void Core::observe(const MemoryView& memory) {
     if (view.inflight_tiles > config_.mapping.buffer_slots ||
         view.loaded_tiles > config_.mapping.buffer_slots * panel_buffers_ ||
         view.computed_tiles > config_.mapping.buffer_slots ||
-        cached_bytes_ > config_.arch.weight_cache_bytes ||
+        weight_cache_.overfull() || activation_cache_.overfull() ||
         ((view.dma_busy || view.compute_busy) && view.inflight_tiles == 0) ||
         (view.completed && (view.inflight_tiles != 0 || view.dma_busy || view.compute_busy ||
                             view.read_queue_depth != 0 || view.write_queue_depth != 0))) {
@@ -328,37 +386,9 @@ void Core::advance(std::uint64_t cycles) {
     }
 }
 
-bool Core::weight_cached(const Tile& tile, std::uint64_t block, std::uint64_t bytes) {
-    if (!config_.arch.weight_cache_bytes) return false;
-    // One line per (output channel panel, reduction block); channels are
-    // numbered across groups.
-    const auto channel = checked_add(checked_mul(tile.group, config_.shape.n), tile.col);
-    const auto key = checked_add(checked_mul(channel, reduction_blocks(config_)), block);
-    const auto found = weight_lines_.find(key);
-    if (found != weight_lines_.end()) {
-        weight_lru_.splice(weight_lru_.begin(), weight_lru_, found->second);
-        ++stats_.weight_cache_hits;
-        stats_.weight_bytes_saved = checked_add(stats_.weight_bytes_saved, bytes);
-        return true;
-    }
-    ++stats_.weight_cache_misses;
-    if (bytes > config_.arch.weight_cache_bytes) return false;
-    while (cached_bytes_ > config_.arch.weight_cache_bytes - bytes) {
-        const auto& last = weight_lru_.back();
-        cached_bytes_ -= last.bytes;
-        weight_lines_.erase(last.key);
-        weight_lru_.pop_back();
-    }
-    weight_lru_.push_front({key, bytes});
-    weight_lines_[key] = weight_lru_.begin();
-    cached_bytes_ += bytes;
-    stats_.peak_cached_weight_bytes = std::max(stats_.peak_cached_weight_bytes, cached_bytes_);
-    return false;
-}
-
 void Core::transfer(const Tile& tile, bool read, std::uint64_t block) {
     auto& request = read ? load_request_ : store_request_;
-    std::uint64_t weight_bytes = 0;
+    std::uint64_t weight_bytes = 0, activation_bytes = 0;
     if (read) {
         std::uint64_t encoded_bytes = 0, offset = 0;
         if (config_.weights.encoding == WeightEncoding::Dense) {
@@ -369,8 +399,16 @@ void Core::transfer(const Tile& tile, bool read, std::uint64_t block) {
             encoded_bytes = static_cast<std::uint64_t>(panel.buffer.size());
             offset = weight_offsets_.at(static_cast<std::size_t>(&panel - encoded_weights_.data()));
         }
-        if (!weight_cached(tile, block, encoded_bytes)) weight_bytes = encoded_bytes;
-        panel_read_runs(config_, tile, block, offset, weight_bytes, request.runs);
+        // One weight line per (output channel panel, reduction block);
+        // channels are numbered across groups.
+        const auto channel = checked_add(checked_mul(tile.group, config_.shape.n), tile.col);
+        const auto weight_key = checked_add(checked_mul(channel, reduction_blocks(config_)), block);
+        if (!weight_cache_.lookup(weight_key, encoded_bytes)) weight_bytes = encoded_bytes;
+        const auto activations = activation_panel_bytes(config_, tile, block);
+        const bool reused = config_.arch.activation_cache_bytes &&
+            activation_cache_.lookup(activation_cache_key(config_, tile, block), activations);
+        if (!reused) activation_bytes = activations;
+        panel_read_runs(config_, tile, block, offset, weight_bytes, request.runs, !reused);
     } else {
         tile_store_runs(config_, tile, request.runs);
     }
@@ -381,6 +419,7 @@ void Core::transfer(const Tile& tile, bool read, std::uint64_t block) {
         spans_.push_back({read ? "load" : "store", tile.id, request.start, request.completion,
                           request.bytes, block, index_});
     stats_.weight_read_bytes = checked_add(stats_.weight_read_bytes, weight_bytes);
+    stats_.activation_read_bytes = checked_add(stats_.activation_read_bytes, activation_bytes);
 }
 
 void Core::load() {
@@ -417,6 +456,7 @@ void Core::load() {
 
 void Core::compute() {
     const auto blocks = reduction_blocks(config_);
+    const bool depthwise = channel_wise(config_);
     for (std::uint64_t count = 0; count < checked_mul(tiles_.size(), blocks); ++count) {
         std::uint64_t job = 0;
         loaded_.read(job);
@@ -438,6 +478,7 @@ void Core::compute() {
         // Cores write disjoint tiles of the shared output.
         if (block + 1 == blocks && !config_.sim.timing_only) {
             if (encoded) compute_tile_encoded(problem_, config_, encoded_weights_, tile, output_);
+            else if (depthwise) compute_channel_tile(problem_, config_.quant, tile, output_);
             else compute_tile(problem_, config_.quant, tile, output_);
         }
         advance(duration);
@@ -448,6 +489,7 @@ void Core::compute() {
         stats_.macs = checked_add(stats_.macs, logical_macs);
         stats_.executed_macs = checked_add(stats_.executed_macs, executed_macs);
         stats_.skipped_macs = checked_add(stats_.skipped_macs, logical_macs - executed_macs);
+        if (depthwise) stats_.depthwise_macs = checked_add(stats_.depthwise_macs, logical_macs);
         if (encoded) {
             stats_.weight_decode_cycles = checked_add(stats_.weight_decode_cycles, encoded->decode_cycles);
             stats_.decoded_weight_values = checked_add(stats_.decoded_weight_values, encoded->retained_values);
@@ -494,18 +536,18 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
         dense_storage_bytes_ = checked_add(dense_storage_bytes_,
             packed_weight_bytes(config, panel.k, panel.cols));
     }
-    const auto column_panels = ceil_div(config.shape.n, config.mapping.tile_n);
+    const auto column_panels = ceil_div(grid_columns(config), config.mapping.tile_n);
     const bool dense = config.weights.encoding == WeightEncoding::Dense;
     // Both splits are predicted from the panels the loader reads and the
     // array computes.
     const auto column_costs = dense ? dense_column_costs(config) :
                                       encoded_column_costs(config, encoded_weights_);
     if (dense) {
-        // Every group stores the same column panels.
+        // Every group of the grid stores the same column panels.
         for (std::uint64_t col = 0; col < column_panels; ++col) {
             const auto column = column_costs(0, col);
             dense_storage_bytes_ = checked_add(dense_storage_bytes_, checked_mul(
-                config.shape.groups, checked_add(column.cacheable, column.uncacheable)));
+                grid_groups(config), checked_add(column.cacheable, column.uncacheable)));
         }
         encoded_storage_bytes_ = dense_storage_bytes_;
     }

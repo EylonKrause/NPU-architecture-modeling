@@ -7,6 +7,10 @@ MAC, DRAM bytes per cycle and GB/s, SRAM. The sizing rules in npuperf.designs mu
 every tile, burst and weight-cache field; npu-sim must report the same peaks, fill the SRAM
 exactly with full tiles, reject the next larger tile, and accept every layer of every bundled
 workload. One small GEMM per point is checked bit-exact against the integration oracle.
+The two points sized from Arm parts take the 3x3 depthwise rate of Arm's performance model
+of the part, derived here from its output microblock. The clusters' depthwise rate and SRAM
+have no public figure: studies S9 and S10 size them, fail when a config disagrees with their
+rule, and SIZED below holds their picks.
 """
 
 from __future__ import annotations
@@ -37,12 +41,30 @@ U55_TOP = {"macs": 256, "sram_kb": 50, "axi_bytes": 8}          # Ethos-U produc
 U85_TOP = {"macs": 2048, "sram_kb": 267, "tops": 4}             # Ethos-U product brief
 M4 = {"ane_cores": 16, "tops": 38, "gbps": 120}                 # apple.com newsroom
 M3_ULTRA = {"ane_cores": 32, "gbps": 800}                       # apple.com newsroom
-# Vela 5.2.0 ethosu/config_files/Arm/vela.ini.
-U55_HIGH_END_SRAM = {"latency": 32, "max_reads": 4, "max_writes": 4, "clock_scale": 1.0,
-                     "burst_length": 32}
+# Vela 5.2.0: output microblock (H, W, C) of the 8-bit depthwise operation
+# (architecture_features.py for the U55, Regor ethos_u85.cpp for the U85) and the step of
+# its performance models: 4 kernel taps in 4 cycles per microblock.
+U55_256_DEPTHWISE_UBLOCK = (2, 2, 8)
+U85_2048_DEPTHWISE_UBLOCK = (4, 4, 16)
+DEPTHWISE_STEP = {"taps": 4, "cycles": 4}
+# Vela 5.2.0 ethosu/config_files/Arm/vela.ini (the U65 and U85 AXI ports are 16 B wide).
+U65_MID_END_DRAM = {"read_latency": 500, "write_latency": 250, "max_reads": 12, "max_writes": 6,
+                    "clock_scale": 0.46875, "port_bytes": 16, "core_mhz": 500,
+                    "burst_length": 128}
 U85_DRAM_HIGH = {"read_latency": 500, "write_latency": 250, "max_reads": 64, "max_writes": 32,
                  "clock_scale": 0.75, "ports": 2, "port_bytes": 16, "burst_length": 128}
 CLIENT_MHZ = 1200
+EDGE_MHZ = 1000
+# Picked by the S9 rule (cluster depthwise MAC/cycle per core) and the S10 rule (cluster
+# SRAM per core); python -m npuperf.reproduce fails when a config disagrees with its rule.
+SIZED = {"depthwise": {"client-16c": 128, "workstation-32c": 128},
+         "cluster_sram_kib": 256}
+
+
+def depthwise_3x3(ublock: tuple[int, int, int]) -> int:
+    """MAC/cycle of a 3x3 depthwise kernel: 9 taps take ceil(9 / 4) steps of the model."""
+    steps = math.ceil(9 / DEPTHWISE_STEP["taps"])
+    return math.prod(ublock) * 9 // (steps * DEPTHWISE_STEP["cycles"])
 
 
 def derived() -> dict[str, dict]:
@@ -53,23 +75,29 @@ def derived() -> dict[str, dict]:
     dram_ports = {"read_latency": dram["read_latency"], "write_latency": dram["write_latency"],
                   "read_outstanding": dram["max_reads"],
                   "write_outstanding": dram["max_writes"]}
-    # U85's SRAM per MAC, for a 32x32 core.
-    cluster_sram = U85_TOP["sram_kb"] * KIB * (32 * 32) // U85_TOP["macs"]
+    # Vela states Ethos_U65_Mid_End's DRAM per NPU cycle (port bytes x clock scale, 7.5 B),
+    # 3.75 GB/s at its 500 MHz; edge-256 keeps it in cycles, in whole bytes per cycle.
+    edge = U65_MID_END_DRAM
+    edge_per_cycle = edge["port_bytes"] * edge["clock_scale"]
+    edge_gbps = edge_per_cycle * edge["core_mhz"] / 1e3
+    cluster_sram = SIZED["cluster_sram_kib"] * KIB
     return {
         "edge-256": {
-            "array": (16, 16), "cores": 1, "mhz": 1000, "sram": U55_TOP["sram_kb"] * KIB,
-            "dram": int(U55_TOP["axi_bytes"] * U55_HIGH_END_SRAM["clock_scale"]),
-            "axi_bytes": U55_TOP["axi_bytes"], "min_depth": U55_HIGH_END_SRAM["burst_length"],
-            "ports": {"read_latency": U55_HIGH_END_SRAM["latency"],
-                      "write_latency": U55_HIGH_END_SRAM["latency"],
-                      "read_outstanding": U55_HIGH_END_SRAM["max_reads"],
-                      "write_outstanding": U55_HIGH_END_SRAM["max_writes"]},
-            "tops": 0.512, "gbps": 8.0},
+            "array": (16, 16), "cores": 1, "mhz": EDGE_MHZ, "sram": U55_TOP["sram_kb"] * KIB,
+            "dram": math.ceil(edge_per_cycle), "vela_bytes_per_cycle": edge_per_cycle,
+            "depthwise": depthwise_3x3(U55_256_DEPTHWISE_UBLOCK),
+            "axi_bytes": U55_TOP["axi_bytes"], "min_depth": edge["burst_length"],
+            "ports": {"read_latency": edge["read_latency"],
+                      "write_latency": edge["write_latency"],
+                      "read_outstanding": edge["max_reads"],
+                      "write_outstanding": edge["max_writes"]},
+            "tops": 0.512, "gbps": 8.0, "vela_gbps": edge_gbps},
         "mobile-2k": {
             "array": (32, 64), "cores": 1, "mhz": 1000, "sram": U85_TOP["sram_kb"] * KIB,
             "dram": int(dram["port_bytes"] * dram["ports"] * dram["clock_scale"]),
             "axi_bytes": dram["port_bytes"] * dram["ports"], "min_depth": dram["burst_length"],
-            "ports": dram_ports, "tops": 4.096, "gbps": 24.0},
+            "ports": dram_ports, "tops": 4.096, "gbps": 24.0,
+            "depthwise": depthwise_3x3(U85_2048_DEPTHWISE_UBLOCK)},
         "client-16c": {
             "array": (32, 32), "cores": M4["ane_cores"], "mhz": CLIENT_MHZ,
             "sram": cluster_sram, "dram": int(client_dram), "axi_bytes": 32,
@@ -120,8 +148,13 @@ class DesignPoints(unittest.TestCase):
 
     def test_headline_figures_follow_the_derivation(self):
         # Rounding the published figures: the brief's 512 GOP/s and "4 TOP/s", M4's 38,
-        # 120 GB/s exactly, and the smallest integer rate reaching "over 800GB/s".
+        # 120 GB/s exactly, and the smallest integer rate reaching "over 800GB/s" and
+        # Vela's 7.5 B/cycle (its 3.75 GB/s at 500 MHz).
         self.assertEqual(U55_TOP["macs"] * 2 * 1e9 / 1e12, EXPECTED["edge-256"]["tops"])
+        self.assertEqual(EXPECTED["edge-256"]["vela_gbps"], 3.75)
+        edge = EXPECTED["edge-256"]["dram"]
+        self.assertGreaterEqual(edge, EXPECTED["edge-256"]["vela_bytes_per_cycle"])
+        self.assertLess(edge - 1, EXPECTED["edge-256"]["vela_bytes_per_cycle"])
         self.assertEqual(round(EXPECTED["mobile-2k"]["tops"]), U85_TOP["tops"])
         self.assertLess(abs(EXPECTED["client-16c"]["tops"] / M4["tops"] - 1), 0.05)
         self.assertEqual(EXPECTED["client-16c"]["dram"] * CLIENT_MHZ / 1e3, M4["gbps"])
@@ -153,6 +186,28 @@ class DesignPoints(unittest.TestCase):
                 self.assertEqual(row.sram_bytes, want["sram"])
                 self.assertEqual(row.axi_bits, 8 * want["axi_bytes"])
                 self.assertAlmostEqual(row.ridge_macs_per_byte, macs / want["dram"], places=9)
+
+    def test_depthwise_rates_and_sized_fields(self):
+        # The Arm-model rates: 32 and 256 MAC/cycle peaks, three quarters of each for 3x3.
+        self.assertEqual(EXPECTED["edge-256"]["depthwise"], 24)
+        self.assertEqual(EXPECTED["mobile-2k"]["depthwise"], 192)
+        for name in designs.DESIGN_POINTS:
+            with self.subTest(name=name):
+                d = designs.design(designs.load(name))
+                rate = d.depthwise_macs_per_cycle
+                if name in SIZED["depthwise"]:
+                    self.assertEqual(rate, SIZED["depthwise"][name])
+                    self.assertEqual(rate & (rate - 1), 0)
+                    self.assertIsNone(designs.vela_depthwise_rate(name))
+                else:
+                    self.assertEqual(rate, EXPECTED[name]["depthwise"])
+                    self.assertEqual(designs.vela_depthwise_rate(name), rate)
+                self.assertLessEqual(rate, d.array_rows * d.array_cols)
+                self.assertIn(f"depthwise datapath {rate} mac/cycle",
+                              designs.load(name)["description"].lower())
+                if d.cores > 1:
+                    self.assertIn(f"SRAM {SIZED['cluster_sram_kib']} KiB",
+                                  designs.load(name)["description"])
 
     def test_cluster_ports_reach_the_dram_rate(self):
         # One core design for both clusters: the narrowest AXI width whose read channels,
@@ -253,7 +308,11 @@ class DesignPoints(unittest.TestCase):
             for workload in workloads.names():
                 for layer, gemm in workloads.iter_calls(workloads.load(workload)):
                     with self.subTest(name=name, workload=workload, layer=layer["name"]):
-                        result = result_of(name, *sim.to_flags(gemm.flags()), "--timing-only")
+                        # The config's tiles size the im2col operand; a convolution on
+                        # its input footprint runs with the mapper's tiles
+                        # (tests/mapper_tests.py).
+                        result = result_of(name, *sim.to_flags(gemm.flags(conv=False)),
+                                           "--timing-only")
                         self.assertEqual(result["numerics"], "skipped")
                         self.assertLessEqual(result["scratchpad_bytes"], sram)
                         self.assertEqual(result["macs"], gemm.macs)

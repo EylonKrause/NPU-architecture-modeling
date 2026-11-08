@@ -222,6 +222,9 @@ npu::Problem input_problem(Arguments& args) {
         return shell;
     }
     if (args.input_path.empty()) return npu::make_problem(args.builder.config);
+    if (npu::implicit_conv(args.builder.config.shape))
+        throw std::invalid_argument(
+            "--input holds a GEMM operand; with shape.conv the input tensor is generated");
     const char* const dimensions[] = {"shape.m", "shape.n", "shape.k"};
     for (const auto* path : dimensions)
         if (args.builder.source(path) == npu::OptionSource::CommandLine)
@@ -557,7 +560,11 @@ void cluster_json(std::ostream& stream, const npu::Config& c, const npu::Acceler
                << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
                << ",\"weight_read_bytes\":" << s.weight_read_bytes
                << ",\"weight_cache_hits\":" << s.weight_cache_hits
-               << ",\"weight_cache_misses\":" << s.weight_cache_misses << ",\"memory\":{";
+               << ",\"weight_cache_misses\":" << s.weight_cache_misses
+               << ",\"activation_read_bytes\":" << s.activation_read_bytes
+               << ",\"activation_cache_hits\":" << s.activation_cache_hits
+               << ",\"activation_cache_misses\":" << s.activation_cache_misses
+               << ",\"depthwise_macs\":" << s.depthwise_macs << ",\"memory\":{";
         const auto port = model.memory(core);
         channels_json(stream, c, port, total.cycles, false);
         if (axi) stream << ",\"dram_bytes\":" << port.dram_bytes;
@@ -571,7 +578,10 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
     const auto cores = model.cores();
     // Utilizations are the mean over cores; the peak rates are the cluster's.
     const auto core_cycles = static_cast<double>(npu::checked_mul(s.cycles, cores));
+    // The peak of the datapath that runs the problem; the depthwise datapath's
+    // rate and MACs are also reported on their own.
     const auto peak_macs = npu::checked_mul(npu::peak_macs_per_cycle(c), cores);
+    const auto depthwise_peak = npu::checked_mul(c.arch.compute.depthwise_macs_per_cycle, cores);
     // Each core's busiest resource, and the DRAM floor all cores share.
     std::uint64_t lower_bound = 0;
     for (std::uint64_t core = 0; core < cores; ++core) {
@@ -607,6 +617,15 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
         << ",\n\"weight_cache_misses\":" << s.weight_cache_misses
         << ",\n\"weight_bytes_saved\":" << s.weight_bytes_saved
         << ",\n\"peak_cached_weight_bytes\":" << s.peak_cached_weight_bytes
+        << ",\n\"activation_read_bytes\":" << s.activation_read_bytes
+        << ",\n\"activation_cache_hits\":" << s.activation_cache_hits
+        << ",\n\"activation_cache_misses\":" << s.activation_cache_misses
+        << ",\n\"activation_bytes_saved\":" << s.activation_bytes_saved
+        << ",\n\"peak_cached_activation_bytes\":" << s.peak_cached_activation_bytes
+        << ",\n\"depthwise_macs\":" << s.depthwise_macs
+        << ",\n\"depthwise_peak_macs_per_cycle\":" << depthwise_peak
+        << ",\n\"depthwise_mac_utilization\":"
+        << fraction(s.depthwise_macs, npu::checked_mul(depthwise_peak, s.cycles))
         << ",\n\"scratchpad_bytes\":" << npu::scratchpad_bytes(c)
         << ",\n\"numerics\":\"" << numerics_name(c) << '"';
     if (c.sim.timing_only) std::cout << ",\n\"output_hash\":null,\n\"numerical_match\":null";

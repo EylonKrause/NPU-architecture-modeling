@@ -70,6 +70,20 @@ std::string enum_choices() {
     return result;
 }
 
+// Implicit convolution: the activation operand is the im2col view of an NHWC
+// INT8 input tensor of input_h x input_w x input_c at the activation base
+// address. Output pixel (oy, ox) is GEMM row oy * W_o + ox; a group's K index
+// is (ky * kernel_w + kx) * C_g + ci with C_g = input_c / groups, so a kernel
+// row is kernel_w * C_g consecutive K. Pixels outside the input read the input
+// zero point. All three input extents zero is a plain GEMM operand.
+struct ConvConfig {
+    std::uint64_t input_h = 0, input_w = 0, input_c = 0;
+    std::uint64_t kernel_h = 1, kernel_w = 1;
+    std::uint64_t stride_h = 1, stride_w = 1;
+    std::uint64_t dilation_h = 1, dilation_w = 1;
+    std::uint64_t pad_top = 0, pad_left = 0, pad_bottom = 0, pad_right = 0;
+};
+
 // G independent GEMMs share M. Activations are M x (G*K) row-major, weights are
 // G blocks of K x N, bias and outputs hold G*N channels. Depthwise convolution
 // is G channels with N = 1 and K = kh*kw.
@@ -78,6 +92,7 @@ struct ShapeConfig {
     std::uint64_t groups = 1;
     // Synthetic tensors use the low 32 bits.
     std::uint64_t seed = 1;
+    ConvConfig conv{};
 };
 
 struct ComputeConfig {
@@ -88,6 +103,9 @@ struct ComputeConfig {
     Dataflow dataflow = Dataflow::OutputStationary;
     std::uint64_t pipeline_cycles = 4;
     std::uint64_t weight_decode_values_per_cycle = 16;
+    // Channel-wise datapath for depthwise problems (G > 1, N = 1): its tiles
+    // span tile_n consecutive groups. Zero runs them as grouped GEMMs.
+    std::uint64_t depthwise_macs_per_cycle = 0;
 };
 
 // AXI4 port of the axi memory model: independent read (AR/R) and write
@@ -118,6 +136,9 @@ struct ArchConfig {
     MemoryConfig memory;
     std::uint64_t sram_bytes = 262144;
     std::uint64_t weight_cache_bytes = 0;
+    // LRU of activation panels keyed by (group or channel tile, row tile,
+    // reduction block): column tiles of one row tile reuse its panels.
+    std::uint64_t activation_cache_bytes = 0;
     double frequency_mhz = 200.0;
     // Core pipelines; each owns its slots, SRAM budget, weight cache and
     // memory port, and all share one DRAM timeline (axi model only).

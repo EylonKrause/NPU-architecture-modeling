@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="500" viewBox="0 0 820 500" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>MAC utilisation vs per-core SRAM</title>
+<rect width="820" height="500" fill="#ffffff"/>
+<defs><clipPath id="s10-plot"><rect x="68.76" y="58" width="470.64" height="388"/></clipPath></defs>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">MAC utilisation vs per-core SRAM</text>
+<text x="14" y="52" font-size="12" fill="#52514e">cores of client-16c and workstation-32c; tiles and cache split from npuperf.mapper per size</text>
+<g stroke="#e6e5df" stroke-width="1" fill="none">
+<line x1="68.76" y1="446" x2="537.4" y2="446"/>
+<line x1="68.76" y1="381.67" x2="537.4" y2="381.67"/>
+<line x1="68.76" y1="317.33" x2="537.4" y2="317.33"/>
+<line x1="68.76" y1="253" x2="537.4" y2="253"/>
+<line x1="68.76" y1="188.67" x2="537.4" y2="188.67"/>
+<line x1="68.76" y1="124.33" x2="537.4" y2="124.33"/>
+<line x1="68.76" y1="60" x2="537.4" y2="60"/>
+<line x1="68.76" y1="60" x2="68.76" y2="446"/>
+<line x1="146.87" y1="60" x2="146.87" y2="446"/>
+<line x1="224.97" y1="60" x2="224.97" y2="446"/>
+<line x1="303.08" y1="60" x2="303.08" y2="446"/>
+<line x1="381.19" y1="60" x2="381.19" y2="446"/>
+<line x1="459.29" y1="60" x2="459.29" y2="446"/>
+<line x1="537.4" y1="60" x2="537.4" y2="446"/>
+</g>
+<g stroke="#9c9a93" stroke-width="1" fill="none">
+<line x1="68.76" y1="446" x2="537.4" y2="446"/>
+<line x1="68.76" y1="60" x2="68.76" y2="446"/>
+<line x1="68.76" y1="446" x2="68.76" y2="451"/>
+<line x1="146.87" y1="446" x2="146.87" y2="451"/>
+<line x1="224.97" y1="446" x2="224.97" y2="451"/>
+<line x1="303.08" y1="446" x2="303.08" y2="451"/>
+<line x1="381.19" y1="446" x2="381.19" y2="451"/>
+<line x1="459.29" y1="446" x2="459.29" y2="451"/>
+<line x1="537.4" y1="446" x2="537.4" y2="451"/>
+<line x1="63.76" y1="446" x2="68.76" y2="446"/>
+<line x1="63.76" y1="381.67" x2="68.76" y2="381.67"/>
+<line x1="63.76" y1="317.33" x2="68.76" y2="317.33"/>
+<line x1="63.76" y1="253" x2="68.76" y2="253"/>
+<line x1="63.76" y1="188.67" x2="68.76" y2="188.67"/>
+<line x1="63.76" y1="124.33" x2="68.76" y2="124.33"/>
+<line x1="63.76" y1="60" x2="68.76" y2="60"/>
+</g>
+<g style="font-variant-numeric: tabular-nums">
+<text x="68.76" y="465" font-size="12" fill="#52514e" text-anchor="middle">64</text>
+<text x="146.87" y="465" font-size="12" fill="#52514e" text-anchor="middle">128</text>
+<text x="224.97" y="465" font-size="12" fill="#52514e" text-anchor="middle">256</text>
+<text x="303.08" y="465" font-size="12" fill="#52514e" text-anchor="middle">512</text>
+<text x="381.19" y="465" font-size="12" fill="#52514e" text-anchor="middle">1024</text>
+<text x="459.29" y="465" font-size="12" fill="#52514e" text-anchor="middle">2048</text>
+<text x="537.4" y="465" font-size="12" fill="#52514e" text-anchor="middle">4096</text>
+<text x="59.76" y="450.2" font-size="12" fill="#52514e" text-anchor="end">0.00</text>
+<text x="59.76" y="385.87" font-size="12" fill="#52514e" text-anchor="end">0.05</text>
+<text x="59.76" y="321.53" font-size="12" fill="#52514e" text-anchor="end">0.10</text>
+<text x="59.76" y="257.2" font-size="12" fill="#52514e" text-anchor="end">0.15</text>
+<text x="59.76" y="192.87" font-size="12" fill="#52514e" text-anchor="end">0.20</text>
+<text x="59.76" y="128.53" font-size="12" fill="#52514e" text-anchor="end">0.25</text>
+<text x="59.76" y="64.2" font-size="12" fill="#52514e" text-anchor="end">0.30</text>
+</g>
+<text x="303.08" y="488" font-size="13" fill="#0b0b0b" text-anchor="middle">SRAM per core (KiB)</text>
+<text x="21.2" y="253" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 253)">MAC utilisation</text>
+<g clip-path="url(#s10-plot)">
+<line x1="224.97" y1="60" x2="224.97" y2="446" stroke="#52514e" stroke-width="1.25" stroke-dasharray="5 4"/>
+<path d="M68.76,321.06 L146.87,248.28 L224.97,153.92 L303.08,146.86 L381.19,146.27 L459.29,146.27 L537.4,146.27" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<circle cx="68.76" cy="321.06" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="146.87" cy="248.28" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="224.97" cy="153.92" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="303.08" cy="146.86" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="381.19" cy="146.27" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="459.29" cy="146.27" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="537.4" cy="146.27" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M68.76,270.23 L146.87,184.1 L224.97,116.37 L303.08,114.1 L381.19,114.1 L459.29,114.1 L537.4,114.1" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 4"/>
+<circle cx="68.76" cy="270.23" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="146.87" cy="184.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="224.97" cy="116.37" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="303.08" cy="114.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="381.19" cy="114.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="459.29" cy="114.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<circle cx="537.4" cy="114.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M68.76,381.86 L146.87,375.44 L224.97,372.97 L303.08,372.85 L381.19,372.85 L459.29,372.85 L537.4,372.85" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+<rect x="65.16" y="378.26" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="143.27" y="371.84" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="221.37" y="369.37" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="299.48" y="369.25" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="377.59" y="369.25" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="455.69" y="369.25" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="533.8" y="369.25" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<path d="M68.76,372.8 L146.87,366.45 L224.97,365.87 L303.08,365.87 L381.19,365.87 L459.29,365.87 L537.4,365.87" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="7 4"/>
+<rect x="65.16" y="369.2" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="143.27" y="362.85" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="221.37" y="362.27" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="299.48" y="362.27" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="377.59" y="362.27" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="455.69" y="362.27" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<rect x="533.8" y="362.27" width="7.2" height="7.2" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+</g>
+<text x="229.97" y="73" font-size="11" fill="#52514e">rule picks 256 KiB</text>
+<g transform="translate(555.4,68)">
+<rect width="252.6" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<line x1="6" y1="14.5" x2="42" y2="14.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<circle cx="24" cy="14.5" r="3.5" fill="#2a78d6" stroke="none"/>
+<text x="50" y="18.7" font-size="12" fill="#0b0b0b">ResNet-50 v1.5, client-16c</text>
+<line x1="6" y1="33.5" x2="42" y2="33.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round" stroke-dasharray="7 4"/>
+<circle cx="24" cy="33.5" r="3.5" fill="#2a78d6" stroke="none"/>
+<text x="50" y="37.7" font-size="12" fill="#0b0b0b">ResNet-50 v1.5, workstation-32c</text>
+<line x1="6" y1="52.5" x2="42" y2="52.5" stroke="#eb6834" stroke-width="2" stroke-linecap="round"/>
+<rect x="20.85" y="49.35" width="6.3" height="6.3" fill="#eb6834" stroke="none"/>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">MobileNetV2, client-16c</text>
+<line x1="6" y1="71.5" x2="42" y2="71.5" stroke="#eb6834" stroke-width="2" stroke-linecap="round" stroke-dasharray="7 4"/>
+<rect x="20.85" y="68.35" width="6.3" height="6.3" fill="#eb6834" stroke="none"/>
+<text x="50" y="75.7" font-size="12" fill="#0b0b0b">MobileNetV2, workstation-32c</text>
+</g>
+</svg>

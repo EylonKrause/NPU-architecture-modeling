@@ -124,16 +124,28 @@ def _parse_set(text: str) -> tuple[str, Any]:
     return key.strip().replace("-", "_"), sim.from_flags(["--x", value])["x"]
 
 
+def lowered(design: analytic.Design, gemm: workloads.Gemm) -> tuple[analytic.Design, bool]:
+    """``design`` running ``gemm`` and whether on its conv geometry: a convolution runs on
+    its input footprint when tile_k is 0 or whole kernel rows, else on its im2col operand."""
+    call = design.replace(**{**gemm.flags(conv=False), "groups": gemm.groups})
+    if not gemm.conv:
+        return call, False
+    conv = call.replace(**gemm.conv_flags())
+    if design.tile_k % analytic.conv_geometry(conv).kernel_row_k:
+        return call, False
+    return conv, True
+
+
 def analyse_workload(design: analytic.Design, workload: dict[str, Any], timing_only: bool = True,
                      **options: Any) -> list[dict[str, Any]]:
     """One row per npu-sim call; ``options`` are ``workloads.iter_calls`` options."""
     rows = []
     tiles = {"tile_m": design.tile_m, "tile_n": design.tile_n, "tile_k": design.tile_k}
     for layer, gemm in workloads.iter_calls(workload, timing_only, **{**tiles, **options}):
-        call = design.replace(m=gemm.m, n=gemm.n, k=gemm.k, groups=gemm.groups)
+        call, conv = lowered(design, gemm)
         result = analytic.analyze(call)
         rows.append({"layer": layer["name"], "class": gemm.op_class, "gemm": gemm,
-                     "analysis": result})
+                     "conv": conv, "analysis": result})
     return rows
 
 
@@ -179,7 +191,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                      "bound": result.bound, "estimate_cycles": result.estimate_cycles * gemm.calls}
             points.append(from_analysis(result, row["layer"], row["class"]))
             if binary is not None:
-                run_flags = {**flags, **gemm.flags(), "timing_only": timing_only or None}
+                run_flags = {**flags, **gemm.flags(conv=row["conv"]),
+                             "timing_only": timing_only or None}
                 simulated = sim.run(run_flags, binary, args.timeout)
                 entry["simulated_cycles"] = simulated.cycles * gemm.calls
                 points.append(from_result(simulated, row["layer"]))

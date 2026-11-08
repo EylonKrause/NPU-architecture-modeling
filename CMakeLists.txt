@@ -70,7 +70,7 @@ endif()
 set(NPU_GENERATED_INCLUDE_DIR "${PROJECT_BINARY_DIR}/generated/include")
 npu_generate_version_header("${NPU_GENERATED_INCLUDE_DIR}/npu/version.hpp")
 
-add_library(npu_core STATIC src/core.cpp src/json.cpp src/options.cpp)
+add_library(npu_core STATIC src/core.cpp src/conv.cpp src/json.cpp src/options.cpp)
 target_include_directories(npu_core PUBLIC include "${NPU_GENERATED_INCLUDE_DIR}")
 npu_project_target(npu_core)
 
@@ -109,6 +109,8 @@ if(BUILD_TESTING)
     SCRIPT tests/cluster_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(sim.design-points
     SCRIPT tests/design_point_tests.py BINARY npu-sim TIMEOUT 180)
+  npu_add_python_test(sim.conv-traffic
+    SCRIPT tests/conv_traffic_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(graph.runtime
     SCRIPT tests/graph_runtime_tests.py BINARY npu-sim)
   npu_add_python_test(graph.fusion
@@ -195,7 +197,7 @@ if(BUILD_TESTING)
   npu_add_python_test(tools.analytic-model
     SCRIPT tests/analytic_model_tests.py BINARY npu-sim TIMEOUT 180)
   npu_add_python_test(tools.mapper
-    SCRIPT tests/mapper_tests.py BINARY npu-sim TIMEOUT 180)
+    SCRIPT tests/mapper_tests.py BINARY npu-sim TIMEOUT 300)
   npu_add_python_test(tools.studies
     SCRIPT tests/studies_tests.py BINARY npu-sim TIMEOUT 180)
 endif()

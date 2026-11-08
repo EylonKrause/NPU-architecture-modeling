@@ -16,6 +16,13 @@ tests/design_point_tests.py:
   burst_rule   the shortest power-of-two burst with which the read outstanding limit covers
                the read latency, so a long run streams one beat per cycle
   weight cache the SRAM the slots leave free (cache_rule)
+  depthwise    on the two points sized from Arm parts, the 3x3 depthwise rate of Arm's
+               performance model of that part (vela_depthwise_rate)
+
+Two cluster fields have no public figure and are sized by simulation, each study failing
+when a config disagrees with its rule: the depthwise datapath rate (npuperf.studies S9,
+which reports its rule beside the Arm-model rate on the other two points) and the cores'
+SRAM (S10).
 """
 from __future__ import annotations
 
@@ -36,13 +43,24 @@ MAX_DIMENSION = 1 << 20
 MAX_BURST_BEATS = 256
 TEXT_KEYS = ("name", "description")
 # Minimum efficient burst of the memory behind each point's port, in bytes: Vela 5.2.0
-# Sram_burst_length for edge-256 (its port reads system SRAM) and Dram_burst_length for the
-# rest (docs/design-points.md). tile_rule and npuperf.mapper keep panels at least this deep.
-MIN_PANEL_DEPTH = {"edge-256": 32, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
-# The memory behind each point's AXI port: edge-256 follows Vela's Sram_Only memory mode, every
-# tensor in system SRAM; the others stream every tensor from DRAM.
-EXTERNAL_MEMORY = {"edge-256": "system SRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
+# Dram_burst_length, as every point streams its tensors from DRAM (docs/design-points.md).
+# tile_rule and npuperf.mapper keep panels at least this deep.
+MIN_PANEL_DEPTH = {"edge-256": 128, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
+# The memory behind each point's AXI port.
+EXTERNAL_MEMORY = {"edge-256": "DRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
                    "workstation-32c": "DRAM"}
+# Output microblock (height, width, channels) the depthwise operation runs on in Arm's
+# performance model of the part a point is sized from: Vela 5.2.0 architecture_features.py
+# for the Ethos-U55-256, and Regor ethos_u85.cpp for the Ethos-U85-2048, whose 8-bit
+# depthwise runs on its 4x4x16 microblock only. The clusters have no such model.
+DEPTHWISE_UBLOCK = {"edge-256": (2, 2, 8), "mobile-2k": (4, 4, 16)}
+# Both models (Vela npu_performance.py _estimate_conv_cycles, Regor
+# ethos_u85_performance.cpp EstimateMacCyclesPerBlock) take 4 cycles per microblock for each
+# step of 4 kernel taps.
+DEPTHWISE_TAPS_PER_STEP = 4
+DEPTHWISE_CYCLES_PER_STEP = 4
+# 3x3: every depthwise layer of the bundled workloads.
+DEPTHWISE_KERNEL_TAPS = 9
 
 
 def config_path(name: str | Path) -> Path:
@@ -59,6 +77,23 @@ def config_path(name: str | Path) -> Path:
 def min_panel_depth(name: str) -> int:
     """MIN_PANEL_DEPTH of a design point; 32 B (the smaller Vela burst) for any other."""
     return MIN_PANEL_DEPTH.get(name, 32)
+
+
+def vela_depthwise_rate(name: str, taps: int = DEPTHWISE_KERNEL_TAPS) -> int | None:
+    """MAC/cycle of a ``taps``-tap depthwise kernel in Arm's performance model of the part
+    ``name`` is sized from, or None for a point without one. Each step covers 4 taps for
+    every output of the microblock in 4 cycles, so a 3x3 kernel takes 3 steps and fills 9 of
+    their 12 tap slots: three quarters of the microblock's output count. npu-sim's
+    depthwise datapath has no kernel step, so the configs take this rate rather than the
+    microblock's peak."""
+    block = DEPTHWISE_UBLOCK.get(name)
+    if block is None:
+        return None
+    steps = -(-taps // DEPTHWISE_TAPS_PER_STEP)
+    macs, cycles = math.prod(block) * taps, DEPTHWISE_CYCLES_PER_STEP * steps
+    if macs % cycles:
+        raise ValueError(f"{name}: {macs} MACs over {cycles} cycles is no integer rate")
+    return macs // cycles
 
 
 def external_memory(name: str) -> str:
@@ -185,6 +220,7 @@ class Summary:
     peak_tops: float
     sram_bytes: int              # per core
     weight_cache_bytes: int      # per core, inside sram_bytes
+    depthwise_macs_per_cycle: int  # per core
     axi_bits: int                # per core port
     dram_bytes_per_cycle: int
     dram_gbps: float
@@ -203,7 +239,8 @@ def summary(document: Mapping[str, Any]) -> Summary:
         cores=d.cores, frequency_mhz=d.frequency_mhz,
         peak_tops=OPS_PER_MAC * peak * d.frequency_mhz / 1e6,
         sram_bytes=d.sram_bytes, weight_cache_bytes=d.weight_cache_bytes,
-        axi_bits=8 * d.axi_data_bytes, dram_bytes_per_cycle=d.dram_bytes_per_cycle,
+        depthwise_macs_per_cycle=d.depthwise_macs_per_cycle, axi_bits=8 * d.axi_data_bytes,
+        dram_bytes_per_cycle=d.dram_bytes_per_cycle,
         dram_gbps=d.dram_bytes_per_cycle * d.frequency_mhz / 1e3,
         ridge_macs_per_byte=d.ridge)
 
@@ -215,12 +252,13 @@ def _per_core(cores: int, text: str) -> str:
 def markdown(rows: Sequence[Summary]) -> str:
     """The design-point table of docs/design-points.md."""
     header = ("Design point", "MAC/cycle", "Array", "Cores", "Clock", "Peak TOP/s", "SRAM",
-              "AXI", "DRAM B/cycle", "DRAM GB/s", "Ridge MAC/B")
+              "Depthwise MAC/cycle", "AXI", "DRAM B/cycle", "DRAM GB/s", "Ridge MAC/B")
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for row in rows:
         cells = (f"`{row.name}`", str(row.macs_per_cycle), row.array, str(row.cores),
                  f"{row.frequency_mhz:g} MHz", f"{row.peak_tops:.6g}",
                  _per_core(row.cores, f"{row.sram_bytes / 1024:g} KiB"),
+                 _per_core(row.cores, str(row.depthwise_macs_per_cycle)),
                  _per_core(row.cores, f"{row.axi_bits}-bit"), str(row.dram_bytes_per_cycle),
                  f"{row.dram_gbps:.6g}", f"{row.ridge_macs_per_byte:.4g}")
         lines.append("| " + " | ".join(cells) + " |")

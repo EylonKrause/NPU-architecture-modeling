@@ -9,14 +9,16 @@ Conventions shared by the studies:
     docs/design-points.md). A layer runs on its point with the tiles npuperf.mapper picks.
   - Only the GEMM layers of a workload run; vector operators (softmax, normalisation,
     pooling, residual adds) are not modeled. A layer with ``calls`` identical instances
-    runs once and counts ``calls`` times. Depthwise convolution is the im2col lowering of
-    npuperf.workloads (G groups of N = 1, K = kh*kw): every activation-panel row is a
-    kh*kw-byte run and every output row a 1-byte run per group.
+    runs once and counts ``calls`` times. A convolution runs on its NHWC input footprint
+    (npuperf.workloads conv geometry), or a 1x1 convolution on its plain operand when the
+    mapper picks it; depthwise convolution runs on each point's depthwise datapath, its
+    rate sized by S9.
   - A call runs bit-exact (tensors, numerics, reference) when it fits the functional limits
     and FUNCTIONAL_MACS; otherwise --timing-only. Dense timing does not depend on the data.
-  - External-memory bytes are the bytes the DRAM timeline charges (system SRAM on
-    edge-256): whole AXI beats, so a partial beat counts in full.
-  - The LLM workloads run only on points whose external memory is DRAM (Point.runs_llm).
+  - External-memory bytes are the bytes the DRAM timeline charges: whole AXI beats, so a
+    partial beat counts in full.
+  - MAC utilisation is MACs over cycles times the array's peak, the depthwise layers'
+    MACs included.
   - One MAC is two operations (TOP/s).
   - A result that breaks a physical limit (above a roof, utilisation above 1, speedup above
     the core count, bandwidth above the bus) stops the run with a ``SanityError``.
@@ -24,6 +26,7 @@ Conventions shared by the studies:
 from __future__ import annotations
 
 import concurrent.futures
+import dataclasses
 import json
 import math
 import random
@@ -62,8 +65,9 @@ def require(condition: bool, message: str) -> None:
 
 @dataclass
 class Context:
-    """The simulator binary and a cache of results keyed by their flags, shared by every
-    study of one reproduce run, so a run two studies need executes once."""
+    """The simulator binary and caches of results keyed by their flags and of mapped calls
+    keyed by their task, shared by every study of one reproduce run, so a run or a mapping
+    two studies need happens once."""
 
     binary: Path
     jobs: int = 1
@@ -71,6 +75,26 @@ class Context:
     work: Path = RESULTS_DIR
     cache: dict[str, dict] = field(default_factory=dict)
     extra_runs: int = 0       # runs made outside run_all (the autotune search)
+    mapped: dict = field(default_factory=dict)
+
+    def parallel(self, function: Callable[[Any], Any], items: Sequence[Any]) -> list[Any]:
+        """``function`` of every item, in order; up to ``jobs`` at a time, each in its own
+        process (the mapper and the analytic model are pure Python). Results are cached by
+        function and item."""
+        name = function.__qualname__
+        missing = [item for item in dict.fromkeys(items) if (name, item) not in self.mapped]
+        if len(missing) > 1 and self.jobs > 1:
+            with concurrent.futures.ProcessPoolExecutor(min(self.jobs, len(missing))) as pool:
+                for item, value in zip(missing, pool.map(function, missing)):
+                    self.mapped[(name, item)] = value
+        else:
+            for item in missing:
+                self.mapped[(name, item)] = function(item)
+        return [self.mapped[(name, item)] for item in items]
+
+    def layer_flags(self, tasks: Sequence["Task"]) -> list[dict[str, Any]]:
+        """layer_flags of every task, in order, mapped in parallel."""
+        return [dict(flags) for flags in self.parallel(_task_flags, tasks)]
 
     @staticmethod
     def key(flags: Mapping[str, Any]) -> str:
@@ -134,13 +158,35 @@ def functional(gemm: workloads.Gemm, mapping: mapper.Mapping) -> bool:
         tile_k=mapping.tile_k)
 
 
+@dataclass(frozen=True)
+class Task:
+    """One call to map: ``layer_flags(point, gemm, weight_bits, **dict(changes))``."""
+
+    point: Point
+    gemm: workloads.Gemm
+    weight_bits: int = 8
+    changes: tuple[tuple[str, Any], ...] = ()
+
+    @classmethod
+    def of(cls, point: Point, gemm: workloads.Gemm, weight_bits: int = 8,
+           **changes: Any) -> "Task":
+        # The mapping depends on the shape and geometry only, so repeated layers map once.
+        shape = dataclasses.replace(gemm, name="", calls=1, op="")
+        return cls(point, shape, weight_bits, tuple(sorted(changes.items())))
+
+
+def _task_flags(task: Task) -> dict[str, Any]:
+    return layer_flags(task.point, task.gemm, task.weight_bits, **dict(task.changes))
+
+
 def layer_flags(point: Point, gemm: workloads.Gemm, weight_bits: int = 8,
                 **design_changes: Any) -> dict[str, Any]:
-    """npu-sim flags of one call of ``gemm`` on ``point`` with the mapper's tiles."""
+    """npu-sim flags of one call of ``gemm`` on ``point`` with the mapper's tiles and
+    lowering."""
     design = point.design.replace(weight_bits=weight_bits, **design_changes)
-    mapping = mapper.map_gemm(design, gemm.m, gemm.n, gemm.k, gemm.groups, point.min_depth)
+    mapping = mapper.map_call(design, gemm, point.min_depth)
     flags = point.flags(**{key: value for key, value in design_changes.items()})
-    flags.update(gemm.flags())
+    flags.update(gemm.flags(conv=mapping.conv))
     flags.update(mapping.flags())
     if weight_bits != 8:
         flags["weight_bits"] = weight_bits
@@ -227,16 +273,42 @@ class Call:
     flags: dict
 
 
-def network_calls(point: Point, workload_name: str, network: str,
-                  weight_bits: int = 8) -> list[Call]:
+@dataclass(frozen=True)
+class Planned:
+    """A call before its mapping: ``task`` gives its flags."""
+
+    network: str
+    layer: dict
+    gemm: workloads.Gemm
+    task: Task
+
+
+def plan_calls(point: Point, workload_name: str, network: str, weight_bits: int = 8,
+               plain_depthwise: bool = False, **changes: Any) -> list[Planned]:
     """Every call of a workload on ``point``. INT4 applies to weight operands only; an
-    attention matmul's B operand is the KV cache and stays INT8."""
+    attention matmul's B operand is the KV cache and stays INT8. ``plain_depthwise`` runs
+    the depthwise layers on their im2col operand (the lowering without conv geometry)."""
     workload = workloads.load(workload_name)
     calls = []
     for layer, gemm in workloads.iter_calls(workload):
         bits = weight_bits if layer.get("b_operand", "weights") == "weights" else 8
-        calls.append(Call(network, layer, gemm, layer_flags(point, gemm, bits)))
+        if plain_depthwise and layer["op"] == "depthwise_conv2d":
+            gemm = gemm.plain()
+        calls.append(Planned(network, layer, gemm, Task.of(point, gemm, bits, **changes)))
     return calls
+
+
+def resolve(ctx: Context, plans: Mapping[Any, Sequence[Planned]]) -> dict[Any, list[Call]]:
+    """The Calls of every plan, mapped in one batch."""
+    flat = [planned for calls in plans.values() for planned in calls]
+    flags = iter(ctx.layer_flags([planned.task for planned in flat]))
+    return {key: [Call(p.network, p.layer, p.gemm, next(flags)) for p in calls]
+            for key, calls in plans.items()}
+
+
+def network_calls(ctx: Context, point: Point, workload_name: str, network: str,
+                  weight_bits: int = 8) -> list[Call]:
+    return resolve(ctx, {0: plan_calls(point, workload_name, network, weight_bits)})[0]
 
 
 @dataclass(frozen=True)
@@ -268,17 +340,18 @@ def totals(calls: Sequence[Call], results: Sequence[Mapping[str, Any]]) -> Total
 
 def run_networks(ctx: Context, points: Sequence[Point]) -> dict[tuple[str, str, int], tuple]:
     """(point, network, weight bits) -> (calls, results) for the S1 and S2 workloads."""
-    plan: dict[tuple[str, str, int], list[Call]] = {}
+    plans: dict[tuple[str, str, int], list[Planned]] = {}
     for point in points:
         for name, network in NETWORKS.items():
-            plan[(point.name, network, 8)] = network_calls(point, name, network)
+            plans[(point.name, network, 8)] = plan_calls(point, name, network)
         if not point.runs_llm:
             continue
         for bits in (8, 4):
-            plan[(point.name, "Llama decode", bits)] = network_calls(point, DECODE,
-                                                                    "Llama decode", bits)
-            plan[(point.name, "Llama prefill", bits)] = network_calls(point, PREFILL,
-                                                                     "Llama prefill", bits)
+            plans[(point.name, "Llama decode", bits)] = plan_calls(point, DECODE,
+                                                                  "Llama decode", bits)
+            plans[(point.name, "Llama prefill", bits)] = plan_calls(point, PREFILL,
+                                                                   "Llama prefill", bits)
+    plan = resolve(ctx, plans)
     flat = [call.flags for calls in plan.values() for call in calls]
     results = iter(ctx.run_all(flat))
     out = {}
@@ -320,45 +393,70 @@ def depthwise_row(point: Point, calls: Sequence[Call],
     rest = [pair for pair in pairs if pair[0].layer["op"] != "depthwise_conv2d"]
     whole, dw = totals(calls, results), totals(*zip(*depthwise))
     other = totals(*zip(*rest))
-    util = other.macs / (other.cycles * point.design.peak_macs_per_cycle)
+    util = other.macs / (other.cycles * point.design.array_macs_per_cycle)
     record = {"point": point.name, "cycles": whole.cycles, "depthwise_cycles": dw.cycles,
+              "depthwise_macs_per_cycle": point.design.depthwise_macs_per_cycle,
               "dram_bytes": whole.dram_bytes, "depthwise_dram_bytes": dw.dram_bytes,
               "depthwise_read_efficiency": burst_efficiency(depthwise, "read"),
               "depthwise_write_efficiency": burst_efficiency(depthwise, "write"),
               "other_cycles": other.cycles, "other_macs": other.macs,
               "other_mac_utilisation": util}
-    row = [f"`{point.name}`", fmt(whole.latency_ms(point.frequency_mhz)),
+    row = [f"`{point.name}`", f"{point.design.depthwise_macs_per_cycle:,}",
+           fmt(whole.latency_ms(point.frequency_mhz)),
            pct(dw.cycles / whole.cycles), pct(dw.dram_bytes / whole.dram_bytes),
            pct(record["depthwise_read_efficiency"]), pct(record["depthwise_write_efficiency"]),
            fmt(other.latency_ms(point.frequency_mhz)), pct(util)]
     return row, record
 
 
+def half_sram_decode(ctx: Context, points: Sequence[Point]) -> dict[str, Totals]:
+    """INT8 decode totals of every LLM point with half its SRAM per core."""
+    plans = {point.name: plan_calls(point, DECODE, "Llama decode", 8,
+                                    sram_bytes=point.design.sram_bytes // 2)
+             for point in points if point.runs_llm}
+    planned = resolve(ctx, plans)
+    results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
+    out = {}
+    for name, calls in planned.items():
+        chunk = [next(results) for _ in calls]
+        for call, result in zip(calls, chunk):
+            check_result(result, f"{name} half-SRAM decode {call.layer['name']}")
+        out[name] = totals(calls, chunk)
+    return out
+
+
 def s1_networks(ctx: Context) -> StudyOutput:
     points = design_points()
     runs = run_networks(ctx, points)
+    half = half_sram_decode(ctx, points)
     out = StudyOutput()
     rows, llm, depthwise, raw = [], [], [], []
     weights = {network: network_weight_bytes(name) for name, network in NETWORKS.items()}
     for point in points:
-        peak = point.design.peak_macs_per_cycle
+        peak = point.design.array_macs_per_cycle
+        latency = {}
         for network in NETWORKS.values():
             calls, results = runs[(point.name, network, 8)]
             t = totals(calls, results)
             ms = t.latency_ms(point.frequency_mhz)
+            latency[network] = ms
             util = t.macs / (t.cycles * peak)
             require(util <= 1, f"{point.name} {network}: utilisation {util}")
             memory = t.bound_calls["bandwidth"] + t.bound_calls["latency"]
-            rows.append([f"`{point.name}`", network, point.memory,
+            rows.append([f"`{point.name}`", network,
                          fmt(weights[network] / 1e6), fmt(ms), fmt(1e3 / ms),
                          fmt(OPS_PER_MAC * t.macs / (ms * 1e9)), pct(util),
                          fmt(t.dram_bytes / 1e6), pct(t.bound_calls["compute"] / t.calls, 0),
                          pct(memory / t.calls, 0)])
-            raw.append({"point": point.name, "network": network, "memory": point.memory,
+            raw.append({"point": point.name, "network": network,
                         "weight_bytes": weights[network], "cycles": t.cycles,
                         "macs": t.macs, "dram_bytes": t.dram_bytes, "latency_ms": ms,
                         "bound_calls": t.bound_calls, "calls": t.calls,
                         "bit_exact_calls": t.bit_exact_calls})
+        # MobileNetV2 has 13x fewer MACs and 7x fewer weight bytes than ResNet-50.
+        require(latency["MobileNetV2"] < latency["ResNet-50 v1.5"],
+                f"{point.name}: MobileNetV2 {latency['MobileNetV2']} ms is not below ResNet-50 "
+                f"{latency['ResNet-50 v1.5']} ms")
         row, record = depthwise_row(point, *runs[(point.name, "MobileNetV2", 8)])
         depthwise.append(row)
         raw.append({"network": "MobileNetV2 depthwise split", **record})
@@ -372,11 +470,25 @@ def s1_networks(ctx: Context) -> StudyOutput:
         for bits in (8, 4):
             require(gbps[bits] <= peak_gbps * (1 + 1e-9),
                     f"{point.name} decode INT{bits}: {gbps[bits]} GB/s above {peak_gbps}")
+        # Mapping checks. Every candidate tiling of half the SRAM exists with the full SRAM,
+        # its caches larger, and the mapper keeps the fastest replay of its candidates; INT4
+        # halves only the weight bytes of a decode that streams them.
+        require(decode[8].cycles <= half[point.name].cycles,
+                f"{point.name} decode INT8: {decode[8].cycles} cycles, slower than "
+                f"{half[point.name].cycles} with half the SRAM")
+        require(decode[8].cycles <= 2 * decode[4].cycles,
+                f"{point.name} decode: INT4 speedup {decode[8].cycles / decode[4].cycles:.3f}"
+                f"x above the 2x of halving the weight bytes")
         llm.append([f"`{point.name}`", fmt(tps[8]), fmt(tps[4]), f"{tps[4] / tps[8]:.2f}x",
                     fmt(decode[8].dram_bytes / 1e6), pct(gbps[8] / peak_gbps),
                     fmt(prefill[8].latency_ms(point.frequency_mhz)),
                     fmt(prefill[4].latency_ms(point.frequency_mhz)),
-                    pct(prefill[8].macs / (prefill[8].cycles * point.design.peak_macs_per_cycle))])
+                    pct(prefill[8].macs / (prefill[8].cycles
+                                           * point.design.array_macs_per_cycle))])
+        raw.append({"point": point.name, "network": "Llama decode, half the SRAM",
+                    "weight_bits": 8, "sram_bytes": point.design.sram_bytes // 2,
+                    "cycles": half[point.name].cycles,
+                    "dram_bytes": half[point.name].dram_bytes})
         for kind, table in (("decode", decode), ("prefill", prefill)):
             for bits, t in table.items():
                 raw.append({"point": point.name, "network": f"Llama {kind}",
@@ -386,15 +498,14 @@ def s1_networks(ctx: Context) -> StudyOutput:
                             "bound_calls": t.bound_calls, "calls": t.calls,
                             "bit_exact_calls": t.bit_exact_calls})
     out.tables["s1-networks"] = markdown_table(
-        ["Design point", "Network", "External memory", "Weights (MB)", "Latency (ms)",
-         "Inferences/s", "Achieved TOP/s", "MAC utilisation", "External memory MB/inference",
-         "Compute-bound layers", "Memory-bound layers"], rows,
-        [False, False, False] + [True] * 8)
+        ["Design point", "Network", "Weights (MB)", "Latency (ms)", "Inferences/s",
+         "Achieved TOP/s", "MAC utilisation", "DRAM MB/inference", "Compute-bound layers",
+         "Memory-bound layers"], rows, [False, False] + [True] * 8)
     out.tables["s1-depthwise"] = markdown_table(
-        ["Design point", "MobileNetV2 latency (ms)", "Depthwise share of cycles",
-         "Depthwise share of external-memory bytes", "Depthwise read burst efficiency",
-         "Depthwise write burst efficiency", "Latency without depthwise (ms)",
-         "MAC utilisation without depthwise"], depthwise)
+        ["Design point", "Depthwise MAC/cycle per core", "MobileNetV2 latency (ms)",
+         "Depthwise share of cycles", "Depthwise share of DRAM bytes",
+         "Depthwise read burst efficiency", "Depthwise write burst efficiency",
+         "Latency without depthwise (ms)", "MAC utilisation without depthwise"], depthwise)
     out.tables["s1-llm"] = markdown_table(
         ["Design point", "Decode tokens/s INT8", "Decode tokens/s INT4", "INT4 speedup",
          "Decode DRAM MB/token INT8", "Decode DRAM rate used INT8", "Prefill TTFT INT8 (ms)",
@@ -421,7 +532,9 @@ def s2_roofline(ctx: Context) -> StudyOutput:
             for call, result in zip(calls, results):
                 intensity = result["macs"] / dram_bytes(result)
                 achieved = result["macs"] / result["cycles"]
-                roof = analytic.attainable(point.design, intensity)
+                # The roof of the datapath the call ran on: the depthwise datapath's peak
+                # for a channel-wise call.
+                roof = analytic.attainable(analytic.Design.from_result(result), intensity)
                 require(achieved <= roof * (1 + 1e-12),
                         f"{point.name} {network} {call.layer['name']}: {achieved} MAC/cycle "
                         f"above the {roof} roof")
@@ -438,6 +551,9 @@ def s2_roofline(ctx: Context) -> StudyOutput:
         fig = roofline.figure(d, marks, title=f"Roofline: {point.name}", subtitle=subtitle,
                               label_points=False, width=820, height=500,
                               group_order=NETWORK_ORDER, hollow=True)
+        depthwise = d.depthwise_macs_per_cycle * d.cores
+        fig.hline(depthwise, f"depthwise datapath {depthwise:,} MAC/cycle",
+                  color=svg.INK_SECONDARY, dash="2 3", width=1, text_anchor="start")
         fig.x.label = f"arithmetic intensity (MAC per {point.memory} byte moved)"
         fig.legend_position = "right"
         out.figures[f"s2-roofline-{point.name}"] = fig
@@ -509,9 +625,13 @@ S4_RATES = {"client-16c": 100, "workstation-32c": 667}
 
 
 def compulsory_bytes(gemm: workloads.Gemm, weight_bits: int) -> int:
-    """Bytes any schedule moves: every activation, weight, bias and output once."""
+    """Bytes any schedule moves: every input, weight, bias and output once. The input is
+    the activation operand, or a convolution's NHWC input tensor."""
     g = gemm.groups
-    return (gemm.m * g * gemm.k + -(-g * gemm.k * gemm.n * weight_bits // 8) + 4 * g * gemm.n
+    fields = dict(zip(analytic.CONV_FIELDS, gemm.conv))
+    inputs = (fields["conv_input_h"] * fields["conv_input_w"] * fields["conv_input_c"]
+              if gemm.conv else gemm.m * g * gemm.k)
+    return (inputs + -(-g * gemm.k * gemm.n * weight_bits // 8) + 4 * g * gemm.n
             + gemm.m * g * gemm.n)
 
 
@@ -534,28 +654,20 @@ def coincident(curves: Sequence[Sequence[float]]) -> list[list[int]]:
 
 def s4_scaling(ctx: Context) -> StudyOutput:
     point = design_points(["client-16c"])[0]
+    d = point.design
+    core = (f"{d.array_rows}x{d.array_cols} {d.dataflow.upper()}, {8 * d.axi_data_bytes}-bit "
+            f"AXI, {d.sram_bytes / 1024:g} KiB SRAM")
     out = StudyOutput()
     rows, raw = [], []
     for slug, (label, gemm, bits) in zip(("conv", "gemv"), s4_layers()):
         # The mapper picks the tiles of every configuration, so a partition is not held to
         # the unit count of another configuration's tiles.
-        runs, mappings = [], []
-        for rate in S4_RATES.values():
-            for partition in ("m", "n"):
-                for cores in S4_CORES:
-                    design = point.design.replace(cores=cores, partition=partition,
-                                                  dram_bytes_per_cycle=rate, weight_bits=bits)
-                    mapping = mapper.map_gemm(design, gemm.m, gemm.n, gemm.k, gemm.groups,
-                                              point.min_depth)
-                    flags = point.flags(**gemm.flags(), **mapping.flags(), cores=cores,
-                                        partition=partition, dram_bytes_per_cycle=rate,
-                                        timing_only=True)
-                    if bits != 8:
-                        flags["weight_bits"] = bits
-                    runs.append(flags)
-                    mappings.append(mapping)
+        runs = ctx.layer_flags([Task.of(point, gemm, bits, cores=cores, partition=partition,
+                                         dram_bytes_per_cycle=rate)
+                                for rate in S4_RATES.values() for partition in ("m", "n")
+                                for cores in S4_CORES])
         outcomes = ctx.run_all(runs)
-        results = iter(zip(outcomes, mappings))
+        results = iter(zip(outcomes, runs))
         floor = compulsory_bytes(gemm, bits)
         # Every series starts from the same one-core run; the y axis reaches the highest
         # ceiling so each ceiling line is drawn.
@@ -564,8 +676,8 @@ def s4_scaling(ctx: Context) -> StudyOutput:
         top = max(64, 2 ** math.ceil(math.log2(top * 1.15)))
         ticks = [2 ** e for e in range(int(math.log2(top)) + 1)]
         fig = svg.Figure(820, 500, title=f"Cluster speedup: {label}",
-                         subtitle="cores of the client-16c point (32x32 OS, 256-bit AXI, "
-                                  "133.5 KiB SRAM); tiles from npuperf.mapper per configuration",
+                         subtitle=f"cores of the {point.name} point ({core}); tiles from "
+                                  "npuperf.mapper per configuration",
                          x_label="cores", y_label="speedup over one core", x_scale="log",
                          y_scale="log", x_range=(1, 32), y_range=(0.8, top),
                          x_ticks=list(S4_CORES), y_ticks=ticks,
@@ -582,7 +694,7 @@ def s4_scaling(ctx: Context) -> StudyOutput:
                 # beats one-core cycles / (compulsory bytes / DRAM rate).
                 ceiling = one / math.ceil(floor / rate)
                 speedups = []
-                for cores, (result, mapping) in zip(S4_CORES, chunk):
+                for cores, (result, flags) in zip(S4_CORES, chunk):
                     check_result(result, f"S4 {slug} {partition} P={cores} R={rate}")
                     speedup = one / result["cycles"]
                     require(speedup <= cores * (1 + 1e-9),
@@ -592,7 +704,7 @@ def s4_scaling(ctx: Context) -> StudyOutput:
                     speedups.append(speedup)
                     raw.append({"layer": slug, "dram_bytes_per_cycle": rate,
                                 "partition": partition, "cores": cores,
-                                "tile": [mapping.tile_m, mapping.tile_n, mapping.tile_k],
+                                "tile": [flags["tile_m"], flags["tile_n"], flags["tile_k"]],
                                 "cycles": result["cycles"], "speedup": speedup,
                                 "dram_ceiling": ceiling, "dram_bytes": dram_bytes(result),
                                 "units": result["cluster"]["units"],
@@ -637,7 +749,7 @@ def layer_type(layer: Mapping[str, Any]) -> str:
     return f"{layer['kernel_h']}x{layer['kernel_w']}" if layer["kernel_h"] > 1 else "pointwise"
 
 
-TYPE_ORDER = ("pointwise", "3x3", "7x7", "depthwise", "FC")
+TYPE_ORDER = ("pointwise", "3x3", "7x7", "FC")
 
 
 def s5_dataflow(ctx: Context) -> StudyOutput:
@@ -645,9 +757,11 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
     calls = []
     for name in ("mobilenet_v2_1.0_224", "resnet50_v1.5_224"):
         for layer, gemm in workloads.iter_calls(workloads.load(name)):
-            calls.append((NETWORKS[name], layer, gemm))
-    runs = [layer_flags(point, gemm, cores=1, dataflow=dataflow)
-            for dataflow in ("os", "ws") for _, _, gemm in calls]
+            # Depthwise layers run on the depthwise datapath, which has no dataflow.
+            if layer["op"] != "depthwise_conv2d":
+                calls.append((NETWORKS[name], layer, gemm))
+    runs = ctx.layer_flags([Task.of(point, gemm, cores=1, dataflow=dataflow)
+                            for dataflow in ("os", "ws") for _, _, gemm in calls])
     results = ctx.run_all(runs)
     os_results, ws_results = results[:len(calls)], results[len(calls):]
     array = point.design.array_rows * point.design.array_cols
@@ -668,7 +782,7 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
                     "calls": gemm.calls, "m": gemm.m, "n": gemm.n, "k": gemm.k,
                     "groups": gemm.groups, "os": values[0], "ws": values[1]})
     # Linear axes: the dense layers sit between 0.4 and 1, where the OS-WS differences of
-    # the table are; the depthwise and FC layers collapse near the origin.
+    # the table are; the FC layers collapse near the origin.
     fig = svg.Figure(820, 600, title="Array utilisation: output- vs weight-stationary",
                      subtitle="32x32 array, one core of client-16c; MACs / (compute-busy "
                               "cycles x 1024); one mark per distinct layer shape",
@@ -706,12 +820,14 @@ def s5_dataflow(ctx: Context) -> StudyOutput:
 # ------------------------------------------------------------------ model vs SystemC --
 
 S6_SEED = 20261107
-S6_COUNT = {"serial": 120, "axi": 120}
+S6_COUNT = {"serial": 120, "axi": 120, "conv": 80}
 
 
 def s6_configs(seed: int = S6_SEED) -> list[dict[str, Any]]:
-    """Seeded random dense configurations that fit their SRAM; the AXI third includes
-    clusters of 2 to 8 cores. Draw order is fixed, so the set is the same everywhere."""
+    """Seeded random dense configurations that fit their SRAM; the AXI ones include
+    clusters of 2 to 8 cores, and the conv ones implicit convolutions, the depthwise
+    datapath and the activation cache. Draw order is fixed, so the set is the same
+    everywhere."""
     rng = random.Random(seed)
     configs = []
     for model, count in S6_COUNT.items():
@@ -726,7 +842,47 @@ def s6_configs(seed: int = S6_SEED) -> list[dict[str, Any]]:
     return configs
 
 
+def _random_conv(rng: random.Random) -> dict[str, Any]:
+    """An AXI convolution on its input footprint: a third depthwise on the depthwise
+    datapath, half with an activation cache."""
+    depthwise = rng.random() < 1 / 3
+    while True:
+        size, kernel = rng.choice([7, 14, 28, 56]), rng.choice([1, 3, 3, 5])
+        stride, pad = rng.choice([1, 1, 2]), kernel // 2
+        groups = rng.choice([16, 32, 96]) if depthwise else rng.choice([1, 1, 1, 2])
+        channels = groups if depthwise else groups * rng.choice([3, 8, 16, 32, 64])
+        out = (size + 2 * pad - kernel) // stride + 1
+        if out >= 1:
+            break
+    row_k = kernel * channels // groups
+    flags: dict[str, Any] = {
+        "m": out * out, "n": 1 if depthwise else rng.choice([8, 32, 64]),
+        "k": kernel * row_k, "groups": groups, "conv_input_h": size, "conv_input_w": size,
+        "conv_input_c": channels, "conv_kernel_h": kernel, "conv_kernel_w": kernel,
+        "conv_stride_h": stride, "conv_stride_w": stride, "conv_pad_top": pad,
+        "conv_pad_left": pad, "conv_pad_bottom": pad, "conv_pad_right": pad,
+        "tile_m": rng.choice([16, 32, 64, out, 2 * out]), "tile_n": rng.choice([8, 16, 32, 64]),
+        "tile_k": rng.randrange(kernel) * row_k, "buffer_slots": rng.choice([1, 2, 2]),
+        "panel_buffers": rng.choice([1, 2, 2]), "pipeline_cycles": 4,
+        "memory_model": "axi", "timing_only": True,
+        "array_rows": 16, "array_cols": 16, "axi_data_bytes": rng.choice([8, 32]),
+        "axi_burst_beats": rng.choice([8, 16, 64]),
+        "axi_read_outstanding": rng.choice([4, 12, 64]), "axi_write_outstanding": 4,
+        "axi_read_latency": rng.choice([32, 500]), "axi_write_latency": rng.choice([32, 250]),
+        "dram_bytes_per_cycle": rng.choice([4, 24, 100]), "sram_bytes": 1 << 20}
+    if depthwise:
+        flags["depthwise_macs_per_cycle"] = rng.choice([16, 64, 256])
+    if rng.random() < 0.5:
+        flags["activation_cache_bytes"] = rng.choice([4096, 32768, 131072])
+    if rng.random() < 0.3:
+        flags["cores"] = rng.choice([2, 4])
+        flags["partition"] = rng.choice(["m", "n", "auto"])
+    return flags
+
+
 def _random_config(rng: random.Random, model: str) -> dict[str, Any]:
+    if model == "conv":
+        return _random_conv(rng)
     flags: dict[str, Any] = {
         "m": rng.choice([1, 7, 16, 33, 64, 128, 196, 300]),
         "n": rng.choice([1, 8, 24, 64, 100, 256]),
@@ -794,24 +950,41 @@ def s6_design_point_runs(ctx: Context) -> dict[str, list[tuple[dict, dict]]]:
     return out
 
 
+def _s6_entry(pair: tuple[Mapping[str, Any], Mapping[str, Any]]) -> dict[str, Any]:
+    return s6_entry(*pair)
+
+
+def s6_entries(ctx: Context, pairs: Sequence[tuple[dict, dict]]) -> list[dict[str, Any]]:
+    """s6_entry of every (flags, result), up to ``jobs`` at a time in their own processes."""
+    if ctx.jobs > 1 and len(pairs) > 1:
+        with concurrent.futures.ProcessPoolExecutor(min(ctx.jobs, len(pairs))) as pool:
+            return list(pool.map(_s6_entry, pairs))
+    return [s6_entry(*pair) for pair in pairs]
+
+
 def s6_analytic(ctx: Context) -> StudyOutput:
     configs = s6_configs()
     results = ctx.run_all(configs)
     out = StudyOutput()
     raw = []
     groups: dict[str, list[dict]] = {"random serial": [], "random axi": [],
-                                     "random axi cluster": []}
+                                     "random axi cluster": [], "random conv": []}
     for flags, result in zip(configs, results):
         check_result(result, f"S6 {flags}")
-        entry = s6_entry(flags, result)
+    for flags, entry in zip(configs, s6_entries(ctx, list(zip(configs, results)))):
         raw.append(entry)
         kind = "random " + flags["memory_model"] + (" cluster" if flags.get("cores", 1) > 1
                                                      else "")
+        if "conv_input_h" in flags:
+            kind = "random conv"
         groups[kind].append(entry)
-    for point, runs in s6_design_point_runs(ctx).items():
+    design_runs = s6_design_point_runs(ctx)
+    pairs = [pair for runs in design_runs.values() for pair in runs]
+    entries = iter(s6_entries(ctx, pairs))
+    for point, runs in design_runs.items():
         kind = f"`{point}` network layers"
-        for flags, result in runs:
-            entry = s6_entry(flags, result)
+        for _ in runs:
+            entry = next(entries)
             raw.append({"point": point, **entry})
             groups.setdefault(kind, []).append(entry)
     rows = []
@@ -820,11 +993,13 @@ def s6_analytic(ctx: Context) -> StudyOutput:
     lo = 10 ** math.floor(math.log10(min(e["cycles"] for e in raw)))
     hi = 10 ** math.ceil(math.log10(max(e["cycles"] for e in raw)))
     ratios = [e["estimate"] / e["cycles"] for e in raw]
-    random_count = sum(len(groups[kind]) for kind in groups if kind.startswith("random"))
+    conv_count = len(groups["random conv"])
+    dense_count = sum(len(groups[kind]) for kind in groups
+                      if kind.startswith("random") and kind != "random conv")
     fig = svg.Figure(820, 600, title="Closed-form estimate / npu-sim cycles",
-                     subtitle=f"{random_count} seeded random dense configurations (seed "
-                              f"{S6_SEED}) and the distinct S1 layer runs of each design "
-                              "point; 1 = exact",
+                     subtitle=f"{dense_count} random dense and {conv_count} random conv "
+                              f"configurations (seed {S6_SEED}) and the distinct S1 layer runs "
+                              "of each design point; 1 = exact",
                      x_label="npu-sim cycles", y_label="analytic.analyze estimate / npu-sim "
                      "cycles", x_scale="log", x_range=(lo, hi),
                      y_range=(math.floor(min(ratios) * 10) / 10, math.ceil(max(ratios) * 10) / 10),
@@ -894,6 +1069,13 @@ def palette_input(ctx: Context, gemm: workloads.Gemm) -> Path:
     return path
 
 
+def _palette_mapping(item: tuple[Point, workloads.Gemm, int]) -> mapper.Mapping:
+    point, piece, rate = item
+    return mapper.map_gemm(point.design, piece.m, piece.n, piece.k, piece.groups,
+                           point.min_depth, weight_encoding="palette", palette_bits=PALETTE_BITS,
+                           weight_decode_values_per_cycle=rate)
+
+
 def decode_rate(point: Point, pieces: Sequence[workloads.Gemm],
                 results: Sequence[Mapping[str, Any]], attention_cycles: int,
                 label: str) -> tuple[int, float]:
@@ -918,9 +1100,12 @@ def s7_compression(ctx: Context) -> StudyOutput:
               for piece in workloads.split(workloads.lower(layer), timing_only=False,
                                            max_host=PALETTE_HOST_BYTES)]
     curves = []
+    items = [(point, piece, rate) for point in points for rate in S7_DECODER_RATES
+             for piece in pieces]
+    mappings = dict(zip(items, ctx.parallel(_palette_mapping, items)))
     for point in points:
         # Attention matmuls read the KV cache, which stays INT8 in every column.
-        attention = [c for c in network_calls(point, DECODE, "Llama decode", 8)
+        attention = [c for c in network_calls(ctx, point, DECODE, "Llama decode", 8)
                      if c.layer.get("b_operand") != "weights"]
         attention_results = ctx.run_all([c.flags for c in attention])
         for call, result in zip(attention, attention_results):
@@ -929,19 +1114,20 @@ def s7_compression(ctx: Context) -> StudyOutput:
                                for c, r in zip(attention, attention_results))
         dense = {}
         for bits in (8, 4):
-            results = ctx.run_all([layer_flags(point, piece, bits) for piece in pieces])
+            results = ctx.run_all(ctx.layer_flags([Task.of(point, piece, bits)
+                                                   for piece in pieces]))
             cycles, speed = decode_rate(point, pieces, results, attention_cycles, f"INT{bits}")
             dense[f"INT{bits}"] = speed
             raw.append({"point": point.name, "weights": f"dense INT{bits}", "cycles": cycles,
                         "tokens_per_s": speed})
+        # The S1 mapping check on the same pieces: INT4 halves only the weight bytes.
+        require(dense["INT4"] <= 2 * dense["INT8"],
+                f"S7 {point.name}: INT4 speedup {dense['INT4'] / dense['INT8']:.3f}x above 2x")
         palette = []
         for rate in S7_DECODER_RATES:
             runs = []
             for piece in pieces:
-                mapping = mapper.map_gemm(point.design, piece.m, piece.n, piece.k,
-                                          piece.groups, point.min_depth,
-                                          weight_encoding="palette", palette_bits=PALETTE_BITS,
-                                          weight_decode_values_per_cycle=rate)
+                mapping = mappings[(point, piece, rate)]
                 # The input file's header gives M, N and K; only the group count is a flag.
                 shape = {key: value for key, value in piece.flags().items()
                          if key not in ("m", "n", "k")}
@@ -990,7 +1176,8 @@ def s7_compression(ctx: Context) -> StudyOutput:
 
 S8_POINT = "mobile-2k"
 S8_SRAM = 1 << 20
-S8_GRID = ((32, 64, 128, 256), (64, 128), (0, 128, 256, 512), (1, 2))
+# tile_k is 0 or whole kernel rows of the 3x3 convolution: 3 x 128 channels = 384.
+S8_GRID = ((32, 64, 128, 256), (64, 128), (0, 384, 768), (1, 2))
 
 
 def s8_pareto(ctx: Context) -> StudyOutput:
@@ -1000,14 +1187,15 @@ def s8_pareto(ctx: Context) -> StudyOutput:
     gemm = workloads.lower(layer)
     # The mapper under the point's own SRAM: without the weight cache, the condition of the
     # search, and with the free SRAM as weight cache, as the network studies run it.
-    plain = mapper.map_gemm(point.design, gemm.m, gemm.n, gemm.k, gemm.groups,
-                            point.min_depth, cache=False)
-    cached = mapper.map_gemm(point.design, gemm.m, gemm.n, gemm.k, gemm.groups,
-                             point.min_depth)
+    plain = mapper.map_call(point.design, gemm, point.min_depth, cache=False)
+    cached = mapper.map_call(point.design, gemm, point.min_depth)
+    require(plain.conv and cached.conv and plain.panel_buffers == point.design.panel_buffers,
+            "S8: the mapper left the grid's lowering")
     pick = (plain.tile_m, plain.tile_n, plain.tile_k, plain.buffer_slots)
     candidates = sorted({(m, n, k, s) for m in S8_GRID[0] for n in S8_GRID[1]
                          for k in S8_GRID[2] for s in S8_GRID[3]} | {pick})
-    base = point.flags(**gemm.flags(), sram_bytes=S8_SRAM, weight_cache_bytes=0)
+    base = point.flags(**gemm.flags(), sram_bytes=S8_SRAM, weight_cache_bytes=0,
+                       activation_cache_bytes=0)
     report, rows = autotune.search(ctx.binary, [gemm.m, gemm.n, gemm.k], candidates, base,
                                    timeout=ctx.timeout)
     ctx.extra_runs += sum(1 for row in rows if row["feasible"])
@@ -1023,9 +1211,9 @@ def s8_pareto(ctx: Context) -> StudyOutput:
     best = min(within, key=lambda row: (row["cycles"], row["scratchpad_bytes"]))
     out = StudyOutput()
     fig = svg.Figure(820, 500, title="Mapping search: ResNet-50 res3 3x3 conv on mobile-2k",
-                     subtitle=f"784x128x1152; {len(feasible)} feasible tile and slot choices of "
-                              f"{len(candidates)}, all bit-exact; weight cache off unless "
-                              "noted",
+                     subtitle=f"784x128x1152 on its input footprint; {len(feasible)} feasible "
+                              f"tile and slot choices of {len(candidates)}, all bit-exact; "
+                              "caches off unless noted",
                      x_label="SRAM reserved (KiB)", y_label="cycles", y_include_zero=True,
                      legend="upper right", id_prefix="s8")
     fig.scatter([r["scratchpad_bytes"] / 1024 for r in feasible],
@@ -1039,32 +1227,255 @@ def s8_pareto(ctx: Context) -> StudyOutput:
                 marker="diamond", size=7, label="npuperf.mapper, cache off")
     fig.scatter([with_cache["scratchpad_bytes"] / 1024], [with_cache["cycles"]],
                 color=svg.PALETTE[2], marker="triangle", size=7,
-                label="npuperf.mapper, free SRAM as weight cache")
+                label="npuperf.mapper, free SRAM as caches")
     fig.vline(point.design.sram_bytes / 1024, f"{point.name} SRAM "
               f"{point.design.sram_bytes / 1024:g} KiB", color=svg.INK_SECONDARY)
     out.figures["s8-pareto"] = fig
 
     def describe(row: Mapping[str, Any]) -> str:
         return f"{row['tile_m']}x{row['tile_n']}x{row['tile_k'] or gemm.k}"
-    table_rows = [[describe(row), str(row["buffer_slots"]), "0",
+    table_rows = [[describe(row), str(row["buffer_slots"]), "0", "0",
                    fmt(row["scratchpad_bytes"] / 1024, 4), f"{row['cycles']:,}",
                    "Pareto front"] for row in pareto]
-    table_rows.append([describe(best), str(best["buffer_slots"]), "0",
+    table_rows.append([describe(best), str(best["buffer_slots"]), "0", "0",
                        fmt(best["scratchpad_bytes"] / 1024, 4), f"{best['cycles']:,}",
                        f"fastest within {point.design.sram_bytes / 1024:g} KiB"])
-    table_rows.append([describe(mine), str(mine["buffer_slots"]), "0",
+    table_rows.append([describe(mine), str(mine["buffer_slots"]), "0", "0",
                        fmt(mine["scratchpad_bytes"] / 1024, 4), f"{mine['cycles']:,}",
-                       "npuperf.mapper, cache off"])
+                       "npuperf.mapper, caches off"])
     table_rows.append([f"{cached.tile_m}x{cached.tile_n}x{cached.tile_k or gemm.k}",
                        str(cached.buffer_slots), fmt(cached.weight_cache_bytes / 1024, 4),
+                       fmt(cached.activation_cache_bytes / 1024, 4),
                        fmt(with_cache["scratchpad_bytes"] / 1024, 4),
-                       f"{with_cache['cycles']:,}", "npuperf.mapper, free SRAM as cache"])
+                       f"{with_cache['cycles']:,}", "npuperf.mapper, free SRAM as caches"])
     out.tables["s8-pareto"] = markdown_table(
-        ["Tile (m x n x k)", "Slots", "Weight cache (KiB)", "SRAM (KiB)", "Cycles", "Row"],
-        table_rows, [False, True, True, True, True, False])
+        ["Tile (m x n x k)", "Slots", "Weight cache (KiB)", "Activation cache (KiB)",
+         "SRAM (KiB)", "Cycles", "Row"],
+        table_rows, [False, True, True, True, True, True, False])
     out.raw["rows"] = rows
     out.raw["mapper"] = {"cache_off": asdict(plain), "cache_on": asdict(cached),
                          "cache_on_result": with_cache}
+    return out
+
+
+# ---------------------------------------------------------------- depthwise datapath --
+
+S9_NETWORK = "mobilenet_v2_1.0_224"
+# The sizing rule: the smallest swept rate whose MobileNetV2 latency is within this fraction
+# of the latency with a depthwise datapath as wide as the core's array.
+S9_TOLERANCE = 0.05
+S9_LOWEST = 1
+
+
+def s9_sweep(point: Point) -> list[int]:
+    """Powers of two from S9_LOWEST to the core's array MACs: the rates the rule picks from."""
+    top = point.design.array_macs_per_cycle // point.design.cores
+    rates, rate = [], S9_LOWEST
+    while rate <= top:
+        rates.append(rate)
+        rate *= 2
+    return rates
+
+
+def s9_rates(point: Point) -> list[int]:
+    """0 (no depthwise datapath), the sweep, and the configured rate when the sweep lacks it
+    (an Arm-model rate, designs.vela_depthwise_rate)."""
+    return sorted({0, point.design.depthwise_macs_per_cycle, *s9_sweep(point)})
+
+
+def s9_pick(latency: Mapping[int, float]) -> int:
+    """The S9 rule on {rate: MobileNetV2 latency} over the swept rates: the smallest rate
+    within S9_TOLERANCE of the latency at the largest rate."""
+    best = latency[max(latency)]
+    return min(rate for rate, value in latency.items()
+               if value <= (1 + S9_TOLERANCE) * best)
+
+
+def s9_source(point: Point) -> tuple[int, str]:
+    """(rate, source) the point's config must set: the Arm-model rate of the part it is sized
+    from, or the S9 rule's pick where there is none (returned as 0 here)."""
+    rate = designs.vela_depthwise_rate(point.name)
+    if rate is None:
+        return 0, "S9 rule"
+    model = "Vela 5.2.0" if point.name == "edge-256" else "Regor (Vela 5.2.0)"
+    return rate, f"{model} 3x3 rate"
+
+
+def is_depthwise(call: Call) -> bool:
+    return call.layer["op"] == "depthwise_conv2d"
+
+
+def s9_depthwise(ctx: Context) -> StudyOutput:
+    points = design_points()
+    plans = {(point.name, rate): plan_calls(point, S9_NETWORK, "MobileNetV2",
+                                            plain_depthwise=rate == 0,
+                                            depthwise_macs_per_cycle=rate)
+             for point in points for rate in s9_rates(point)}
+    planned = resolve(ctx, plans)
+    results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
+    out = StudyOutput()
+    raw, summary, curves, choice = [], [], [], []
+    cells: dict[tuple[int, str], str] = {}
+    for point in points:
+        latency, share = {}, {}
+        for rate in s9_rates(point):
+            calls = planned[(point.name, rate)]
+            chunk = [next(results) for _ in calls]
+            for call, result in zip(calls, chunk):
+                check_result(result, f"S9 {point.name} rate {rate} {call.layer['name']}")
+            whole = totals(calls, chunk)
+            dw = totals(*zip(*[pair for pair in zip(calls, chunk) if is_depthwise(pair[0])]))
+            latency[rate] = whole.latency_ms(point.frequency_mhz)
+            share[rate] = dw.cycles / whole.cycles
+            cells[(rate, point.name)] = f"{fmt(latency[rate])} ({pct(share[rate], 0)})"
+            raw.append({"point": point.name, "depthwise_macs_per_cycle": rate,
+                        "cycles": whole.cycles, "depthwise_cycles": dw.cycles,
+                        "latency_ms": latency[rate], "depthwise_share": share[rate],
+                        "dram_bytes": whole.dram_bytes,
+                        "mac_utilisation": whole.macs / (whole.cycles
+                                                         * point.design.array_macs_per_cycle)})
+        pick = s9_pick({rate: latency[rate] for rate in s9_sweep(point)})
+        configured = point.design.depthwise_macs_per_cycle
+        model_rate, source = s9_source(point)
+        want = model_rate or pick
+        require(configured == want,
+                f"configs/{point.name}.json sets depthwise_macs_per_cycle {configured}; "
+                f"the {source} is {want}")
+        top = max(latency)
+        summary.append([f"`{point.name}`", f"{configured:,}", source, f"{pick:,}",
+                        fmt(latency[configured]), fmt(latency[pick]), pct(share[configured]),
+                        f"{top:,}", fmt(latency[top]), fmt(latency[0]),
+                        f"{latency[0] / latency[configured]:.1f}x"])
+        choice.append({"point": point.name, "configured": configured, "source": source,
+                       "rule_pick": pick})
+        curves.append((point, latency, pick))
+    rates = sorted({rate for point in points for rate in s9_rates(point)})
+    rows = [["none: grouped GEMM on the array, im2col" if rate == 0 else f"{rate:,}"]
+            + [cells.get((rate, point.name), "") for point in points] for rate in rates]
+    out.tables["s9-depthwise"] = markdown_table(
+        ["Depthwise MAC/cycle per core"] + [f"`{point.name}`" for point in points], rows)
+    out.tables["s9-choice"] = markdown_table(
+        ["Design point", "Configured rate (MAC/cycle per core)", "Source", "Rule's rate",
+         "Latency at the configured rate (ms)", "Latency at the rule's rate (ms)",
+         "Depthwise share of cycles", "Array-wide rate", "Latency at the array-wide rate (ms)",
+         "Latency without the datapath (ms)", "Speedup over no datapath"], summary,
+        [False, True, False] + [True] * 8)
+    top = max(latency[rate] / latency[max(latency)]
+              for _, latency, _ in curves for rate in latency if rate)
+    fig = svg.Figure(820, 500, title="MobileNetV2 latency vs depthwise datapath rate",
+                     subtitle="latency over latency with a depthwise datapath as wide as the "
+                              "array; diamonds: the rule's pick; squares: the configured "
+                              "Arm-model rate",
+                     x_label="depthwise MAC/cycle per core", y_label="latency / latency at "
+                     "the array-wide rate", x_scale="log", y_scale="log",
+                     x_range=(S9_LOWEST, max(rates)), y_range=(0.9, 2 ** math.ceil(math.log2(top))),
+                     x_ticks=[rate for rate in rates if rate and not rate & (rate - 1)],
+                     y_ticks=[2 ** e for e in range(math.ceil(math.log2(top)) + 1)],
+                     legend="upper right", id_prefix="s9")
+    fig.x.tick_format = lambda v: f"{v:g}"
+    fig.y.tick_format = lambda v: f"{v:g}"
+    fig.hline(1 + S9_TOLERANCE, f"rule: within {pct(S9_TOLERANCE, 0)} of the array-wide rate",
+              color=svg.INK_MUTED, dash="4 4", width=1, text_anchor="end")
+    for index, (point, latency, pick) in enumerate(curves):
+        swept = s9_sweep(point)
+        base = latency[max(latency)]
+        configured = point.design.depthwise_macs_per_cycle
+        label = f"{point.name} (rule picks {pick:,}"
+        label += ")" if configured == pick else f"; configured {configured:,})"
+        fig.line(swept, [latency[rate] / base for rate in swept], color=svg.PALETTE[index],
+                 marker=svg.MARKERS[index], label=label)
+        # Picks of several points can share a rate and nearly a latency: hollow rings that
+        # shrink with the draw order keep every one visible.
+        fig.scatter([pick], [latency[pick] / base], color=svg.PALETTE[index],
+                    marker="diamond", size=12 - 2 * index, hollow=True)
+        if configured != pick:
+            fig.scatter([configured], [latency[configured] / base], color=svg.PALETTE[index],
+                        marker="square", size=7)
+    out.figures["s9-depthwise"] = fig
+    out.raw["runs"] = raw
+    out.raw["choice"] = choice
+    return out
+
+
+# -------------------------------------------------------------------- per-core SRAM --
+
+S10_POINTS = ("client-16c", "workstation-32c")
+S10_NETWORKS = {"resnet50_v1.5_224": "ResNet-50 v1.5", "mobilenet_v2_1.0_224": "MobileNetV2"}
+S10_SIZES_KIB = (64, 128, 256, 512, 1024, 2048, 4096)
+# The sizing rule: on each point, the smallest swept size at which every network reaches
+# this fraction of its highest MAC utilisation in the sweep; the two points share one core
+# design, so both take the larger of their picks.
+S10_SHARE = 0.9
+
+
+def s10_pick(utilisation: Mapping[int, float]) -> int:
+    """The smallest size (KiB) whose utilisation reaches S10_SHARE of the sweep's highest."""
+    best = max(utilisation.values())
+    return min(size for size, value in utilisation.items() if value >= S10_SHARE * best)
+
+
+def s10_sram(ctx: Context) -> StudyOutput:
+    points = design_points(S10_POINTS)
+    plans = {(point.name, name, kib): plan_calls(point, name, network, sram_bytes=kib * 1024)
+             for point in points for name, network in S10_NETWORKS.items()
+             for kib in S10_SIZES_KIB}
+    planned = resolve(ctx, plans)
+    results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
+    out = StudyOutput()
+    raw = []
+    utilisation: dict[tuple[str, str], dict[int, float]] = {}
+    latency: dict[tuple[str, str], dict[int, float]] = {}
+    for (name, network_file, kib), calls in planned.items():
+        chunk = [next(results) for _ in calls]
+        network = S10_NETWORKS[network_file]
+        for call, result in zip(calls, chunk):
+            check_result(result, f"S10 {name} {kib} KiB {call.layer['name']}")
+            require(result["scratchpad_bytes"] <= kib * 1024, f"S10 {name}: SRAM overrun")
+        point = next(point for point in points if point.name == name)
+        t = totals(calls, chunk)
+        util = t.macs / (t.cycles * point.design.array_macs_per_cycle)
+        utilisation.setdefault((name, network), {})[kib] = util
+        latency.setdefault((name, network), {})[kib] = t.latency_ms(point.frequency_mhz)
+        raw.append({"point": name, "network": network, "sram_kib": kib, "cycles": t.cycles,
+                    "macs": t.macs, "dram_bytes": t.dram_bytes, "mac_utilisation": util})
+    picks = {point.name: max(s10_pick(utilisation[(point.name, network)])
+                             for network in S10_NETWORKS.values()) for point in points}
+    chosen = max(picks.values())
+    for point in points:
+        require(point.design.sram_bytes == chosen * 1024,
+                f"configs/{point.name}.json sets sram_bytes {point.design.sram_bytes}; the "
+                f"S10 rule picks {chosen} KiB")
+    keys = [(point.name, network) for point in points for network in S10_NETWORKS.values()]
+    rows = [[f"{kib:,}"] + [f"{pct(utilisation[key][kib])} ({fmt(latency[key][kib])} ms)"
+                            for key in keys] for kib in S10_SIZES_KIB]
+    out.tables["s10-sram"] = markdown_table(
+        ["SRAM per core (KiB)"] + [f"`{name}` {network}" for name, network in keys], rows)
+    choice = [[f"`{point.name}`"] + [f"{s10_pick(utilisation[(point.name, network)]):,}"
+                                     for network in S10_NETWORKS.values()]
+              + [f"{picks[point.name]:,}"] for point in points]
+    out.tables["s10-choice"] = markdown_table(
+        ["Design point"] + [f"{network} pick (KiB)" for network in S10_NETWORKS.values()]
+        + ["Point's pick (KiB)"], choice)
+    top = max(value for values in utilisation.values() for value in values.values())
+    fig = svg.Figure(820, 500, title="MAC utilisation vs per-core SRAM",
+                     subtitle="cores of client-16c and workstation-32c; tiles and cache split "
+                              "from npuperf.mapper per size",
+                     x_label="SRAM per core (KiB)", y_label="MAC utilisation", x_scale="log",
+                     x_range=(S10_SIZES_KIB[0], S10_SIZES_KIB[-1]),
+                     y_range=(0, math.ceil(top * 10) / 10), x_ticks=list(S10_SIZES_KIB),
+                     legend="right", id_prefix="s10")
+    fig.x.tick_format = lambda v: f"{v:g}"
+    fig.vline(chosen, f"rule picks {chosen:,} KiB", color=svg.INK_SECONDARY)
+    for index, network in enumerate(S10_NETWORKS.values()):
+        for point in points:
+            values = utilisation[(point.name, network)]
+            fig.line(S10_SIZES_KIB, [values[kib] for kib in S10_SIZES_KIB],
+                     color=svg.PALETTE[index],
+                     dash=None if point.name == S10_POINTS[0] else "7 4",
+                     marker=svg.MARKERS[index], label=f"{network}, {point.name}")
+    out.figures["s10-sram"] = fig
+    out.raw["runs"] = raw
+    out.raw["picks"] = {"points": picks, "chosen_kib": chosen}
     return out
 
 
@@ -1087,4 +1498,6 @@ STUDIES = {study.id: study for study in (
     Study("S6", "Analytic model vs SystemC", True, s6_analytic),
     Study("S7", "Weight compression for LLM decode", False, s7_compression),
     Study("S8", "Mapping search Pareto front", True, s8_pareto),
+    Study("S9", "Depthwise datapath rate", False, s9_depthwise),
+    Study("S10", "Per-core SRAM of the cluster core", False, s10_sram),
 )}

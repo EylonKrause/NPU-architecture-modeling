@@ -455,8 +455,12 @@ void check_echo() {
             "top-level groups in table order");
     require(defaults.items[3].keys == std::vector<std::string>{"compute", "memory", "sram_bytes",
                                                                "weight_cache_bytes",
+                                                               "activation_cache_bytes",
                                                                "frequency_mhz", "cores"},
             "arch nests compute and memory");
+    require(defaults.items[2].keys.back() == "conv" &&
+                defaults.items[2].items.back().keys.size() == 13,
+            "shape nests the convolution keys last");
     require(defaults.items[4].keys.back() == "partition" &&
                 defaults.items[4].items.back().text == "auto",
             "mapping ends with the cluster partition, auto by default");
@@ -470,8 +474,9 @@ void check_echo() {
     npu::Config c;
     c.name = "round \"trip\"\n";
     c.description = "\xc3\xa9";
-    c.shape = {5, 6, 7, 3, 1ULL << 40};
-    c.arch.compute = {3, 2, 4, npu::Dataflow::WeightStationary, 9, 11};
+    c.shape = {5, 6, 7, 3, 1ULL << 40, {9, 8, 6, 3, 2, 1, 2, 2, 1, 1, 0, 0, 1}};
+    c.arch.compute = {3, 2, 4, npu::Dataflow::WeightStationary, 9, 11, 48};
+    c.arch.activation_cache_bytes = 777;
     c.arch.memory.bytes_per_cycle = 8;
     c.arch.memory.latency = 30;
     c.arch.memory.burst_bytes = 512;
@@ -514,7 +519,10 @@ void check_echo() {
                 r.arch.memory.model == npu::MemoryModel::Axi &&
                 r.arch.memory.dram_bytes_per_cycle == 24 && r.arch.memory.axi.data_bytes == 64 &&
                 r.arch.memory.axi.write_latency == 1000000000 && r.arch.cores == 64 &&
-                r.mapping.partition == npu::Partition::M,
+                r.mapping.partition == npu::Partition::M &&
+                r.shape.conv.input_c == 6 && r.shape.conv.dilation_h == 2 &&
+                r.shape.conv.pad_right == 1 && r.arch.compute.depthwise_macs_per_cycle == 48 &&
+                r.arch.activation_cache_bytes == 777,
             "echoed values are exact");
 }
 

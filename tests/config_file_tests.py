@@ -174,7 +174,11 @@ class ConfigFile(unittest.TestCase):
         tensors = self.write("t.npu", "NPU1 1 2 1\n3\n1 -1\n5 7\n")
         matching = self.write("match.json", '{"shape": {"m": 1, "n": 2, "k": 1}}')
         first = self.result("--input", tensors, "--config", matching, "--dump-output")
-        self.assertEqual(first["config"]["shape"], {"m": 1, "n": 2, "k": 1, "groups": 1, "seed": 1})
+        plain_gemm = {"input_h": 0, "input_w": 0, "input_c": 0, "kernel_h": 1, "kernel_w": 1,
+                      "stride_h": 1, "stride_w": 1, "dilation_h": 1, "dilation_w": 1,
+                      "pad_top": 0, "pad_left": 0, "pad_bottom": 0, "pad_right": 0}
+        self.assertEqual(first["config"]["shape"],
+                         {"m": 1, "n": 2, "k": 1, "groups": 1, "seed": 1, "conv": plain_gemm})
         echo = self.write("echo.json", json.dumps(first["config"]))
         second = self.result("--input", tensors, "--config", echo, "--dump-output")
         self.assertEqual(first["accumulators"], second["accumulators"])

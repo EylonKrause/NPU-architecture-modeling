@@ -49,8 +49,8 @@ class ReproduceTests(unittest.TestCase):
         self.assertEqual(quick, [s.id for s in studies.STUDIES.values() if s.quick])
         self.assertEqual(len(reproduce.select(None, False)), len(studies.STUDIES))
         self.assertEqual([s.id for s in reproduce.select("s3,S1", True)], ["S3"])
-        with self.assertRaisesRegex(ValueError, "unknown study S9"):
-            reproduce.select("S9", False)
+        with self.assertRaisesRegex(ValueError, "unknown study S11"):
+            reproduce.select("S11", False)
 
     def test_study_output_is_deterministic(self):
         first = studies.s3_outstanding(studies.Context(BINARY, jobs=4))
@@ -94,11 +94,51 @@ class ReproduceTests(unittest.TestCase):
         table = studies.markdown_table(["A", "B"], [["x", "1"]])
         self.assertEqual(table, "| A | B |\n|---|---:|\n| x | 1 |\n")
 
-    def test_llm_workloads_run_only_on_dram_points(self):
+    def test_every_point_streams_from_dram_and_runs_the_llms(self):
+        points = studies.design_points()
+        self.assertEqual({point.memory for point in points}, {"DRAM"})
+        self.assertTrue(all(point.runs_llm for point in points))
+
+    def test_sizing_rules(self):
+        """S9 takes the smallest rate within 5% of the array-wide rate's latency; S10 the
+        smallest SRAM at which a network reaches 90% of its best utilisation."""
+        latency = {8: 2.0, 16: 1.2, 32: 1.06, 64: 1.04, 128: 1.0}
+        self.assertEqual(studies.s9_pick(latency), 64)
+        self.assertEqual(studies.s9_pick({8: 1.0, 16: 1.0}), 8)
+        utilisation = {64: 0.10, 128: 0.17, 256: 0.19, 512: 0.20, 1024: 0.18}
+        self.assertEqual(studies.s10_pick(utilisation), 256)
+        self.assertEqual(studies.s10_pick({64: 0.5, 128: 0.4}), 64)
         points = {point.name: point for point in studies.design_points()}
-        self.assertEqual(points["edge-256"].memory, "system SRAM")
-        self.assertEqual(sorted(name for name, point in points.items() if point.runs_llm),
-                         ["client-16c", "mobile-2k", "workstation-32c"])
+        self.assertEqual(studies.s9_sweep(points["edge-256"]), [1, 2, 4, 8, 16, 32, 64, 128, 256])
+        # The configured Arm-model rate runs beside the sweep; the rule picks from the sweep.
+        self.assertEqual(studies.s9_rates(points["edge-256"]),
+                         [0, 1, 2, 4, 8, 16, 24, 32, 64, 128, 256])
+        self.assertEqual(studies.s9_source(points["edge-256"]), (24, "Vela 5.2.0 3x3 rate"))
+        self.assertEqual(studies.s9_source(points["mobile-2k"])[0], 192)
+        self.assertEqual(studies.s9_source(points["client-16c"]), (0, "S9 rule"))
+        self.assertEqual(studies.s9_rates(points["client-16c"])[-1], 1024)
+        self.assertEqual(studies.s9_rates(points["client-16c"]),
+                         [0] + studies.s9_sweep(points["client-16c"]))
+
+    def test_compulsory_bytes_count_the_input_tensor_once(self):
+        res3 = next(gemm for layer, gemm in studies.workloads.iter_calls(
+            studies.workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
+        # 28x28x128 input, 3x3x128x128 weights, 128 biases, 28x28x128 outputs.
+        self.assertEqual(studies.compulsory_bytes(res3, 8),
+                         28 * 28 * 128 + 9 * 128 * 128 + 4 * 128 + 28 * 28 * 128)
+        self.assertEqual(studies.compulsory_bytes(res3.plain(), 8),
+                         784 * 1152 + 1152 * 128 + 4 * 128 + 784 * 128)
+
+    def test_tasks_map_repeated_shapes_once(self):
+        point = studies.design_points(["mobile-2k"])[0]
+        a = studies.workloads.Gemm("block_8_expand", 196, 384, 64, calls=1)
+        b = studies.workloads.Gemm("block_9_expand", 196, 384, 64, calls=3)
+        self.assertEqual(studies.Task.of(point, a), studies.Task.of(point, b))
+        ctx = studies.Context(BINARY, jobs=1)
+        flags = ctx.layer_flags([studies.Task.of(point, a), studies.Task.of(point, b)])
+        self.assertEqual(len(ctx.mapped), 1)
+        self.assertEqual(flags[0], flags[1])
+        self.assertEqual(flags[0], studies.layer_flags(point, a))
 
     def test_network_weight_bytes_count_weight_operands_once(self):
         # Written from the layer fields, independently of workloads.lower.
