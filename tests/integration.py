@@ -702,7 +702,7 @@ class SimulatorIntegration(unittest.TestCase):
             (["--dataflow", "is", "--array-rows", "2", "--array-cols", "2"],
              "--dataflow: expected os|ws, got 'is'"),
             (["--dataflow", "ws", "--array-rows", "2", "--array-cols", "2", "--weight-encoding",
-              "sparse"], "sparse zero-skipping is supported only by the throughput datapath"),
+              "sparse"], "sparse zero-skipping is supported only by the vector datapath"),
         ]:
             with self.subTest(arguments=arguments):
                 proc = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True,

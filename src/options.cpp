@@ -88,9 +88,9 @@ const std::vector<ConfigOption> option_table = {
      "compressed-weight decoder throughput in values per cycle",
      NPU_FIELD(arch.compute.weight_decode_values_per_cycle)},
     {"--depthwise-macs-per-cycle", "arch.compute.depthwise_macs_per_cycle", "",
-     "channel-wise datapath for depthwise problems (groups > 1, N 1): tiles span tile_n "
-     "consecutive groups and a panel takes ceil(M_t*C_t*K_p / rate) + pipeline cycles; 0 runs "
-     "them as grouped GEMMs on the MAC datapath",
+     "depthwise-datapath MACs per cycle for depthwise problems (groups > 1, N 1): tiles span "
+     "tile_n consecutive groups and a panel takes ceil(M_t*C_t*K_p / rate) + pipeline cycles; 0 "
+     "runs them as grouped GEMMs on the MAC datapath",
      NPU_FIELD(arch.compute.depthwise_macs_per_cycle)},
 
     {"--memory-model", "arch.memory.model", "",

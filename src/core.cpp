@@ -186,7 +186,7 @@ void validate_mapping(const Config& config) {
             "weight decode rate must be in 1..1000000000");
     require(weights.encoding != WeightEncoding::Sparse ||
                 (compute.array_rows == 0 && compute.array_cols == 0),
-            "sparse zero-skipping is supported only by the throughput datapath; a systolic "
+            "sparse zero-skipping is supported only by the vector datapath; a systolic "
             "array takes dense or palette weights");
     if (config.mapping.tile_k > max_dimension)
         fail("reduction tile dimension must be zero (full K) or in " + dimension_range());

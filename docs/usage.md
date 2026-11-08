@@ -272,7 +272,7 @@ switch. Descriptions are the `--help` text.
 | `--dataflow` | `arch.compute.dataflow` | `os\|ws` | `os` | array dataflow, needs `--array-rows`/`--array-cols`: os holds an output block in the PEs and streams K; ws holds a weight block and streams the tile's rows |
 | `--pipeline-cycles` | `arch.compute.pipeline_cycles` | `N` | `4` | fixed cycles charged per reduction panel on top of MAC and decode time |
 | `--weight-decode-values-per-cycle` | `arch.compute.weight_decode_values_per_cycle` | `N` | `16` | compressed-weight decoder throughput in values per cycle |
-| `--depthwise-macs-per-cycle` | `arch.compute.depthwise_macs_per_cycle` | `N` | `0` | channel-wise datapath for depthwise problems (groups > 1, N 1): tiles span tile_n consecutive groups and a panel takes ceil(M_t\*C_t\*K_p / rate) + pipeline cycles; 0 runs them as grouped GEMMs on the MAC datapath |
+| `--depthwise-macs-per-cycle` | `arch.compute.depthwise_macs_per_cycle` | `N` | `0` | depthwise-datapath MACs per cycle for depthwise problems (groups > 1, N 1): tiles span tile_n consecutive groups and a panel takes ceil(M_t\*C_t\*K_p / rate) + pipeline cycles; 0 runs them as grouped GEMMs on the MAC datapath |
 | `--memory-model` | `arch.memory.model` | `serial\|axi` | `serial` | serial: one DMA server alternating reads and writes, one transfer at a time; axi: independent read and write channels with outstanding bursts and a shared DRAM rate |
 | `--memory-bytes-per-cycle` | `arch.memory.bytes_per_cycle` | `N` | `16` | serial model: DMA bytes transferred per cycle |
 | `--memory-latency` | `arch.memory.latency` | `N` | `12` | serial model: cycles charged once per DMA burst |
