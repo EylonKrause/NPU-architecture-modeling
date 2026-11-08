@@ -24,8 +24,12 @@ deep 1x1 layers need to fit a small SRAM.
 Choice. Per tile shape and slot count the full reduction and the three deepest fitting
 panels are scored with ``analytic.analyze``, ranked by the lowest estimate, then fewer DRAM
 bytes, then less SRAM. The closed form times each request alone and misses queueing on the
-shared DRAM, so the four best-ranked are replayed with ``analytic.schedule``, which matches
-npu-sim cycle for cycle, and the mapper keeps the fewest replayed cycles (ties by rank).
+shared DRAM: on a weight-streaming GEMV most candidates share the DRAM-bound estimate,
+which cannot order them. So the candidates are replayed with ``analytic.schedule``,
+which matches npu-sim cycle for cycle, in rank order, skipping a candidate whose
+``analyze`` lower bound is no less than the fewest cycles replayed so far; the mapper keeps
+the fewest replayed cycles of the whole candidate set (ties by rank). Only a layer whose
+lower bounds separate its candidates replays few of them.
 Dataflow and partition stay as the design sets them.
 A heuristic over a fixed candidate set, not a compiler: no layer fusion, no layout or
 loop-order choice, no cross-layer buffering.
@@ -40,7 +44,6 @@ from . import analytic, cli, designs, jsonio, table, workloads
 
 VECTOR_STEP = 8
 DEEPEST_DEPTHS = 3
-REPLAYED = 4
 MAX_TILE = 1 << 16
 
 
@@ -188,6 +191,23 @@ def _rank(design: analytic.Design, analysis: analytic.Analysis) -> tuple[int, in
     return analysis.estimate_cycles, analysis.dram_bytes, slot_bytes(design)
 
 
+def replay_best(ranked: Sequence[tuple[object, analytic.Design, analytic.Analysis]]
+                ) -> tuple[int, int]:
+    """(fewest replayed cycles, index) over ``ranked``, the earliest index on a tie. A
+    candidate whose lower bound is no less than the best so far cannot beat it, nor tie it
+    from a later index, so it is not replayed."""
+    best: tuple[int, int] | None = None
+    for order, (_, trial, analysis) in enumerate(ranked):
+        if best is not None and analysis.lower_bound_cycles >= best[0]:
+            continue
+        cycles = analytic.schedule(trial).cycles
+        if best is None or cycles < best[0]:
+            best = (cycles, order)
+    if best is None:
+        raise ValueError("no candidate to replay")
+    return best
+
+
 @functools.lru_cache(maxsize=4096)
 def map_layer(design: analytic.Design, min_depth: int = 32, cache: bool = True) -> Mapping:
     """The mapping for ``design``'s GEMM shape (m, n, k, groups) and conv geometry; see
@@ -206,11 +226,9 @@ def map_layer(design: analytic.Design, min_depth: int = 32, cache: bool = True) 
                          f"{design.sram_bytes} B of SRAM with panels of at least "
                          f"{min_depth} B")
     # A stable sort: equal ranks keep the candidate order.
-    finalists = sorted(scored, key=lambda entry: entry[0])[:REPLAYED]
-    replays = [(analytic.schedule(trial).cycles, order) for order, (_, trial, _)
-               in enumerate(finalists)]
-    cycles, order = min(replays)
-    _, trial, analysis = finalists[order]
+    ranked = sorted(scored, key=lambda entry: entry[0])
+    cycles, order = replay_best(ranked)
+    _, trial, analysis = ranked[order]
     return Mapping(trial.tile_m, trial.tile_n, trial.tile_k, trial.buffer_slots,
                    trial.weight_cache_bytes,
                    analysis.scratchpad_bytes, analysis.estimate_cycles, analysis.dram_bytes,

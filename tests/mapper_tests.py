@@ -112,27 +112,47 @@ class MapperTests(unittest.TestCase):
         self.assertFalse(mapping.conv)
         self.assertGreater(mapping.tile_k, 0)
 
-    def test_choice_is_the_fastest_replay_of_the_best_estimates(self):
-        """The mapper replays its REPLAYED best-ranked candidates and keeps the fewest
-        cycles, which npu-sim reproduces."""
-        design, min_depth, config = point("client-16c")
-        design = design.replace(m=196, n=256, k=2304)
-        mapping = mapper.map_layer(design, min_depth)
-        ranked = []
-        for order, trial in enumerate(mapper.candidates(design, min_depth)):
+    def ranked(self, design: analytic.Design, min_depth: int) -> list:
+        """The mapper's candidates of ``design`` with their analyses, in rank order."""
+        scored = []
+        for trial in mapper.candidates(design, min_depth):
             model = analytic.analyze(trial)
-            ranked.append(((model.estimate_cycles, model.dram_bytes, mapper.slot_bytes(trial)),
-                           order, trial))
-        finalists = [trial for *_, trial in sorted(ranked)[:mapper.REPLAYED]]
-        replays = [analytic.schedule(trial).cycles for trial in finalists]
-        self.assertEqual(mapping.replayed_cycles, min(replays))
-        chosen = finalists[replays.index(min(replays))]
-        self.assertEqual((mapping.tile_m, mapping.tile_n, mapping.tile_k), (chosen.tile_m,
-                         chosen.tile_n, chosen.tile_k))
-        result = sim.run({"config": config, "m": 196, "n": 256, "k": 2304, **mapping.flags(),
-                          "timing_only": True}, BINARY)
-        self.assertEqual(result.cycles, mapping.replayed_cycles)
-        plain = mapper.map_layer(design, min_depth, cache=False)
+            scored.append((mapper._rank(trial, model), trial, model))
+        return sorted(scored, key=lambda entry: entry[0])
+
+    def test_choice_is_the_fastest_replay_of_every_candidate(self):
+        """The pick has the fewest replayed cycles of the whole candidate set, earliest rank
+        on a tie, which npu-sim reproduces. Every candidate's lower bound is at most its
+        replay, so the candidates the mapper skips cannot beat the pick. On the Llama decode
+        gate_proj GEMV most candidates share the DRAM-bound estimate and the fastest replay
+        ranks below the first four, the most the mapper used to replay."""
+        design, min_depth, config = point("client-16c")
+        layers = {"conv": design.replace(m=196, n=256, k=2304),
+                  "gemv": design.replace(m=1, n=8192, k=2048, depthwise_macs_per_cycle=0)}
+        replayed = {}
+        for name, layer in layers.items():
+            mapping = mapper.map_layer(layer, min_depth)
+            ranked = self.ranked(layer, min_depth)
+            replays = [analytic.schedule(trial).cycles for _, trial, _ in ranked]
+            replayed[name] = (ranked, replays)
+            with self.subTest(layer=name):
+                for (_, trial, model), cycles in zip(ranked, replays):
+                    self.assertLessEqual(model.lower_bound_cycles, cycles)
+                best = min(replays)
+                chosen = ranked[replays.index(best)][1]
+                self.assertEqual(mapping.replayed_cycles, best)
+                self.assertEqual((mapping.tile_m, mapping.tile_n, mapping.tile_k,
+                                  mapping.buffer_slots, mapping.weight_cache_bytes),
+                                 (chosen.tile_m, chosen.tile_n, chosen.tile_k,
+                                  chosen.buffer_slots, chosen.weight_cache_bytes))
+                result = sim.run({"config": config, "m": layer.m, "n": layer.n, "k": layer.k,
+                                  **mapping.flags(), "timing_only": True}, BINARY)
+                self.assertEqual(result.cycles, mapping.replayed_cycles)
+        gemv, replays = replayed["gemv"]
+        estimates = [model.estimate_cycles for _, _, model in gemv]
+        self.assertGreater(estimates.count(estimates[0]), 4)
+        self.assertGreaterEqual(replays.index(min(replays)), 4)
+        plain = mapper.map_layer(layers["conv"], min_depth, cache=False)
         self.assertEqual((plain.weight_cache_bytes, plain.activation_cache_bytes), (0, 0))
         self.assertLessEqual(plain.scratchpad_bytes, design.sram_bytes)
 
