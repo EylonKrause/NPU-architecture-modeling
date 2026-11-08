@@ -8,8 +8,9 @@ namespace npu {
 // project(VERSION) in CMakeLists.txt.
 inline constexpr std::string_view version = "@PROJECT_VERSION@";
 
-// `git describe --tags --always --dirty` of the source tree at the last CMake configure
-// (CMake re-runs when HEAD moves), or "unknown" outside a git checkout.
+// -DNPU_GIT_DESCRIBE when set, else `git describe --tags --always --dirty --abbrev=12` of the
+// source tree at the last CMake configure (CMake re-runs when HEAD moves); "unknown" when
+// git cannot describe it.
 inline constexpr std::string_view git_describe = "@NPU_GIT_DESCRIBE_VALUE@";
 
 // Compiler that built this binary, e.g. "GNU 13.3.0".

@@ -330,7 +330,7 @@ class ArchitectureChecks(unittest.TestCase):
             self.assertLess(event["cycles"], expected["serial_cycles"])
             self.assertGreater(event["peak_inflight_tiles"], 1)
 
-    def test_int4_padding_metadata_and_array_known_values(self):
+    def test_int4_padding_metadata_and_array_cycles(self):
         c = dict(
             DEFAULT,
             m=1,

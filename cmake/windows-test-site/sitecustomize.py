@@ -1,9 +1,8 @@
 """Imported at startup by every Python test that ctest runs on Windows.
 
-CTest starts tests with the default Windows error mode, in which a child process that fails to
-load (a corrupt executable) or crashes opens a modal system dialog and the test stalls until its
-timeout. The error mode of a console shell returns the failure to the caller as an error or exit
-code; child processes inherit it.
+Sets SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX, which child processes inherit. Under
+CTest's default error mode a child that fails to load or crashes opens a modal system dialog
+and the test stalls until its timeout; with these flags the failure returns as an exit code.
 """
 
 import sys

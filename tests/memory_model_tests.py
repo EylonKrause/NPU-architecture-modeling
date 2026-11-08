@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""The axi memory model (src/memory.cpp) against an independent oracle.
+"""The axi memory model (src/memory.cpp) against a Python oracle.
 
 The oracle follows the memory-system description in docs/architecture.md and shares
 no code with src/: it walks beats to form bursts, finds DRAM gaps by fixpoint
 iteration over every reservation made, and replays the load, compute and store
 pipeline as a timestamp simulation. Closed forms check single-burst latency,
 steady-state bandwidth, 4 KiB splitting, misaligned beats and the DRAM cap
-independently of the oracle.
+without the oracle.
 """
 
 from __future__ import annotations

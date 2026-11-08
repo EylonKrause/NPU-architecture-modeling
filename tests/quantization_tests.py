@@ -273,7 +273,7 @@ class QuantizationChecks(unittest.TestCase):
         self.assertEqual(result["numerics"], "bit-exact")
         return result
 
-    def test_known_asymmetric_channels(self):
+    def test_asymmetric_zero_points_per_channel(self):
         a, w, bias = [1, 3, -2, 4], [2, -3, 7, -4, 6, -8], [5, -7, 3]
         proc = run_tensor(
             a,
@@ -293,7 +293,7 @@ class QuantizationChecks(unittest.TestCase):
         self.assertEqual(result["accumulators"], [-5, 9, -19, -13, 20, -42])
         self.assertEqual(result["outputs"], [2, 12, -33, -2, 20, -79])
 
-    def test_manual_nearest_even_channels(self):
+    def test_nearest_even_ties_per_channel(self):
         proc = run_tensor(
             [1, -1],
             [1, 3, 5, 2, 6, 10],

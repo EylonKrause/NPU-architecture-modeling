@@ -429,7 +429,7 @@ class ClosedFormTests(unittest.TestCase):
                 )
 
 
-class KnownFactTests(unittest.TestCase):
+class PinnedGemvTests(unittest.TestCase):
     """npu-sim on a 4096 x 4096 INT4 GEMV: pinned cycle counts, their closed form, scaling."""
 
     GEMV = {

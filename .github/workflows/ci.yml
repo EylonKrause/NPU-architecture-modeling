@@ -89,7 +89,7 @@ jobs:
           name: junit-${{ matrix.name }}
           path: junit-${{ matrix.name }}.xml
           if-no-files-found: ignore
-      # run.py as the README gives it: a fresh FetchContent build, then reuse of it.
+      # The README's quick start, from scratch and then on the built tree.
       - name: run.py, clean and incremental build
         if: runner.os != 'Linux'
         run: |

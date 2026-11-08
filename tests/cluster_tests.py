@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The multi-core cluster (--cores, --partition) against an independent oracle.
+"""The multi-core cluster (--cores, --partition) against a Python oracle.
 
 The oracle follows the cluster description in docs/architecture.md and shares no
 code with src/: it splits the output tiles into contiguous per-core bands of units,
@@ -7,7 +7,7 @@ replays every core's load, compute and store pipeline with its own LRU weight
 cache and AXI port, and shares one DRAM reservation timeline granted in core
 order, read before write. Bursts, channels and the DRAM gap search are the
 single-core oracle's in memory_model_tests.py. Closed forms check speedup,
-the DRAM floor and the m-versus-n weight re-reads independently of it.
+the DRAM floor and the m-versus-n weight re-reads without the oracle.
 """
 
 from __future__ import annotations

@@ -225,8 +225,7 @@ void check_int4() {
     c.weights.bits = 4;
     c.quant.weight_zero = 0;
     const auto p = npu::make_problem(c);
-    require(p.weights == std::vector<std::int8_t>{-8, 7, -6, 1},
-            "signed INT4 fixture uses exact two's-complement range");
+    require(p.weights == std::vector<std::int8_t>{-8, 7, -6, 1}, "INT4 fixture reaches -8 and 7");
     require(std::all_of(p.weights.begin(), p.weights.end(),
                         [](std::int8_t w) { return w >= -8 && w <= 7; }),
             "INT4 fixture legal weights");
@@ -892,7 +891,7 @@ void check_validation() {
     npu::validate(untraced);  // Without a trace, 10^6 tile records fit.
     npu::Config c;
     c.arch.frequency_mhz = 1e-6;
-    npu::validate(c);  // A 1 Hz target remains representable and valid.
+    npu::validate(c);  // 1 Hz is the lowest accepted clock.
     c.arch.sram_bytes = npu::scratchpad_bytes(c);
     npu::validate(c);
     --c.arch.sram_bytes;
@@ -902,17 +901,17 @@ void check_validation() {
     slow.shape.m = slow.shape.n = slow.shape.k = 1;
     slow.mapping.tile_m = slow.mapping.tile_n = slow.mapping.buffer_slots = 1;
     slow.arch.memory.latency = slow.arch.compute.pipeline_cycles = 1000000000;
-    npu::validate(slow);  // Event mode jumps directly across long stage waits.
+    npu::validate(slow);  // Event mode has no 10000000-cycle limit.
     slow.sim.timing = npu::TimingMode::Cycle;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
-                                   "cycle mode rejects impractical wait iteration count");
+                                   "cycle mode rejects serial work above 10000000 cycles");
     slow.arch.compute.macs_per_cycle = slow.arch.memory.bytes_per_cycle = 1;
     slow.arch.memory.latency = 0;
     slow.arch.compute.pipeline_cycles = 9999992;
-    npu::validate(slow);  // Read6 + compute(1+9999992) + write1 = 10000000.
+    npu::validate(slow);  // Read 6, compute 1 + 9999992, write 1: 10000000 cycles.
     ++slow.arch.compute.pipeline_cycles;
     rejects<std::invalid_argument>([&] { npu::validate(slow); },
-                                   "cycle mode rejects one iteration beyond boundary");
+                                   "cycle mode rejects 10000001 serial cycles");
     slow.arch.compute.pipeline_cycles = 0;
     npu::validate(slow);  // The minimal mapping costs eight serial cycles.
 }

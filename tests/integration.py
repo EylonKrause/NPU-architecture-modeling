@@ -1194,7 +1194,7 @@ class SimulatorIntegration(unittest.TestCase):
         self.assertEqual(slow["output_hash"], fast["output_hash"])
         self.assertAlmostEqual(slow["modeled_latency_ns"], fast["modeled_latency_ns"] * 4)
 
-    def test_external_workloads_extreme_operands_and_known_rounding(self):
+    def test_external_workloads_extreme_operands_and_tie_rounding(self):
         cases = [
             (
                 {"m": 2, "n": 3, "k": 2, "shift": 8},
