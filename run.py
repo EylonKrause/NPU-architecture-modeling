@@ -38,8 +38,9 @@ def cmake_executable() -> str:
         raise RuntimeError(
             "CMake 3.24 or newer is required; install it as described in docs/usage.md, section 1"
         )
+    # A cold start on a Windows host with on-access scanning can take tens of seconds.
     version = subprocess.run(
-        [binary, "--version"], capture_output=True, text=True, timeout=15, check=False
+        [binary, "--version"], capture_output=True, text=True, timeout=120, check=False
     )
     match = re.search(r"cmake version (\d+)\.(\d+)", version.stdout)
     if version.returncode or match is None or tuple(map(int, match.groups())) < (3, 24):
