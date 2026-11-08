@@ -103,8 +103,8 @@ void check_option_table() {
             require(last - first + 1 == count, "group rows are contiguous: " + group);
         }
     }
-    // Every flag the simulator accepted before the option table still works.
-    for (const auto* legacy : {"--m", "--n", "--k", "--tile-m", "--tile-n", "--tile-k",
+    // Each flat flag name that scripts pass resolves to an option-table row.
+    for (const auto* flag : {"--m", "--n", "--k", "--tile-m", "--tile-n", "--tile-k",
              "--weight-bits", "--weight-encoding", "--palette-bits", "--sparse-block",
              "--weight-decode-values-per-cycle", "--array-rows", "--array-cols",
              "--macs-per-cycle", "--memory-bytes-per-cycle", "--memory-latency",
@@ -112,7 +112,7 @@ void check_option_table() {
              "--buffer-slots", "--sram-bytes", "--seed", "--frequency-mhz", "--timing",
              "--input-zero", "--weight-zero", "--output-zero", "--multiplier", "--shift",
              "--rounding", "--relu", "--trace"})
-        option(legacy);
+        option(flag);
     require(npu::is_switch(option("--relu")) && npu::is_switch(option("--timing-only")) &&
                 !npu::is_switch(option("--m")) && !npu::is_switch(option("--groups")),
             "switches");
@@ -398,8 +398,8 @@ void check_command_line_values() {
     require(builder.config.arch.frequency_mhz == -3.0, "decimal values parse");
     builder.set(option("--frequency-mhz"), "2E2");
     require(builder.config.arch.frequency_mhz == 200.0, "exponent form");
-    // The strtod forms the flag took before the option table: a leading '+',
-    // a point with digits on one side only, leading zeros.
+    // --frequency-mhz accepts every strtod decimal form: a leading '+', a point with
+    // digits on one side only, leading zeros.
     const std::pair<const char*, double> decimals[] = {
         {".5", 0.5}, {"5.", 5.0}, {"+5", 5.0}, {"+.5", 0.5}, {"007", 7.0},
         {"5.e1", 50.0}, {"-.5E+1", -5.0}, {"1e-3", 0.001}};

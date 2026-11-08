@@ -188,7 +188,8 @@ void check_per_channel_quantization() {
     require(result.quantized == std::vector<std::int8_t>{2, 12, -33, -2, 20, -79},
             "hand-calculated per-channel scales and rounding");
     npu::Output tiled;
-    // Nonzero global tile column must index channel1, not local channel0.
+    // The tile at column 1 takes channel 1's parameters for its first column: per-channel
+    // vectors are indexed by global channel.
     npu::compute_tile(p, q, {1, 0, 1, 2, 2}, tiled);
     npu::compute_tile(p, q, {0, 0, 0, 2, 1}, tiled);
     require(tiled.accumulators == result.accumulators && tiled.quantized == result.quantized,
@@ -485,7 +486,7 @@ void check_overflow_and_shapes() {
 }
 
 
-// TOSA 1.0.2 apply_scale_32. Golden vectors are quant_semantics.md section 5;
+// TOSA 1.0.2 apply_scale_32. The first four vectors are the golden vectors of docs/numerics.md;
 // the remaining expectations come from TFLite MultiplyByQuantizedMultiplier
 // evaluated with tosa shift = 31 - TFLite shift (tests/quantization_tests.py).
 void check_tosa_rescale() {

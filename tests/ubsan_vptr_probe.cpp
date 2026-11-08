@@ -19,7 +19,7 @@ struct Packet {
 
 int main() {
     Packet packet;
-    Packet* volatile hidden = &packet;  // volatile: the optimiser cannot see the dynamic type
+    Packet* volatile hidden = &packet;  // volatile: the optimizer cannot see the dynamic type
     void* raw = hidden;
     const auto* square = static_cast<const Square*>(raw);
     std::printf("vptr check missing: corners() returned %d\n", square->corners());

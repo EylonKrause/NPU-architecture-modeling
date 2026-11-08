@@ -32,8 +32,8 @@ void independent_storage(npu::WeightEncoding codec) {
     const auto expected = npu::reference(p, c.quant);
     const auto encoded = npu::encode_weights(c, p);
     require(encoded.size() == 4, "encoding contains each column/K panel exactly once");
-    // A simulated datapath that secretly reads the original expanded weights
-    // will now fail. The encoded buffer is the numerical source of truth.
+    // Overwriting the expanded weights changes the scalar reference; the encoded datapath
+    // must still match the original result, so it can read only the encoded panels.
     std::fill(p.weights.begin(), p.weights.end(), static_cast<std::int8_t>(7));
     require(npu::reference(p, c.quant).accumulators != expected.accumulators,
             "expanded weight mutation must materially change the scalar result");
