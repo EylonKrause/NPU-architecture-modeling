@@ -221,7 +221,6 @@ function renderKpis(value) {
     text("kpi-bound-detail", `${int(analysis.lower_bound_cycles)} cyc` +
       (attained === null ? " lower bound" : ` · ${percent(attained)} attained`));
   } else if (isNum(t.compute_busy_cycles) && isNum(t.dma_busy_cycles) && t.cycles > 0) {
-    // Without an analytic model for this design the panel shows MAC and DMA busy fractions.
     text("kpi-bound", "—");
     text("kpi-bound-detail", `no analytic bound · MAC ${percent(t.compute_busy_cycles / t.cycles, 0)}` +
       ` DMA ${percent(t.dma_busy_cycles / t.cycles, 0)} busy`);
