@@ -72,8 +72,6 @@ class MobilePlatformTests(unittest.TestCase):
         self.assertEqual(report["model"], "systemc-mobile-multicore")
         self.assertEqual(report["jobs_completed"], 7)
         self.assertTrue(report["numerical_match"])
-        self.assertTrue(report["synthetic_architecture"])
-        self.assertFalse(report["preemptive"])
         self.assertIsNone(report["energy"])
         for job in report["jobs"]:
             expected, quantized = oracle(4294967295, job["id"], job["model"], 3, 7, 13)
@@ -442,7 +440,6 @@ class MobilePlatformTests(unittest.TestCase):
             stats["active_ns"] + stats["retention_ns"] + stats["gated_ns"], report["simulation_ns"]
         )
         energy = report["energy"]
-        self.assertFalse(energy["silicon_calibrated"])
         self.assertAlmostEqual(energy["compute_pj"], 3 * 512 * 2)
         self.assertAlmostEqual(
             energy["dram_pj"], (report["bus_read_bytes"] + report["bus_write_bytes"]) * 3

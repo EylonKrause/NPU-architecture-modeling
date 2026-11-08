@@ -864,10 +864,8 @@ source counts, the coefficients, and the `scope` lists of `npuperf/energy.py`: i
 
 ### 4.2 Coefficient provenance
 
-Coefficients are run inputs; every report echoes the values it used, and the multi-core
-platform's report sets `silicon_calibrated` to false. Both tools follow the action-count
-method: a count of each event multiplied by a per-event cost,
-as in [Accelergy energy reference tables](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables).
+Coefficients are run inputs, and every report echoes the values it used. Both tools follow the
+action-count method: a count of each event multiplied by a per-event cost, as in [Accelergy energy reference tables](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables).
 
 | Coefficient | Flag | Unit | Multiplies | Default | Calibrated from |
 |---|---|---|---|---|---|

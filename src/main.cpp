@@ -399,7 +399,7 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
     const auto core_cycles = npu::checked_mul(snap.cycles, model.cores());
     const auto ratio = [core_cycles](std::uint64_t busy) { return fraction(busy, core_cycles); };
     stream << std::boolalpha << std::setprecision(17) << "{\"schema_version\":" << schema_version
-           << ",\"type\":\"" << type << "\",\"simulation\":true,\"config\":";
+           << ",\"type\":\"" << type << "\",\"config\":";
     npu::write_config_json(stream, c);
     stream << ",\"cycles\":" << snap.cycles << ",\"completed\":" << snap.completed
            << ",\"validated\":" << checked << ",\"numerics\":\"" << numerics_name(c) << '"'

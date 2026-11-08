@@ -710,8 +710,7 @@ void report(Platform& platform) {
                                static_cast<double>(switches) * options.switch_pj;
     std::cout << std::setprecision(15)
               << "{\"schema_version\":1,\"model\":\"systemc-mobile-multicore\","
-              << "\"synthetic_architecture\":true,\"numerical_match\":"
-              << (numerical_match ? "true" : "false") << ",\"preemptive\":false,"
+              << "\"numerical_match\":" << (numerical_match ? "true" : "false") << ","
               << "\"cores\":" << options.cores << ",\"jobs_completed\":" << platform.completed
               << ",\"m\":" << options.m << ",\"n\":" << options.n << ",\"k\":" << options.k
               << ",\"models\":" << options.models << ",\"seed\":" << options.seed
@@ -736,18 +735,19 @@ void report(Platform& platform) {
               << ",\"compute_gate_retains_sram\":true}"
               << ",\"energy\":";
     if (options.energy_provided) {
-        std::cout
-            << "{\"coefficients_provided\":true,\"silicon_calibrated\":false,\"reference_mv\":"
-            << options.reference_mv << ",\"coefficients\":{\"mac_pj\":" << options.mac_pj
-            << ",\"dram_byte_pj\":" << options.dram_byte_pj
-            << ",\"leakage_mw\":" << options.leakage_mw
-            << ",\"retention_mw\":" << options.retention_mw << ",\"gated_mw\":" << options.gated_mw
-            << ",\"wakeup_pj\":" << options.wakeup_pj << ",\"switch_pj\":" << options.switch_pj
-            << '}' << ",\"compute_pj\":" << dynamic_pj << ",\"dram_pj\":" << dram_pj
-            << ",\"active_leakage_pj\":" << active_pj << ",\"retention_pj\":" << retention_pj
-            << ",\"gated_pj\":" << gated_pj << ",\"transition_pj\":" << transition_pj
-            << ",\"total_pj\":"
-            << dynamic_pj + dram_pj + active_pj + retention_pj + gated_pj + transition_pj << '}';
+        std::cout << "{\"reference_mv\":" << options.reference_mv
+                  << ",\"coefficients\":{\"mac_pj\":" << options.mac_pj
+                  << ",\"dram_byte_pj\":" << options.dram_byte_pj
+                  << ",\"leakage_mw\":" << options.leakage_mw
+                  << ",\"retention_mw\":" << options.retention_mw
+                  << ",\"gated_mw\":" << options.gated_mw << ",\"wakeup_pj\":" << options.wakeup_pj
+                  << ",\"switch_pj\":" << options.switch_pj << '}'
+                  << ",\"compute_pj\":" << dynamic_pj << ",\"dram_pj\":" << dram_pj
+                  << ",\"active_leakage_pj\":" << active_pj << ",\"retention_pj\":" << retention_pj
+                  << ",\"gated_pj\":" << gated_pj << ",\"transition_pj\":" << transition_pj
+                  << ",\"total_pj\":"
+                  << dynamic_pj + dram_pj + active_pj + retention_pj + gated_pj + transition_pj
+                  << '}';
     } else std::cout << "null";
     std::cout << ",\"opps\":[";
     for (std::size_t i = 0; i < options.opps.size(); ++i) {

@@ -630,7 +630,7 @@ A snapshot is the state of the model at the current cycle (`PipelineView` in
 
 | Field | Definition |
 |---|---|
-| `schema_version`, `type`, `simulation` | 2; `snapshot` or `stopped`; true |
+| `schema_version`, `type` | 2; `snapshot` or `stopped` |
 | `config` | Effective configuration, as in a result |
 | `cycles`, `completed`, `modeled_latency_ns` | Current cycle, completion flag, cycles at the model clock |
 | `validated`, `numerics`, `numerical_match` | `validated` and `numerical_match` turn true once a completed bit-exact output matches the reference; `numerical_match` is null before |

@@ -139,7 +139,6 @@ class LiveProtocolChecks(unittest.TestCase):
         return json.loads(process.stdout)
 
     def assert_final(self, current: dict, batch: dict) -> None:
-        self.assertTrue(current["simulation"])
         self.assertTrue(current["completed"])
         self.assertTrue(current["validated"])
         self.assertIs(current["numerical_match"], True)

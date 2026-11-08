@@ -663,7 +663,7 @@ const COUNTERS = [
 ];
 const SCHEMA_VERSIONS = [1, 2];
 const NOT_COUNTERS = new Set([
-  "schema_version", "type", "simulation", "config", "cycles", "completed", "validated", "numerics",
+  "schema_version", "type", "config", "cycles", "completed", "validated", "numerics",
   "numerical_match", "compute_utilization", "memory_utilization", "dma_busy", "compute_busy",
   "dma_read", "dma_tile_id", "dma_block_id", "compute_tile_id", "compute_block_id",
   "modeled_latency_ns", "active_stages", "output_hash", "input_preview", "output_preview",
