@@ -5,8 +5,8 @@
     python tools/gen_workloads.py --check    exit 1 if the committed files differ
 
 Conventions (also written into every file):
-- batch 1, NHWC, INT8 weights (1 byte each), INT32 bias reported separately; in the CNNs
-  batch normalization is folded into the weights.
+- batch 1, INT8 weights (1 byte each), INT32 bias reported separately; the CNNs are NHWC
+  with batch normalization folded into the weights.
 - conv MACs = out_h * out_w * out_c * kernel_h * kernel_w * (in_c / groups).
 - "lowered" is the npu-sim call that runs the layer: an M x N x K GEMM per group, G groups
   (--groups G), repeated "calls" times. Convolutions lower by im2col: M = out_h * out_w,
@@ -33,16 +33,24 @@ CONVENTIONS = {
     "macs": "one multiply-accumulate; FLOPs = 2 x MACs",
     "repeat": "number of identical instances of the layer in the network",
     "lowered": "npu-sim call per instance: M x N x K GEMM per group, G groups (--groups), "
-    "'calls' identical calls; conv via im2col, depthwise as G = channels, "
-    "attention as one group per KV head, with the query heads that share it stacked along M",
+    "'calls' identical calls",
 }
 
 
 def conventions(name):
-    """CONVENTIONS, with batch normalization folded into the weights of the CNNs."""
-    if not name.startswith(("mobilenet", "resnet")):
-        return CONVENTIONS
-    return {**CONVENTIONS, "weight_bytes": CONVENTIONS["weight_bytes"] + "; BN folded"}
+    """CONVENTIONS for one workload: the CNNs are NHWC, fold batch normalization into the
+    weights and lower convolutions by im2col; the transformers lower attention per KV head."""
+    if name.startswith(("mobilenet", "resnet")):
+        return {
+            **CONVENTIONS,
+            "weight_bytes": CONVENTIONS["weight_bytes"] + "; BN folded",
+            "lowered": CONVENTIONS["lowered"] + "; conv via im2col, depthwise as G = channels",
+        }
+    return {
+        **{key: value for key, value in CONVENTIONS.items() if key != "layout"},
+        "lowered": CONVENTIONS["lowered"] + "; attention as one group per KV head, with the "
+        "query heads that share it stacked along M",
+    }
 
 
 def conv_out(n, k, s, p_lo, p_hi):
@@ -676,7 +684,7 @@ def main(argv=None) -> int:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "--check", action="store_true", help="exit 1 when a committed file differs; write nothing"
+        "--check", action="store_true", help="fail when a committed file differs; writes nothing"
     )
     parser.add_argument("--out", type=Path, default=OUT, help="output directory")
     args = parser.parse_args(argv)
