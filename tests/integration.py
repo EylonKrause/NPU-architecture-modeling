@@ -3,7 +3,7 @@
 
 Uses only Python's standard library.  It never imports simulator implementation
 code: fixture generation, quantization, traffic, and serial timing are derived
-from docs/IMPLEMENTATION-CONTRACT.md with unbounded Python integers.
+from docs/numerics.md and docs/architecture.md with unbounded Python integers.
 """
 
 from __future__ import annotations
