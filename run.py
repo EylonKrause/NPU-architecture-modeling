@@ -128,7 +128,10 @@ def main(argv=None) -> int:
     def launch(arguments) -> int:
         parser = cli.Parser("run.py", __doc__)
         parser.add_argument(
-            "--build-dir", type=Path, default=ROOT / "build-live", help="CMake build directory"
+            "--build-dir",
+            type=Path,
+            default=ROOT / "build-live",
+            help="CMake build directory (default: build-live)",
         )
         parser.add_argument("--jobs", type=positive_jobs, default=2, help="parallel build jobs")
         parser.add_argument(

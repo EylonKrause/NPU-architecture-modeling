@@ -165,7 +165,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     mode.add_argument(
         "--check", action="store_true", help="fail when the document differs; writes nothing"
     )
-    parser.add_argument("--document", type=Path, default=DOCUMENT, help="Markdown file")
+    parser.add_argument(
+        "--document",
+        type=Path,
+        default=DOCUMENT,
+        help="Markdown file holding the option tables (default: docs/usage.md)",
+    )
     cli.add_binary_options(parser, timeout=False)
     args = parser.parse_args(argv)
     tables = render(parse_help(help_text(cli.simulator(args))))

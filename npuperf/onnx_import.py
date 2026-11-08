@@ -22,8 +22,7 @@ def dependencies():
         import onnx
     except ImportError as error:
         raise ValueError(
-            "optional ONNX dependencies are missing; install requirements-onnx.txt in a "
-            "virtual environment"
+            "the numpy and onnx packages are required: pip install -r requirements-onnx.txt"
         ) from error
     return onnx, np
 

@@ -107,7 +107,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--jobs",
         type=cli.positive_int,
         default=os.cpu_count() or 1,
-        help="simulator runs at a time",
+        help="simulator runs at a time (default: the CPU count)",
     )
     cli.add_binary_options(parser)
     parser.set_defaults(timeout=900)

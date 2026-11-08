@@ -20,8 +20,22 @@ EXIT_FAILED = 1
 EXIT_REJECTED = 2
 
 
-class Formatter(argparse.ArgumentDefaultsHelpFormatter, argparse.RawDescriptionHelpFormatter):
-    pass
+class Formatter(argparse.RawDescriptionHelpFormatter):
+    """Appends ``(default: X)`` to an option's help, except for switches, options without a
+    default, path and list defaults, and help text that already states the default."""
+
+    def _get_help_string(self, action: argparse.Action) -> str:
+        text = action.help or ""
+        default = action.default
+        if (
+            "default" in text
+            or action.nargs == 0
+            or default is None
+            or default is argparse.SUPPRESS
+            or isinstance(default, (Path, list, tuple))
+        ):
+            return text
+        return text + " (default: %(default)s)"
 
 
 class Parser(argparse.ArgumentParser):

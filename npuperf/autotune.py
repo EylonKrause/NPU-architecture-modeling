@@ -162,25 +162,25 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--tile-m-options",
         type=cli.int_list(1, 4096),
         default=[2, 4, 8],
-        help="comma-separated tile_m candidates",
+        help="comma-separated tile_m candidates (default: 2,4,8)",
     )
     p.add_argument(
         "--tile-n-options",
         type=cli.int_list(1, 4096),
         default=[2, 4, 8],
-        help="comma-separated tile_n candidates",
+        help="comma-separated tile_n candidates (default: 2,4,8)",
     )
     p.add_argument(
         "--tile-k-options",
         type=cli.int_list(0, 4096),
         default=[0, 8, 16],
-        help="comma-separated tile_k candidates (0 = full K)",
+        help="comma-separated tile_k candidates, 0 for the full K (default: 0,8,16)",
     )
     p.add_argument(
         "--slot-options",
         type=cli.int_list(1, 64),
         default=[1, 2],
-        help="comma-separated buffer-slot candidates",
+        help="comma-separated buffer-slot candidates (default: 1,2)",
     )
     p.add_argument(
         "--sram-bytes", type=cli.positive_int, default=262144, help="SRAM budget in bytes"

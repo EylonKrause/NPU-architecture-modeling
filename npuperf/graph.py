@@ -419,10 +419,7 @@ def invoke_dense(
     }
     if q.get("rescale", "native") != "native":
         if not sim.supports(binary, "--rescale"):
-            raise ValueError(
-                "this npu-sim build has no --rescale; the TOSA rescale modes need "
-                "a build that has it"
-            )
+            raise ValueError("the TOSA rescale modes need an npu-sim build with --rescale")
         flags["rescale"] = q["rescale"]
     if groups != 1:
         flags["groups"] = groups

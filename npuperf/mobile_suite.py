@@ -141,7 +141,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--output-dir",
         type=Path,
         default=ROOT / "results" / "mobile",
-        help="directory for the per-case JSON files and summary.json",
+        help="directory for the per-case JSON files and summary.json (default: results/mobile)",
     )
     args = parser.parse_args(argv)
     binaries = {"npu-sim": cli.simulator(args)}
