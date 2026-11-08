@@ -25,7 +25,8 @@ def dependencies():
 
 
 def exact_rescale(input_scale, weight_scale, output_scale):
-    """Represent the exact float32 values' ratio, without approximation."""
+    """(multiplier, shift) with multiplier / 2^shift equal to the exact ratio of the three
+    float32 scales; a ratio that needs rounding is a ValueError."""
     for value in (input_scale, weight_scale, output_scale):
         runtime.scale_value(value)
     ratio = Fraction.from_float(float(input_scale)) * Fraction.from_float(float(weight_scale)) / Fraction.from_float(float(output_scale))
@@ -39,7 +40,7 @@ def load_model(path):
     onnx, _ = dependencies()
     if Path(path).stat().st_size > MAX_MODEL_BYTES:
         raise ValueError("ONNX model exceeds 32 MiB limit")
-    # External-data paths come from the model file; never follow them.
+    # External-data paths come from the untrusted model file, so they are never followed.
     return onnx.load_model(str(path), load_external_data=False)
 
 
@@ -74,7 +75,8 @@ def _input_spec(spec, shape, scale, zero):
 
 
 def import_model(model, supplied_inputs):
-    """Return a runnable graph-runtime document; no model code is executed."""
+    """Graph-runtime document of ``model`` with ``supplied_inputs`` bound. The model is
+    parsed and checked, never executed."""
     onnx, np = dependencies()
     if model.ByteSize() > MAX_MODEL_BYTES:
         raise ValueError("ONNX model exceeds 32 MiB limit")
@@ -294,7 +296,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--inputs", type=Path, required=True,
                         help="JSON map of ONNX-layout INT8 inputs")
     parser.add_argument("--output", type=Path, required=True,
-                        help="write the graph-runtime JSON to this new file")
+                        help="graph-runtime JSON to write; an existing file needs --force")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--run", action="store_true", help="also run the graph on npu-sim")
     cli.add_binary_options(parser)

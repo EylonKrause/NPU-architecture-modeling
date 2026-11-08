@@ -25,14 +25,15 @@ Choice. Per tile shape and slot count the full reduction and the three deepest f
 panels are scored with ``analytic.analyze``, ranked by the lowest estimate, then fewer DRAM
 bytes, then less SRAM. The closed form times each request alone and misses queueing on the
 shared DRAM: on a weight-streaming GEMV most candidates share the DRAM-bound estimate,
-which cannot order them. So the candidates are replayed with ``analytic.schedule``,
+which cannot order them. The candidates are therefore replayed with ``analytic.schedule``,
 which matches npu-sim cycle for cycle, in rank order, skipping a candidate whose
 ``analyze`` lower bound is no less than the fewest cycles replayed so far; the mapper keeps
 the fewest replayed cycles of the whole candidate set (ties by rank). Only a layer whose
 lower bounds separate its candidates replays few of them.
-Dataflow and partition stay as the design sets them.
-A heuristic over a fixed candidate set, not a compiler: no layer fusion, no layout or
-loop-order choice, no cross-layer buffering.
+
+Scope. The search chooses tile shape, panel depth, slot count, panel buffers, the cache
+split and the lowering of one layer. Dataflow and partition stay as the design sets them;
+layer fusion, data layout, loop order and buffering across layers are fixed.
 """
 from __future__ import annotations
 
@@ -211,8 +212,7 @@ def replay_best(ranked: Sequence[tuple[object, analytic.Design, analytic.Analysi
 @functools.lru_cache(maxsize=4096)
 def map_layer(design: analytic.Design, min_depth: int = 32, cache: bool = True) -> Mapping:
     """The mapping for ``design``'s GEMM shape (m, n, k, groups) and conv geometry; see
-    the module text. ``cache`` False leaves both caches off instead of giving them the free
-    SRAM."""
+    the module text. With ``cache`` False both caches stay off and the free SRAM unused."""
     scored = []
     for buffers in (None, 1):
         for lowered in lowerings(design):
@@ -263,7 +263,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="output channels per group")
     parser.add_argument("--k", type=cli.positive_int, required=True,
                         help="reduction depth per group")
-    parser.add_argument("--groups", type=cli.positive_int, default=1, help="groups")
+    parser.add_argument("--groups", type=cli.positive_int, default=1,
+                        help="GEMM groups (depthwise: G = channels with --n 1)")
     parser.add_argument("--min-depth", type=cli.positive_int,
                         help="smallest panel depth in bytes (default: the design point's)")
     cli.add_format_option(parser)

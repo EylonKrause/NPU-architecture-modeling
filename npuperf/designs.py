@@ -84,8 +84,8 @@ def vela_depthwise_rate(name: str, taps: int = DEPTHWISE_KERNEL_TAPS) -> int | N
     ``name`` is sized from, or None for a point without one. Each step covers 4 taps for
     every output of the microblock in 4 cycles, so a 3x3 kernel takes 3 steps and fills 9 of
     their 12 tap slots: three quarters of the microblock's output count. npu-sim's
-    depthwise datapath has no kernel step, so the configs take this rate rather than the
-    microblock's peak."""
+    depthwise datapath has no kernel step, so the configs take this per-kernel rate, which
+    sits below the microblock's peak."""
     block = DEPTHWISE_UBLOCK.get(name)
     if block is None:
         return None

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Check that event- and cycle-driven timing give identical results, and compare their host
-run time.
+"""Check that event- and cycle-driven timing give identical results and compare their host
+run times.
 
 Entry point for npuperf.compare_modes (also: python -m npuperf.compare_modes).
 """

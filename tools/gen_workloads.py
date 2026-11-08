@@ -365,7 +365,8 @@ def render(workload) -> str:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="gen_workloads", description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--check", action="store_true", help="compare instead of writing")
+    parser.add_argument("--check", action="store_true",
+                        help="exit 1 when a committed file differs; write nothing")
     parser.add_argument("--out", type=Path, default=OUT, help="output directory")
     args = parser.parse_args(argv)
     stale = []

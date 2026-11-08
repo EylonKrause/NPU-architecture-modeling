@@ -97,7 +97,8 @@ def exit_status(error: BaseException) -> int:
 
 
 def main_guard(tool: str) -> Callable[[Callable[..., int | None]], Callable[..., int]]:
-    """Wrap ``main(argv)`` so expected failures exit with one stderr line, not a traceback."""
+    """Wrap ``main(argv)``: an expected failure prints one stderr line and returns its exit
+    status; tracebacks are left for programming errors."""
     def decorate(function: Callable[..., int | None]) -> Callable[..., int]:
         @functools.wraps(function)
         def guarded(argv: Sequence[str] | None = None) -> int:

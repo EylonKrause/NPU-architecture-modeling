@@ -227,7 +227,7 @@ def dense_reference(a, w, bias, q):
 
 
 def convolution_reference(a, w, bias, q, geometry, depthwise):
-    """Direct NHWC scalar loops; deliberately does not use im2col lowering."""
+    """Direct NHWC scalar loops, independent of the im2col lowering the accelerator runs."""
     oh, ow, sh, sw, dh, dw, top, left = geometry
     batches, height, width, channels = a.shape
     kh, kw, _, last = w.shape
@@ -317,7 +317,8 @@ def invoke_dense(binary, work, identifier, m, n, k, activations, weights, bias, 
              "rounding": q["rounding"]}
     if q.get("rescale", "native") != "native":
         if not sim.supports(binary, "--rescale"):
-            raise ValueError("this npu-sim build has no --rescale; TOSA rescale needs a newer build")
+            raise ValueError("this npu-sim build has no --rescale; the TOSA rescale modes need "
+                             "a build that has it")
         flags["rescale"] = q["rescale"]
     if groups != 1:
         flags["groups"] = groups
@@ -367,7 +368,7 @@ def compute_node(node, operands, binary, work, identifier, architecture, timeout
         output_shape = shape_value([a.shape[0], oh, ow, out_channels])
         if bias_tensor is not None and bias_tensor.shape != (out_channels,):
             raise ValueError("convolution bias must have one entry per output channel")
-        # Bound the independent reference before its loop as well as lowering.
+        # The MAC limit caps the scalar reference's loop as well as the lowered calls.
         macs = a.shape[0] * oh * ow * out_channels * w.shape[0] * w.shape[1] * (1 if depthwise else channels)
         if macs > 100_000_000:
             raise ValueError("convolution exceeds graph MAC limit")
@@ -376,7 +377,7 @@ def compute_node(node, operands, binary, work, identifier, architecture, timeout
         lower_n = w.shape[3]
         if max(lower_m, lower_k, lower_n) > 4096 or lower_m * lower_k + lower_k * lower_n > MAX_ELEMENTS:
             raise ValueError("lowered convolution exceeds dense simulator or host element limit")
-        # Validate all dimensions/resource bounds before allocating channel dictionaries.
+        # Every size limit is checked before the per-channel lanes are built.
         q = quantization(node, a, w, bias_tensor, out_channels)
         bias = bias_tensor.data if bias_tensor else [0] * out_channels
         expected_acc, expected = convolution_reference(a, w, bias, q, geometry, depthwise)
@@ -674,7 +675,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("graph", type=Path, help="graph JSON (see examples/)")
     cli.add_binary_options(parser)
     cli.add_format_option(parser, default="json")
-    parser.add_argument("--timing", choices=["event", "cycle"], help="override the timing mode")
+    parser.add_argument("--timing", choices=["event", "cycle"],
+                        help="timing mode of every call; overrides the graph's architecture")
     args = parser.parse_args(argv)
     override = {"timing": args.timing} if args.timing else None
     report = run_graph(load_graph(args.graph), cli.simulator(args), override, args.timeout)

@@ -5,7 +5,7 @@
     python -m npuperf.reproduce --quick --check  # fail if a committed table differs
     python -m npuperf.reproduce --only S3,S6 --jobs 8
 
-Writes results/studies/<study>.json (raw simulator records, not committed),
+Writes results/studies/<study>.json (raw simulator records, git-ignored),
 docs/figures/<figure>.svg, and the table between ``<!-- generated:NAME -->`` and
 ``<!-- end:NAME -->`` in docs/results.md; the text around the markers is left alone.
 Every number is computed from npu-sim runs (npuperf.studies). The quick subset is the

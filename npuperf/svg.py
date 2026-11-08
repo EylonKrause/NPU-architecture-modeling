@@ -3,9 +3,9 @@
 ``Figure`` draws on one linear or log10 x/y axis pair (or categorical bands for bars and
 Gantt rows): lines, scatter, steps, bars, rectangles, reference lines, text annotations and
 a legend. Output is deterministic: coordinates use fixed two-decimal formatting, element
-order follows call order, and nothing depends on time or randomness, so committed figures
-diff cleanly. The background is opaque white, so a figure reads the same on GitHub's
-light and dark themes.
+order follows call order and no output depends on time or randomness, so committed figures
+diff cleanly. The opaque white background keeps a figure legible on GitHub's light and dark
+themes.
 
     fig = Figure(title="Roofline", x_label="MAC per DRAM byte", y_label="MAC per cycle",
                  x_scale="log", y_scale="log")
@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-# Categorical order validated for colour-vision deficiency on white (adjacent pairs).
+# Categorical order checked for color-vision deficiency on white, adjacent pairs.
 PALETTE = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948")
 MARKERS = ("circle", "square", "triangle", "diamond", "down", "circle", "square", "triangle")
 INK = "#0b0b0b"
@@ -257,7 +257,7 @@ class Figure:
                 point_labels: Sequence[str | None] | None = None,
                 hollow: bool = False) -> "Figure":
         """Markers at (x, y). ``hollow`` draws outlines, so a second population (for example
-        measured next to modelled points) stays visible where the two coincide."""
+        measured next to modeled points) stays visible where the two coincide."""
         color, marker = self._style(color, marker)
         self.series.append(_Series("scatter", label, color, marker or "circle", None, size,
                                    list(zip(map(float, xs), map(float, ys))),

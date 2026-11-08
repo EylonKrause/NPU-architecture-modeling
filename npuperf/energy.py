@@ -1,7 +1,9 @@
 """Estimate MAC, DRAM and static energy for one npu-sim result.
 
-energy = executed MACs x pJ/MAC + DRAM bytes x pJ/byte + static mW x modeled latency.
-Coefficients are inputs; the report states which terms the model includes.
+    E [pJ] = executed MACs x pJ/MAC + (read + write bytes) x pJ/byte
+             + static mW x modeled latency ns            (1 mW x 1 ns = 1 pJ)
+
+The coefficients are inputs. The report's "scope" lists the included and excluded terms.
 """
 from __future__ import annotations
 
@@ -127,7 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="pJ per DRAM byte read or written")
     parser.add_argument("--static-mw", type=coefficient, default=0.0,
                         help="constant static power in mW")
-    parser.add_argument("--output", type=Path, help="also write the report to this new file")
+    parser.add_argument("--output", type=Path,
+                        help="also write the report here; an existing file needs --force")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     args = parser.parse_args(argv)
     report = estimate(load_result(args.result), args.mac_pj, args.dram_byte_pj, args.static_mw)

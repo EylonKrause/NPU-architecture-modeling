@@ -1,5 +1,5 @@
-"""Timing model of npu-sim, written from the architecture rules (SPEC sections 3 to 5 and
-the interface comments in include/npu), not from the C++.
+"""Timing model of npu-sim, derived from docs/architecture.md (sections 3 to 7) and the
+interface comments in include/npu, independently of the C++ implementation.
 
 Execution model. Each of G groups is an independent M x n x k GEMM. Its output is cut
 into tile_m x tile_n tiles (edge tiles are smaller); each tile walks the reduction in
@@ -144,7 +144,7 @@ class Design:
         return name if name in _FIELDS else None
 
     @classmethod
-    def normalise(cls, flags: Mapping[str, Any]) -> dict[str, Any]:
+    def normalize(cls, flags: Mapping[str, Any]) -> dict[str, Any]:
         """``flags`` keyed by field name; any key that names no field is a ValueError."""
         values: dict[str, Any] = {}
         for key, value in flags.items():
@@ -165,7 +165,7 @@ class Design:
         ``strict``."""
         given = {**(flags or {}), **overrides}
         if strict:
-            given = cls.normalise(given)
+            given = cls.normalize(given)
         values: dict[str, Any] = {}
         for key, value in given.items():
             name = cls.field_name(key)
@@ -177,9 +177,10 @@ class Design:
     def from_result(cls, result: Mapping[str, Any]) -> "Design":
         """Design echoed in an npu-sim result, flat or option-table config.
 
-        Keys an older simulator does not report take the behaviour that simulator had (one
-        panel buffer per slot, one group, serial memory, one core; arrays without a
-        dataflow key are os-per-wave). Every other key the model reads must be present."""
+        A key the result does not report takes the value of the build that wrote it, which
+        lacks that option: one panel buffer per slot, one group, serial memory, one core, and
+        os-per-wave for an array without a dataflow key. Every other key the model reads must
+        be present."""
         config = result["config"]
         legacy = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
                   "partition": "auto", "dram_bytes_per_cycle": 0,
@@ -1196,9 +1197,9 @@ def axi_bounds(design: Design, compute_cycles: int | None = None,
 # The rest of the module replays the schedule request by request: the address map, the
 # AXI burst split, each channel's outstanding-window recurrence, the shared DRAM byte
 # timeline, the serial DMA server, the cluster split and each core's LRU weight cache.
-# ``schedule()`` returns the cycle count and the counters npu-sim reports. It is written
-# from SPEC sections 3 to 5 and the interface comments in include/npu/memory.hpp and
-# core.hpp; tests/analytic_model_tests.py checks it against npu-sim.
+# ``schedule()`` returns the cycle count and the counters npu-sim reports. It follows
+# docs/architecture.md sections 4 to 7 and the interface comments in include/npu/memory.hpp
+# and include/npu/core.hpp; tests/analytic_model_tests.py checks it against npu-sim.
 
 ACTIVATION_BASE = 0x8000_0000
 WEIGHT_BASE = 0x9000_0000
@@ -1349,7 +1350,7 @@ class DramTimeline:
             begin = max(begin, ends[index])
             index += 1
         end = begin + nbytes
-        # Insert [begin, end) at ``index`` and merge with touching neighbours.
+        # Insert [begin, end) at ``index`` and merge with touching neighbors.
         if index > 0 and ends[index - 1] == begin:
             ends[index - 1] = end
             if index < len(begins) and begins[index] == end:
@@ -1384,7 +1385,8 @@ class ChannelStats:
 
 
 class _AxiChannel:
-    """One read or write channel of a core's port: the burst recurrence of SPEC 4.3.
+    """One read or write channel of a core's port: the burst recurrence of
+    docs/architecture.md 5.4.2.
 
         issue_i      = max(arrival, issue_{i-1} + 1, completion_{i-N})
         start_i      = max(issue_i + read latency (reads), data_free, DRAM grant)
@@ -1493,9 +1495,10 @@ class _PanelCache:
 
 @dataclass(frozen=True)
 class ClusterPlan:
-    """The work split of SPEC 5: units are whole groups when G >= P, else the row tiles
-    (partition m) or column tiles (partition n) of every group, numbered group-major.
-    Core c runs a contiguous run of U // P units, one more for each of the first U % P."""
+    """The work split of docs/architecture.md 6.2: units are whole groups when G >= P, else
+    the row tiles (partition m) or column tiles (partition n) of every group, numbered
+    group-major. Core c runs a contiguous run of U // P units, one more for each of the
+    first U % P."""
 
     partition: str
     split: str

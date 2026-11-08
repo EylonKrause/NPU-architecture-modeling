@@ -1,15 +1,14 @@
-"""Integer requantisation oracle, independent of the C++ datapath.
+"""Integer requantization oracle, written independently of the C++ datapath.
 
 Three rescale modes, matching npu-sim --rescale:
 
-native       today's sign-magnitude rounding: round(|acc * M| / 2^shift) with ties away
-             from zero (``rounding="away"``) or to even, then the sign; M <= INT32_MAX,
-             shift 0..31.
+native       sign-magnitude rounding: round(|acc * M| / 2^shift) with ties away from zero
+             (``rounding="away"``) or to even, then the sign; M <= INT32_MAX, shift 0..31.
 tosa-single  TOSA 1.0.2 RESCALE apply_scale_32 with SINGLE_ROUND.
 tosa-double  TOSA 1.0.2 RESCALE apply_scale_32 with DOUBLE_ROUND.
 
-The TOSA modes are computed here through the TFLite formulation, not the TOSA pseudo-code,
-so the oracle checks the simulator against a second published definition:
+The TOSA modes are computed through the TFLite formulation, so the oracle checks the
+simulator, which follows the TOSA pseudo-code, against a second published definition:
 tosa-single == TFLite MultiplyByQuantizedMultiplier built with TFLITE_SINGLE_ROUNDING,
 tosa-double == TFLite's default (gemmlowp SaturatingRoundingDoublingHighMul followed by
 RoundingDivideByPOT), with ``tflite_shift = 31 - tosa_shift``. Every mode then adds the

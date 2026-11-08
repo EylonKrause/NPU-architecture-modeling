@@ -6,7 +6,8 @@
 x is arithmetic intensity (MACs per DRAM byte moved, after the mapping's re-reads), y is
 achieved MACs per cycle. Roofs: peak MACs per cycle and peak DRAM bytes per cycle; under the
 serial memory model a dashed roof shows the bandwidth left after per-request latency.
-Every point satisfies y <= min(peak, bandwidth * x); the tests check that invariant.
+Every point satisfies y <= min(peak, bandwidth * x) (tests/npuperf_tests.py,
+test_roofline_invariant).
 """
 from __future__ import annotations
 
@@ -57,7 +58,7 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
            label_points: Sequence[str] | bool = True, width: int = 760,
            height: int = 480, group_order: Sequence[str] = GROUP_ORDER,
            hollow: bool = False) -> svg.Figure:
-    """``group_order`` fixes the colour of each group (others follow, sorted); ``hollow``
+    """``group_order`` fixes the color of each group (others follow, sorted); ``hollow``
     draws every group's markers as outlines, so coinciding points of different groups
     stay visible."""
     peak, bw = float(design.peak_macs_per_cycle), design.bandwidth
@@ -88,7 +89,7 @@ def figure(design: analytic.Design, points: Sequence[Point], title: str = "Roofl
         fig.annotate_along((x_lo, effective_bw * x_lo), (end, effective_bw * end),
                            f"{_fmt(effective_bw)} B/cycle after DMA latency", at=0.55,
                            offset=15, color=svg.INK_MUTED)
-    # Model points take categorical colours by op class; simulated points are hollow ink
+    # Model points take categorical colors by op class; simulated points are hollow ink
     # rings drawn last, so a simulated point on top of its model point leaves both visible.
     groups = [g for g in group_order if any(p.group == g for p in points) and g != "simulated"]
     groups += sorted({p.group for p in points} - set(groups) - {"simulated"})
@@ -136,7 +137,7 @@ def lowered(design: analytic.Design, gemm: workloads.Gemm) -> tuple[analytic.Des
     return conv, True
 
 
-def analyse_workload(design: analytic.Design, workload: dict[str, Any], timing_only: bool = True,
+def analyze_workload(design: analytic.Design, workload: dict[str, Any], timing_only: bool = True,
                      **options: Any) -> list[dict[str, Any]]:
     """One row per npu-sim call; ``options`` are ``workloads.iter_calls`` options."""
     rows = []
@@ -168,13 +169,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     cli.add_binary_options(parser)
     cli.add_format_option(parser)
     args = parser.parse_args(argv)
-    flags = analytic.Design.normalise(dict(_parse_set(item) for item in args.set))
+    flags = analytic.Design.normalize(dict(_parse_set(item) for item in args.set))
     design = analytic.Design.from_flags(flags, strict=True)
     binary = cli.simulator(args) if args.simulate else None
     options: dict[str, Any] = {"timing_only": True}
     if binary is not None:
-        # Model the design the build runs: options it lacks keep its fixed behaviour
-        # (for example one panel buffer per slot).
+        # Model the design the build runs: an option the build lacks keeps the build's
+        # fixed value (for example one panel buffer per slot).
         probe = sim.run({**flags, "m": 8, "n": 8, "k": 8}, binary, args.timeout)
         design = analytic.Design.from_result(probe)
         options = workloads.call_options(binary)
@@ -182,7 +183,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     rows, points, analyses = [], [], []
     for name in args.workload:
         workload = workloads.load(name)
-        for row in analyse_workload(design, workload, **options):
+        for row in analyze_workload(design, workload, **options):
             gemm, result = row["gemm"], row["analysis"]
             analyses.append(result)
             entry = {"workload": workload["name"], "layer": row["layer"], "class": row["class"],

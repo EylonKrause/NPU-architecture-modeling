@@ -4,15 +4,15 @@ A layer becomes one ``Gemm``: an M x N x K GEMM per group, G groups (npu-sim --g
 run ``calls`` times. Convolutions are M = out_h*out_w, N = out_c/G, K = kh*kw*in_c/G and
 carry their geometry (``Gemm.conv``): run with it, the activation operand is the NHWC
 input's im2col view and a panel load reads the input footprint (npu-sim --conv-*); run
-without it (``flags(conv=False)``), the operand is the materialised im2col matrix.
+without it (``flags(conv=False)``), the operand is the materialized im2col matrix.
 Depthwise is G = channels and N = 1, which a design with a depthwise datapath runs
 channel-wise. Attention matmuls run per KV head.
 ``split`` cuts a call only when it exceeds a per-call simulator limit, along groups first,
-then N, then M; a reduction too deep for one call cannot be split (the simulator does not
-accumulate partial sums across calls), and a split piece of a convolution is a plain GEMM.
-``call_options(binary)`` gives the limits of one npu-sim build: builds without --timing-only
-have the smaller legacy limits, builds without --groups run a grouped layer as one call per
-group, and builds without --conv-input-h run every convolution on its im2col matrix.
+then N, then M. A reduction too deep for one call is an error, since npu-sim accumulates
+no partial sums across calls; a split piece of a convolution is a plain GEMM.
+``call_options(binary)`` gives the limits of one npu-sim build: a build without
+--timing-only takes LEGACY_LIMITS, a build without --groups runs a grouped layer as one call
+per group, and a build without --conv-input-h runs every convolution on its im2col matrix.
 """
 from __future__ import annotations
 
@@ -27,8 +27,8 @@ from .binary import ROOT
 
 WORKLOAD_DIR = ROOT / "workloads"
 
-# Per-call limits from the simulator spec. Functional runs generate and check every
-# tensor; --timing-only runs skip tensors and numerics.
+# Per-call limits of npu-sim (include/npu/core.hpp). Functional runs generate and check
+# every tensor; --timing-only runs skip tensors and numerics.
 MAX_DIMENSION = 1 << 20
 MAX_FUNCTIONAL_MACS = 4_000_000_000
 MAX_TIMING_MACS = 10_000_000_000_000

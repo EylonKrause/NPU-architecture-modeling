@@ -1,7 +1,7 @@
 """Run npu-sim and its sibling executables.
 
-``run()`` accepts either an argv-style flag list or a dict of flags, so options the
-simulator gains later pass through without changes here: ``{"tile_m": 8, "relu": True}``
+``run()`` takes an argv-style flag list or a dict of flags and passes every option through
+unchecked, so a new npu-sim option needs no change here: ``{"tile_m": 8, "relu": True}``
 becomes ``--tile-m 8 --relu``. ``LiveSession`` drives the ``--live-stdio`` protocol.
 """
 from __future__ import annotations
@@ -109,9 +109,9 @@ def from_flags(tokens: Sequence[Any]) -> dict[str, Any]:
     return result
 
 
-# Flat result-config keys (npu-sim flag names) and the option-table paths (SPEC 1.1) that
-# hold them in a nested config. Several leaves are renamed (weight_bits -> weights.bits), so
-# a leaf-name search alone would miss them.
+# Flat result-config keys (npu-sim flag names) and the option-table paths (src/options.cpp)
+# that hold them in a nested config. Several leaves are renamed (weight_bits ->
+# weights.bits), so a leaf-name search alone misses them.
 CONFIG_PATHS = {
     "m": "shape.m", "n": "shape.n", "k": "shape.k", "groups": "shape.groups",
     "seed": "shape.seed",
@@ -156,7 +156,8 @@ def _at_path(config: Mapping[str, Any], path: str) -> Any:
 
 
 def config_value(config: Mapping[str, Any], key: str, default: Any = _MISSING) -> Any:
-    """Look up ``key`` in a result's config, flat (older npu-sim) or nested (option table).
+    """Look up ``key`` in a result's config, flat (schema_version 1) or nested by option-table
+    path (schema_version 2).
 
     ``key`` is a flat key ("weight_bits"), an option-table path ("weights.bits") or a leaf
     name. Known keys resolve through CONFIG_PATHS in both directions; anything else falls
@@ -196,8 +197,8 @@ def _nonnegative_int(result: Mapping[str, Any], key: str) -> int:
 
 def result_numerics(result: Mapping[str, Any]) -> str | None:
     """"bit-exact" (numerical_match true), "skipped" (a --timing-only run, which reports
-    numerical_match null or omits it), or None for any other combination. Results from
-    builds older than the "numerics" field are bit-exact when numerical_match is true."""
+    numerical_match null or omits it), or None for any other combination. A result without
+    a "numerics" field is bit-exact when numerical_match is true."""
     match = result.get("numerical_match")
     numerics = result.get("numerics", "bit-exact" if match is True else None)
     if numerics == "bit-exact" and match is True:
@@ -208,7 +209,8 @@ def result_numerics(result: Mapping[str, Any]) -> str | None:
 
 
 def schema_version(value: Any) -> int | None:
-    """The result or snapshot layout version of ``value``, or None if it is not one we read."""
+    """The result or snapshot layout version of ``value``; None for a layout outside
+    RESULT_SCHEMA_VERSIONS."""
     if not isinstance(value, Mapping):
         return None
     version = value.get("schema_version")

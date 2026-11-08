@@ -1,5 +1,5 @@
-"""Check that event- and cycle-driven timing give identical results, and compare their host
-run time."""
+"""Check that event- and cycle-driven timing give identical results and compare their host
+run times."""
 from __future__ import annotations
 
 import statistics
@@ -25,7 +25,7 @@ def compare(binary: Path, repeats: int, timeout: float = 60) -> tuple[dict, list
         reference = None
         base = {"m": m, "n": n, "k": k, "tile_m": 8, "tile_n": 8, "seed": 1, "buffer_slots": 2}
         for repetition in range(repeats):
-            # Alternate the order so warm-up does not favour one mode.
+            # Alternate the order so warm-up does not favor one mode.
             for mode in (("event", "cycle") if repetition % 2 == 0 else ("cycle", "event")):
                 result = sim.run({**base, "timing": mode}, binary, timeout)
                 current = {key: result.get(key) for key in ARCHITECTURE_FIELDS}

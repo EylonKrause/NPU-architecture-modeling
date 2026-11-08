@@ -16,12 +16,12 @@ ACCELERATED = {"Dense", "MatMul", "Conv2D", "DepthwiseConv2D"}
 
 
 def optimize_graph(document):
-    """Fuse producer->ReLU only if the unfused producer has no observer.
+    """Fold each ReLU into its accelerator producer when the producer's output has no other
+    consumer and is not a graph output.
 
-    ReLU after INT8 requantization is exactly the engine's existing fused
-    output-zero clamp, including saturation and either rounding rule. The
-    producer's pre-activation output must not be externally visible or shared.
-    Repeating this pass handles redundant chains of ReLUs without changing IR.
+    ReLU after INT8 requantization equals the engine's fused clamp at the output zero point,
+    with saturation and under either rounding rule, so every output is unchanged. The pass
+    repeats until no ReLU folds, which collapses chains of ReLUs.
     """
     validate_graph(document)
     compiled = deepcopy(document)
@@ -85,7 +85,8 @@ def verify_graphs(original, compiled, binary, timeout=60):
 def main(argv: Sequence[str] | None = None) -> int:
     parser = cli.Parser("graph_optimize", __doc__)
     parser.add_argument("graph", type=Path, help="graph JSON")
-    parser.add_argument("--output", type=Path, help="write the compiled graph to this new file")
+    parser.add_argument("--output", type=Path,
+                        help="write the compiled graph here; an existing file needs --force")
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--verify", action="store_true",
                         help="run original and compiled graphs and compare every output")

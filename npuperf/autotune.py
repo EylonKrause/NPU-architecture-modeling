@@ -119,7 +119,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                    help="comma-separated tile_k candidates (0 = full K)")
     p.add_argument("--slot-options", type=cli.int_list(1, 64), default=[1, 2],
                    help="comma-separated buffer-slot candidates")
-    p.add_argument("--sram-bytes", type=cli.positive_int, default=262144, help="SRAM budget")
+    p.add_argument("--sram-bytes", type=cli.positive_int, default=262144,
+                   help="SRAM budget in bytes")
     p.add_argument("--macs-per-cycle", type=cli.positive_int, default=64,
                    help="peak INT8 MACs per cycle")
     p.add_argument("--memory-bytes-per-cycle", type=cli.positive_int, default=16,

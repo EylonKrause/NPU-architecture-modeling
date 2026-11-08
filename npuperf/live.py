@@ -65,9 +65,9 @@ TIMELINE_STRIDE = 8
 TIMELINE_WINDOW = 512
 TIMELINE_TRANSITIONS = 512
 # A schema_version 2 snapshot echoes the complete design (nested by option-table path). Keys
-# an older, schema_version 1 snapshot config does not echo take the behaviour of the simulator
-# that emitted it: one panel buffer per slot, one group, serial memory, one core. These are
-# the values analytic.Design.from_result assumes for the same keys.
+# a schema_version 1 snapshot config omits take the values of the build that wrote it: one
+# panel buffer per slot, one group, serial memory, one core. analytic.Design.from_result
+# assumes the same values for the same keys.
 SNAPSHOT_DEFAULTS = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
                      "partition": "auto", "dram_bytes_per_cycle": 0}
 STAGE_KEYS = ("dma_busy", "dma_read", "dma_tile_id", "compute_busy", "compute_tile_id")
@@ -129,8 +129,8 @@ def machine_summary(profile: str, telemetry: dict) -> dict:
     """Peak rates, ridge point and analytic bound of the running design.
 
     A snapshot that echoes the complete config (schema_version 2, nested) is read directly
-    (``source`` "snapshot"); an older one (shape and weight format only) is completed by
-    profile_design (``source`` "profile")."""
+    (``source`` "snapshot"); a schema_version 1 snapshot (shape and weight format only) is
+    completed by profile_design (``source`` "profile")."""
     try:
         design = analytic.Design.from_result(telemetry)
         source = "snapshot"
@@ -420,7 +420,7 @@ class DashboardServer(ThreadingHTTPServer):
         self.server_name, self.server_port = self.server_address[:2]
 
     def handle_error(self, request, client_address) -> None:
-        # Browsers drop keep-alive connections at will; that is not an error worth a traceback.
+        # Browsers drop keep-alive connections at will; those resets print no traceback.
         if not isinstance(sys.exc_info()[1], (ConnectionError, TimeoutError)):
             super().handle_error(request, client_address)
 
@@ -575,8 +575,10 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="loopback port; 0 picks a free one")
     parser.add_argument("--profile", choices=PROFILES, default="balanced",
                         help="workload started by --autostart")
-    parser.add_argument("--autostart", action="store_true", help="start running immediately")
-    parser.add_argument("--open-browser", action="store_true", help="open the dashboard URL")
+    parser.add_argument("--autostart", action="store_true",
+                        help="start --profile when the server starts")
+    parser.add_argument("--open-browser", action="store_true",
+                        help="open the dashboard in the default browser")
     args = parser.parse_args(argv)
     return serve(cli.simulator(args), args.port, args.profile, args.autostart, args.open_browser)
 
