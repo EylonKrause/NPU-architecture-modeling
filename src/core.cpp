@@ -34,9 +34,11 @@ const std::string& dimension_range() {
     return text;
 }
 
-// Shift range of a rescale mode: native keeps the original 0..31; the TOSA
-// modes take the apply_scale_32 range 2..62.
-struct ShiftRange { std::int32_t low, high; };
+// Shift range of a rescale mode: native takes 0..31; the TOSA modes take the
+// apply_scale_32 range 2..62.
+struct ShiftRange {
+    std::int32_t low, high;
+};
 ShiftRange shift_range(RescaleMode mode) {
     return mode == RescaleMode::Native ? ShiftRange{0, 31} : ShiftRange{2, 62};
 }
@@ -91,10 +93,10 @@ void validate_quant_channels(const Requant& quant, std::uint64_t channels) {
         validate_channel_entry(quant, index);
 }
 
-// Checks the entries of the channels [first, first + count) only, so a tile
-// costs O(tile width) rather than O(G*N).
-void validate_quant_range(const Requant& quant, std::uint64_t channels,
-                          std::uint64_t first, std::uint64_t count) {
+// Checks only the entries of the channels [first, first + count), so a
+// per-tile check costs O(tile width).
+void validate_quant_range(const Requant& quant, std::uint64_t channels, std::uint64_t first,
+                          std::uint64_t count) {
     validate_quant_scalars(quant);
     validate_channel_counts(quant, channels);
     for (auto index = first; index < first + count; ++index)
@@ -102,8 +104,9 @@ void validate_quant_range(const Requant& quant, std::uint64_t channels,
 }
 
 std::int32_t weight_zero(const Requant& quant, std::uint64_t channel) {
-    return quant.weight_zero_points.empty() ? quant.weight_zero :
-        quant.weight_zero_points.at(static_cast<std::size_t>(channel));
+    return quant.weight_zero_points.empty() ?
+               quant.weight_zero :
+               quant.weight_zero_points.at(static_cast<std::size_t>(channel));
 }
 
 bool dimension(std::uint64_t value) { return value >= 1 && value <= max_dimension; }
@@ -140,9 +143,9 @@ void validate_problem(const Problem& problem) {
     require(problem.activations.size() ==
                 checked_mul(problem.m, checked_mul(problem.groups, problem.k)),
             "activation vector size does not match M*G*K");
-    require(problem.weights.size() ==
-                checked_mul(problem.groups, checked_mul(problem.k, problem.n)),
-            "weight vector size does not match G*K*N");
+    require(
+        problem.weights.size() == checked_mul(problem.groups, checked_mul(problem.k, problem.n)),
+        "weight vector size does not match G*K*N");
     require(problem.bias.size() == channels(problem), "bias vector size does not match G*N");
 }
 
@@ -178,7 +181,8 @@ void validate_mapping(const Config& config) {
     const auto& compute = config.arch.compute;
     require(weights.bits == 4 || weights.bits == 8, "weight bits must be 4 or 8");
     require(weights.palette_bits == 1 || weights.palette_bits == 2 || weights.palette_bits == 4 ||
-                weights.palette_bits == 8, "palette bits must be 1, 2, 4 or 8");
+                weights.palette_bits == 8,
+            "palette bits must be 1, 2, 4 or 8");
     require(weights.sparse_block >= 1 && weights.sparse_block <= 4096,
             "sparse block must be in 1..4096");
     require(compute.weight_decode_values_per_cycle >= 1 &&
@@ -186,14 +190,15 @@ void validate_mapping(const Config& config) {
             "weight decode rate must be in 1..1000000000");
     require(weights.encoding != WeightEncoding::Sparse ||
                 (compute.array_rows == 0 && compute.array_cols == 0),
-            "sparse zero-skipping is supported only by the throughput datapath, not systolic timing");
+            "sparse zero-skipping is supported only by the vector datapath; a systolic "
+            "array takes dense or palette weights");
     if (config.mapping.tile_k > max_dimension)
         fail("reduction tile dimension must be zero (full K) or in " + dimension_range());
     require(config.mapping.panel_buffers == 1 || config.mapping.panel_buffers == 2,
             "panel buffers must be 1 or 2");
     require((compute.array_rows == 0 && compute.array_cols == 0) ||
-                (compute.array_rows >= 1 && compute.array_rows <= 256 &&
-                 compute.array_cols >= 1 && compute.array_cols <= 256),
+                (compute.array_rows >= 1 && compute.array_rows <= 256 && compute.array_cols >= 1 &&
+                 compute.array_cols <= 256),
             "systolic array dimensions must both be zero or in 1..256");
     require(compute.dataflow == Dataflow::OutputStationary || compute.array_rows != 0,
             "weight-stationary dataflow requires --array-rows and --array-cols");
@@ -206,9 +211,10 @@ void validate_mapping(const Config& config) {
         const auto row_k = conv_geometry(config.shape).kernel_row_k;
         const auto tile_k = config.mapping.tile_k;
         if (tile_k % row_k != 0)
-            fail("with shape.conv, --tile-k must be 0 or a multiple of kernel_w x input_c / "
-                 "groups = " + std::to_string(row_k) + " (whole kernel rows), got " +
-                 std::to_string(tile_k));
+            fail(
+                "with shape.conv, --tile-k must be 0 or a multiple of kernel_w x input_c / "
+                "groups = " +
+                std::to_string(row_k) + " (whole kernel rows), got " + std::to_string(tile_k));
     }
 }
 
@@ -237,18 +243,18 @@ std::uint64_t encoded_weight_bound(const Config& config, std::uint64_t count) {
 
 std::uint64_t channel_metadata_bytes(const Config& config, std::uint64_t cols) {
     const auto vectors = static_cast<std::uint64_t>(!config.quant.weight_zero_points.empty()) +
-        static_cast<std::uint64_t>(!config.quant.multipliers.empty()) +
-        static_cast<std::uint64_t>(!config.quant.shifts.empty());
+                         static_cast<std::uint64_t>(!config.quant.multipliers.empty()) +
+                         static_cast<std::uint64_t>(!config.quant.shifts.empty());
     return checked_mul(checked_mul(4, cols), vectors);
 }
 
-// The weight panel bound and, on the first panel, the bias and channel
-// metadata of the tile's cols channels.
+// Upper bound on a weight panel's bytes plus, on the first panel, the bias and
+// channel metadata of the tile's cols channels.
 std::uint64_t weight_side_bytes(const Config& config, std::uint64_t k, std::uint64_t cols,
                                 bool first) {
     const auto weights = encoded_weight_bound(config, checked_mul(k, cols));
-    const auto metadata = first ? checked_add(checked_mul(4, cols),
-                                               channel_metadata_bytes(config, cols)) : 0;
+    const auto metadata =
+        first ? checked_add(checked_mul(4, cols), channel_metadata_bytes(config, cols)) : 0;
     return checked_add(weights, metadata);
 }
 
@@ -281,7 +287,7 @@ ConvExtent conv_extent(const std::vector<InputSpan>& spans) {
 }
 
 // Per reduction block, the largest footprint over every row tile, each field
-// maximised on its own: a bound on any panel of that block.
+// maximized on its own: an upper bound on any panel of that block.
 std::vector<ConvExtent> conv_extents(const Config& config) {
     const auto& shape = config.shape;
     const auto tile_m = config.mapping.tile_m;
@@ -304,13 +310,13 @@ std::vector<ConvExtent> conv_extents(const Config& config) {
 void validate_memory(const Config& config) {
     const auto& memory = config.arch.memory;
     const auto& axi = memory.axi;
-    require(axi.data_bytes == 8 || axi.data_bytes == 16 || axi.data_bytes == 32 ||
-                axi.data_bytes == 64,
-            "AXI data bytes must be 8, 16, 32 or 64");
+    require(
+        axi.data_bytes == 8 || axi.data_bytes == 16 || axi.data_bytes == 32 || axi.data_bytes == 64,
+        "AXI data bytes must be 8, 16, 32 or 64");
     require(axi.max_burst_beats >= 1 && axi.max_burst_beats <= 256,
             "AXI burst beats must be in 1..256");
-    require(axi.read_outstanding >= 1 && axi.read_outstanding <= 64 &&
-                axi.write_outstanding >= 1 && axi.write_outstanding <= 64,
+    require(axi.read_outstanding >= 1 && axi.read_outstanding <= 64 && axi.write_outstanding >= 1 &&
+                axi.write_outstanding <= 64,
             "AXI outstanding bursts must be in 1..64");
     require(axi.read_latency <= max_timing_value && axi.write_latency <= max_timing_value,
             "AXI latencies must be at most 1000000000");
@@ -330,12 +336,12 @@ std::uint64_t axi_run_bound(const Config& config, bool read, std::uint64_t lengt
     const auto bursts = checked_add(length / (axi.max_burst_beats * axi.data_bytes),
                                     length / axi_boundary_bytes + 3);
     const auto beats = length / axi.data_bytes + 2;
-    auto cycles = checked_add(checked_mul(bursts, checked_add(1, read ? axi.read_latency :
-                                                                       axi.write_latency)),
-                              beats);
+    auto cycles = checked_add(
+        checked_mul(bursts, checked_add(1, read ? axi.read_latency : axi.write_latency)), beats);
     if (memory.dram_bytes_per_cycle)
-        cycles = checked_add(cycles, checked_add(bursts,
-            ceil_div(checked_mul(beats, axi.data_bytes), memory.dram_bytes_per_cycle)));
+        cycles =
+            checked_add(cycles, checked_add(bursts, ceil_div(checked_mul(beats, axi.data_bytes),
+                                                             memory.dram_bytes_per_cycle)));
     return cycles;
 }
 
@@ -360,8 +366,7 @@ std::uint64_t mac_cycles(const Config& config, std::uint64_t rows, std::uint64_t
         return checked_add(checked_mul(checked_mul(ceil_div(rows, array_rows), column_folds), k),
                            skew);
     const auto folds = checked_mul(ceil_div(k, array_rows), column_folds);
-    return checked_add(checked_add(array_rows,
-                                   checked_mul(folds - 1, std::max(rows, array_rows))),
+    return checked_add(checked_add(array_rows, checked_mul(folds - 1, std::max(rows, array_rows))),
                        checked_add(rows, skew));
 }
 
@@ -369,33 +374,32 @@ std::uint64_t mac_cycles(const Config& config, std::uint64_t rows, std::uint64_t
 // into it, so a compressed panel takes the longer of the two plus the
 // pipeline charge. Without the encoded panel, the decode term is its bound:
 // every value, and for sparse every bitmap block as well.
-std::uint64_t compute_panel_cycles(const Config& config, std::uint64_t rows,
-                                   std::uint64_t cols, std::uint64_t k) {
+std::uint64_t compute_panel_cycles(const Config& config, std::uint64_t rows, std::uint64_t cols,
+                                   std::uint64_t k) {
     const auto& compute = config.arch.compute;
     // The depthwise datapath: rows x channels x K_p MACs at its own rate.
     if (channel_wise(config))
-        return checked_add(ceil_div(checked_mul(checked_mul(rows, cols), k),
-                                    compute.depthwise_macs_per_cycle),
-                           compute.pipeline_cycles);
+        return checked_add(
+            ceil_div(checked_mul(checked_mul(rows, cols), k), compute.depthwise_macs_per_cycle),
+            compute.pipeline_cycles);
     auto busy = mac_cycles(config, rows, cols, k);
     if (config.weights.encoding != WeightEncoding::Dense) {
         const auto count = checked_mul(k, cols);
         const auto rate = compute.weight_decode_values_per_cycle;
         auto decode = ceil_div(count, rate);
         if (config.weights.encoding == WeightEncoding::Sparse)
-            decode = checked_add(decode,
-                                 ceil_div(ceil_div(count, config.weights.sparse_block), rate));
+            decode =
+                checked_add(decode, ceil_div(ceil_div(count, config.weights.sparse_block), rate));
         busy = std::max(busy, decode);
     }
     return checked_add(busy, compute.pipeline_cycles);
 }
 
-std::uint64_t compute_cycles(const Config& config, std::uint64_t rows,
-                             std::uint64_t cols) {
+std::uint64_t compute_cycles(const Config& config, std::uint64_t rows, std::uint64_t cols) {
     std::uint64_t total = 0;
     for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
-        total = checked_add(total,
-                            compute_panel_cycles(config, rows, cols, panel_k(config, block)));
+        total =
+            checked_add(total, compute_panel_cycles(config, rows, cols, panel_k(config, block)));
     return total;
 }
 
@@ -434,8 +438,8 @@ std::int32_t scale32(std::int32_t value, std::int32_t multiplier, std::int32_t s
         floor_shift(static_cast<std::int64_t>(value) * multiplier + round, shift));
 }
 
-std::int64_t native_scale(std::int32_t accumulator, std::int32_t multiplier,
-                          std::int32_t shift, Rounding rounding) {
+std::int64_t native_scale(std::int32_t accumulator, std::int32_t multiplier, std::int32_t shift,
+                          Rounding rounding) {
     // INT32 * at most INT32_MAX fits in INT64, including INT32_MIN.
     const auto product = static_cast<std::int64_t>(accumulator) * multiplier;
     const auto magnitude = static_cast<std::uint64_t>(product < 0 ? -product : product);
@@ -446,8 +450,8 @@ std::int64_t native_scale(std::int32_t accumulator, std::int32_t multiplier,
         if (rounding == Rounding::HalfToEven) {
             const auto quotient = magnitude >> bits;
             const auto remainder = magnitude & ((UINT64_C(1) << bits) - 1);
-            const bool increment = remainder > half ||
-                (remainder == half && (quotient & UINT64_C(1)) != 0);
+            const bool increment =
+                remainder > half || (remainder == half && (quotient & UINT64_C(1)) != 0);
             rounded_magnitude = quotient + static_cast<std::uint64_t>(increment);
         } else {
             rounded_magnitude = (magnitude + half) >> bits;
@@ -467,15 +471,15 @@ std::int8_t requantize_unchecked(std::int32_t accumulator, const Requant& quant,
     const auto shift = quant.shifts.empty() ? quant.shift : quant.shifts[index];
     std::int64_t scaled = 0;
     switch (quant.rescale) {
-    case RescaleMode::Native:
-        scaled = native_scale(accumulator, multiplier, shift, quant.rounding);
-        break;
-    case RescaleMode::TosaSingle:
-        scaled = scale32(accumulator, multiplier, shift, false);
-        break;
-    case RescaleMode::TosaDouble:
-        scaled = scale32(accumulator, multiplier, shift, true);
-        break;
+        case RescaleMode::Native:
+            scaled = native_scale(accumulator, multiplier, shift, quant.rounding);
+            break;
+        case RescaleMode::TosaSingle:
+            scaled = scale32(accumulator, multiplier, shift, false);
+            break;
+        case RescaleMode::TosaDouble:
+            scaled = scale32(accumulator, multiplier, shift, true);
+            break;
     }
     scaled += quant.output_zero;
     if (quant.relu) scaled = std::max(scaled, static_cast<std::int64_t>(quant.output_zero));
@@ -485,9 +489,9 @@ std::int8_t requantize_unchecked(std::int32_t accumulator, const Requant& quant,
 std::uint64_t tile_host_bytes(const Config& config) {
     auto bytes = checked_mul(tile_record_bytes, tile_count(config));
     if (!config.sim.trace_path.empty())
-        bytes = checked_add(bytes, checked_mul(trace_panel_bytes,
-                                               checked_mul(tile_count(config),
-                                                           reduction_blocks(config))));
+        bytes = checked_add(bytes,
+                            checked_mul(trace_panel_bytes,
+                                        checked_mul(tile_count(config), reduction_blocks(config))));
     return bytes;
 }
 
@@ -516,8 +520,7 @@ std::uint64_t total_macs(const ShapeConfig& shape) {
 
 bool channel_wise(const Config& config) {
     const auto& shape = config.shape;
-    return config.arch.compute.depthwise_macs_per_cycle != 0 && shape.groups > 1 &&
-           shape.n == 1;
+    return config.arch.compute.depthwise_macs_per_cycle != 0 && shape.groups > 1 && shape.n == 1;
 }
 
 std::uint64_t grid_groups(const Config& config) {
@@ -533,9 +536,9 @@ std::uint64_t tile_count(const Config& config) {
     const auto& map = config.mapping;
     validate_shape(config);
     require(map.tile_m >= 1 && map.tile_n >= 1, "tile dimensions must be positive");
-    return checked_mul(grid_groups(config), checked_mul(ceil_div(shape.m, map.tile_m),
-                                                        ceil_div(grid_columns(config),
-                                                                 map.tile_n)));
+    return checked_mul(
+        grid_groups(config),
+        checked_mul(ceil_div(shape.m, map.tile_m), ceil_div(grid_columns(config), map.tile_n)));
 }
 
 std::uint64_t dma_transfer_cycles(const Config& config, std::uint64_t bytes) {
@@ -545,10 +548,11 @@ std::uint64_t dma_transfer_cycles(const Config& config, std::uint64_t bytes) {
         return checked_add(memory.latency, ceil_div(bytes, memory.bytes_per_cycle));
     const auto full = bytes / memory.burst_bytes;
     const auto tail = bytes % memory.burst_bytes;
-    auto cycles = checked_mul(full, checked_add(memory.latency,
-        ceil_div(memory.burst_bytes, memory.bytes_per_cycle)));
-    if (tail) cycles = checked_add(cycles, checked_add(memory.latency,
-        ceil_div(tail, memory.bytes_per_cycle)));
+    auto cycles = checked_mul(
+        full, checked_add(memory.latency, ceil_div(memory.burst_bytes, memory.bytes_per_cycle)));
+    if (tail)
+        cycles = checked_add(cycles,
+                             checked_add(memory.latency, ceil_div(tail, memory.bytes_per_cycle)));
     return cycles;
 }
 
@@ -558,8 +562,7 @@ std::uint64_t scratchpad_bytes(const Config& config) {
     validate_mapping(config);
     if (!dimension(map.tile_m) || !dimension(map.tile_n) || map.buffer_slots < 1 ||
         map.buffer_slots > 64)
-        fail("scratchpad tile dimensions must be in " + dimension_range() +
-             " and slots in 1..64");
+        fail("scratchpad tile dimensions must be in " + dimension_range() + " and slots in 1..64");
     const auto rows = std::min(map.tile_m, config.shape.m);
     const auto cols = std::min(map.tile_n, grid_columns(config));
     const auto depth = std::min(config.shape.k, panel_size(config));
@@ -571,18 +574,17 @@ std::uint64_t scratchpad_bytes(const Config& config) {
     if (implicit_conv(config.shape)) {
         std::uint64_t pixels = 0;
         for (const auto& extent : conv_extents(config)) pixels = std::max(pixels, extent.pixels);
-        activations = checked_mul(pixels,
-                                  conv_channels(config, channel_wise(config) ? cols : 1));
+        activations = checked_mul(pixels, conv_channels(config, channel_wise(config) ? cols : 1));
     }
-    const auto panel = checked_add(activations,
-                                   encoded_weight_bound(config, checked_mul(depth, cols)));
+    const auto panel =
+        checked_add(activations, encoded_weight_bound(config, checked_mul(depth, cols)));
     const auto metadata = checked_add(checked_mul(4, cols), channel_metadata_bytes(config, cols));
-    const auto per_slot = checked_add(
-        checked_add(metadata, checked_mul(slot_panel_buffers(config), panel)),
-        checked_mul(5, checked_mul(rows, cols)));
-    return checked_add(checked_add(checked_mul(per_slot, map.buffer_slots),
-                                   config.arch.weight_cache_bytes),
-                       config.arch.activation_cache_bytes);
+    const auto per_slot =
+        checked_add(checked_add(metadata, checked_mul(slot_panel_buffers(config), panel)),
+                    checked_mul(5, checked_mul(rows, cols)));
+    return checked_add(
+        checked_add(checked_mul(per_slot, map.buffer_slots), config.arch.weight_cache_bytes),
+        config.arch.activation_cache_bytes);
 }
 
 std::uint64_t slot_panel_buffers(const Config& config) {
@@ -610,12 +612,12 @@ void validate(const Config& config) {
     require(arch.compute.macs_per_cycle >= 1 && arch.compute.macs_per_cycle <= max_timing_value &&
                 arch.memory.bytes_per_cycle >= 1 && arch.memory.bytes_per_cycle <= max_timing_value,
             "compute and memory rates must be in 1..1000000000");
-    require(arch.memory.latency <= max_timing_value &&
-                arch.compute.pipeline_cycles <= max_timing_value,
-            "latency and pipeline cycles must be at most 1000000000");
-    require(arch.memory.burst_bytes <= max_timing_value &&
-                arch.weight_cache_bytes <= max_timing_value,
-            "DMA burst and weight cache sizes must be at most 1000000000 bytes");
+    require(
+        arch.memory.latency <= max_timing_value && arch.compute.pipeline_cycles <= max_timing_value,
+        "latency and pipeline cycles must be at most 1000000000");
+    require(
+        arch.memory.burst_bytes <= max_timing_value && arch.weight_cache_bytes <= max_timing_value,
+        "DMA burst and weight cache sizes must be at most 1000000000 bytes");
     require(arch.activation_cache_bytes <= max_timing_value,
             "activation cache size must be at most 1000000000 bytes");
     validate_memory(config);
@@ -639,36 +641,36 @@ void validate(const Config& config) {
     // SRAM and simulator host storage are separate constraints.
     const auto tile_rows = std::min(shape.m, map.tile_m);
     const auto tile_cols = std::min(grid_columns(config), map.tile_n);
-    auto host_bytes = checked_add(tile_host_bytes(config),
-                                  channel_metadata_bytes(config, output_channels));
+    auto host_bytes =
+        checked_add(tile_host_bytes(config), channel_metadata_bytes(config, output_channels));
     if (!config.sim.timing_only) {
         const auto outputs = checked_mul(shape.m, output_channels);
         host_bytes = checked_add(host_bytes, checked_mul(shape.m, shape.groups * shape.k));
         // shape.conv also holds the NHWC tensor the operand is built from.
         if (implicit_conv(shape))
-            host_bytes = checked_add(host_bytes, checked_mul(checked_mul(shape.conv.input_h,
-                                                                         shape.conv.input_w),
-                                                             shape.conv.input_c));
+            host_bytes = checked_add(
+                host_bytes, checked_mul(checked_mul(shape.conv.input_h, shape.conv.input_w),
+                                        shape.conv.input_c));
         host_bytes = checked_add(host_bytes, checked_mul(shape.k, output_channels));
         host_bytes = checked_add(host_bytes, checked_mul(4, output_channels));
         host_bytes = checked_add(host_bytes, checked_mul(10, outputs));
-        host_bytes = checked_add(host_bytes,
-                                 checked_mul(8, checked_mul(tile_rows, tile_cols)));
+        host_bytes = checked_add(host_bytes, checked_mul(8, checked_mul(tile_rows, tile_cols)));
         if (config.weights.encoding != WeightEncoding::Dense) {
             const auto column_panels = checked_mul(shape.groups, ceil_div(shape.n, map.tile_n));
             const auto panels = checked_mul(column_panels, reduction_blocks(config));
             const auto panel_values = checked_mul(tile_cols, std::min(shape.k, panel_size(config)));
-            host_bytes = checked_add(host_bytes, checked_mul(panels,
-                checked_add(128, encoded_weight_bound(config, panel_values))));
+            host_bytes = checked_add(
+                host_bytes,
+                checked_mul(panels, checked_add(128, encoded_weight_bound(config, panel_values))));
         }
     }
     if (host_bytes > max_host_bytes)
-        fail("estimated simulator working storage exceeds " +
-             std::to_string(max_host_bytes >> 20) + " MiB");
+        fail("estimated simulator working storage exceeds " + std::to_string(max_host_bytes >> 20) +
+             " MiB");
 
-    // The serial schedule bounds every overlapped schedule. Four tile shape
-    // classes per group give the exact serial sum without iterating over huge
-    // tile lists; under shape.conv each panel takes its block's largest
+    // The serial schedule is an upper bound on every overlapped schedule. Four
+    // tile shape classes per group give the exact serial sum without walking
+    // the tile list; under shape.conv each panel takes its block's largest
     // footprint. The axi sum charges every burst its full latency.
     const bool axi = arch.memory.model == MemoryModel::Axi;
     const bool conv = implicit_conv(shape), channel_tiles = channel_wise(config);
@@ -692,14 +694,15 @@ void validate(const Config& config) {
             longest_run = whole ? checked_mul(cols, k) : k;
         }
         if (!axi)
-            return dma_transfer_cycles(config, checked_add(activation_bytes,
-                weight_side_bytes(config, k, cols, block == 0)));
+            return dma_transfer_cycles(
+                config,
+                checked_add(activation_bytes, weight_side_bytes(config, k, cols, block == 0)));
         auto cycles = checked_add(
             checked_mul(activation_runs, axi_run_bound(config, true, longest_run)),
             axi_run_bound(config, true, encoded_weight_bound(config, checked_mul(k, cols))));
         if (block == 0)
-            cycles = checked_add(cycles, axi_run_bound(config, true,
-                checked_mul(cols, param_record_bytes(config))));
+            cycles = checked_add(
+                cycles, axi_run_bound(config, true, checked_mul(cols, param_record_bytes(config))));
         return cycles;
     };
     const auto write_cycles = [&](std::uint64_t rows, std::uint64_t cols) {
@@ -714,29 +717,28 @@ void validate(const Config& config) {
     const std::uint64_t col_counts[] = {columns / map.tile_n, columns % map.tile_n ? 1ULL : 0ULL};
     for (unsigned r = 0; r < 2; ++r) {
         for (unsigned c = 0; c < 2; ++c) {
-            const auto count = checked_mul(grid_groups(config),
-                                           checked_mul(row_counts[r], col_counts[c]));
+            const auto count =
+                checked_mul(grid_groups(config), checked_mul(row_counts[r], col_counts[c]));
             if (!count) continue;
             std::uint64_t cycles = 0;
             for (std::uint64_t block = 0; block < reduction_blocks(config); ++block)
                 cycles = checked_add(cycles, read_cycles(row_sizes[r], col_sizes[c], block));
-            cycles = checked_add(cycles,
-                compute_cycles(config, row_sizes[r], col_sizes[c]));
+            cycles = checked_add(cycles, compute_cycles(config, row_sizes[r], col_sizes[c]));
             cycles = checked_add(cycles, write_cycles(row_sizes[r], col_sizes[c]));
             serial_cycles = checked_add(serial_cycles, checked_mul(count, cycles));
         }
     }
-    require(serial_cycles < exact_cycle_limit,
-            "simulation cycle bound must be less than 2^53");
+    require(serial_cycles < exact_cycle_limit, "simulation cycle bound must be less than 2^53");
     // The DRAM timeline counts bytes: cycle c starts at byte c * rate.
     require(!axi || !arch.memory.dram_bytes_per_cycle ||
-                serial_cycles <= std::numeric_limits<std::uint64_t>::max() /
-                                     arch.memory.dram_bytes_per_cycle,
+                serial_cycles <=
+                    std::numeric_limits<std::uint64_t>::max() / arch.memory.dram_bytes_per_cycle,
             "simulation cycle bound times DRAM bytes per cycle must fit in 64 bits");
-    // Cycle mode performs one host wait per stage cycle. Bound the complete
-    // serial work even when overlap would make the reported makespan shorter.
-    require(config.sim.timing != TimingMode::Cycle || serial_cycles <= 10000000,
-            "cycle mode serial work must be at most 10000000 cycles; use event mode for larger runs");
+    // Cycle mode costs one host wait per stage cycle. The limit applies to the
+    // serial work, which is at least the makespan of any overlapped schedule.
+    require(
+        config.sim.timing != TimingMode::Cycle || serial_cycles <= 10000000,
+        "cycle mode serial work must be at most 10000000 cycles; use event mode for larger runs");
 }
 
 Problem make_problem(const Config& config) {
@@ -752,9 +754,9 @@ Problem make_problem(const Config& config) {
     // The generator fills the activation operand, or under shape.conv the
     // NHWC input tensor, then the weights, then the bias.
     auto& generated = conv ? problem.input : problem.activations;
-    generated.resize(static_cast<std::size_t>(
-        conv ? shape.conv.input_h * shape.conv.input_w * shape.conv.input_c :
-               shape.m * shape.groups * shape.k));
+    generated.resize(static_cast<std::size_t>(conv ? shape.conv.input_h * shape.conv.input_w *
+                                                         shape.conv.input_c :
+                                                     shape.m * shape.groups * shape.k));
     problem.weights.resize(static_cast<std::size_t>(shape.groups * shape.k * shape.n));
     problem.bias.resize(static_cast<std::size_t>(shape.groups * shape.n));
     auto state = static_cast<std::uint32_t>(shape.seed);
@@ -766,10 +768,9 @@ Problem make_problem(const Config& config) {
         value = static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
     for (auto& value : problem.weights)
         value = config.weights.bits == 4 ?
-            static_cast<std::int8_t>(static_cast<int>(next() % 16) - 8) :
-            static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
-    for (auto& value : problem.bias)
-        value = static_cast<std::int32_t>(next() % 127) - 63;
+                    static_cast<std::int8_t>(static_cast<int>(next() % 16) - 8) :
+                    static_cast<std::int8_t>(static_cast<int>(next() % 31) - 15);
+    for (auto& value : problem.bias) value = static_cast<std::int32_t>(next() % 127) - 63;
     if (conv) problem.activations = im2col(config, problem.input);
     return problem;
 }
@@ -778,7 +779,8 @@ namespace {
 
 // Group-major, then row, then column over the grid: a GEMM tile never spans
 // two groups; a channel-wise tile spans tile_n of them.
-template <class Visit> void for_each_tile(const Config& config, Visit visit) {
+template <class Visit>
+void for_each_tile(const Config& config, Visit visit) {
     const auto& shape = config.shape;
     const auto& map = config.mapping;
     const auto groups = grid_groups(config), columns = grid_columns(config);
@@ -812,8 +814,8 @@ std::vector<std::vector<Tile>> make_core_tiles(const Config& config, const Clust
     for (std::size_t core = 0; core < counts.size(); ++core)
         tiles[core].reserve(static_cast<std::size_t>(counts[core]));
     for_each_tile(config, [&](const Tile& tile) {
-        tiles[static_cast<std::size_t>(plan.unit_core(tile_unit(config, plan, tile)))]
-            .push_back(tile);
+        tiles[static_cast<std::size_t>(plan.unit_core(tile_unit(config, plan, tile)))].push_back(
+            tile);
     });
     return tiles;
 }
@@ -829,8 +831,7 @@ std::int8_t requantize(std::int32_t accumulator, const Requant& quant) {
     return requantize(accumulator, quant, 0);
 }
 
-std::int8_t requantize(std::int32_t accumulator, const Requant& quant,
-                       std::uint64_t channel) {
+std::int8_t requantize(std::int32_t accumulator, const Requant& quant, std::uint64_t channel) {
     validate_quant_scalars(quant);
     validate_channel_entry(quant, static_cast<std::size_t>(channel));
     return requantize_unchecked(accumulator, quant, channel);
@@ -845,18 +846,20 @@ Output reference(const Problem& problem, const Requant& quant) {
     const auto size = static_cast<std::size_t>(problem.m * width);
     result.accumulators.resize(size);
     result.quantized.resize(size);
-    // Scalar reference: each complete dot product is evaluated independently.
+    // Scalar reference: one complete dot product per output, in K order.
     for (std::uint64_t row = 0; row < problem.m; ++row) {
         for (std::uint64_t group = 0; group < problem.groups; ++group) {
             for (std::uint64_t col = 0; col < problem.n; ++col) {
                 const auto channel = group * problem.n + col;
                 std::int64_t accumulator = problem.bias[static_cast<std::size_t>(channel)];
                 for (std::uint64_t k = 0; k < problem.k; ++k) {
-                    const auto a = static_cast<std::int32_t>(problem.activations[
-                        static_cast<std::size_t>(row * row_k + group * problem.k + k)]) -
+                    const auto a =
+                        static_cast<std::int32_t>(problem.activations[static_cast<std::size_t>(
+                            row * row_k + group * problem.k + k)]) -
                         quant.input_zero;
-                    const auto b = static_cast<std::int32_t>(problem.weights[
-                        static_cast<std::size_t>((group * problem.k + k) * problem.n + col)]) -
+                    const auto b =
+                        static_cast<std::int32_t>(problem.weights[static_cast<std::size_t>(
+                            (group * problem.k + k) * problem.n + col)]) -
                         weight_zero(quant, channel);
                     accumulator += static_cast<std::int64_t>(a) * b;
                 }
@@ -870,8 +873,7 @@ Output reference(const Problem& problem, const Requant& quant) {
     return result;
 }
 
-void compute_tile(const Problem& problem, const Requant& quant,
-                  const Tile& tile, Output& output) {
+void compute_tile(const Problem& problem, const Requant& quant, const Tile& tile, Output& output) {
     validate_problem(problem);
     validate_tile(tile, problem.m, problem.n, problem.groups);
     const auto width = channels(problem);
@@ -883,8 +885,7 @@ void compute_tile(const Problem& problem, const Requant& quant,
         output.accumulators.resize(output_size);
         output.quantized.resize(output_size);
     }
-    require(output.accumulators.size() == output_size &&
-                output.quantized.size() == output_size,
+    require(output.accumulators.size() == output_size && output.quantized.size() == output_size,
             "output vectors do not match M*G*N");
     const auto row_k = problem.groups * problem.k;
     std::vector<std::int64_t> sums(static_cast<std::size_t>(tile.rows * tile.cols));
@@ -892,16 +893,18 @@ void compute_tile(const Problem& problem, const Requant& quant,
         for (std::uint64_t col = 0; col < tile.cols; ++col)
             sums[static_cast<std::size_t>(row * tile.cols + col)] =
                 problem.bias[static_cast<std::size_t>(base + col)];
-    // Tiled datapath uses K-major outer products, independent of the reference
-    // dot-product loop ordering, and only commits final INT32-safe values.
+    // K-major outer products, a loop order distinct from the reference's dot
+    // products. Only the final INT64 sums are range-checked to INT32.
     for (std::uint64_t k = 0; k < problem.k; ++k) {
         const auto weight_row = (tile.group * problem.k + k) * problem.n + tile.col;
         for (std::uint64_t row = 0; row < tile.rows; ++row) {
             const auto a = static_cast<std::int32_t>(problem.activations[static_cast<std::size_t>(
-                (tile.row + row) * row_k + tile.group * problem.k + k)]) - quant.input_zero;
+                               (tile.row + row) * row_k + tile.group * problem.k + k)]) -
+                           quant.input_zero;
             for (std::uint64_t col = 0; col < tile.cols; ++col) {
-                const auto b = static_cast<std::int32_t>(problem.weights[
-                    static_cast<std::size_t>(weight_row + col)]) - weight_zero(quant, base + col);
+                const auto b = static_cast<std::int32_t>(
+                                   problem.weights[static_cast<std::size_t>(weight_row + col)]) -
+                               weight_zero(quant, base + col);
                 sums[static_cast<std::size_t>(row * tile.cols + col)] +=
                     static_cast<std::int64_t>(a) * b;
             }
@@ -909,8 +912,8 @@ void compute_tile(const Problem& problem, const Requant& quant,
     }
     for (std::uint64_t row = 0; row < tile.rows; ++row) {
         for (std::uint64_t col = 0; col < tile.cols; ++col) {
-            const auto accumulator = checked_accumulator(
-                sums[static_cast<std::size_t>(row * tile.cols + col)]);
+            const auto accumulator =
+                checked_accumulator(sums[static_cast<std::size_t>(row * tile.cols + col)]);
             const auto index = static_cast<std::size_t>((tile.row + row) * width + base + col);
             output.accumulators[index] = accumulator;
             output.quantized[index] = requantize_unchecked(accumulator, quant, base + col);
@@ -918,8 +921,8 @@ void compute_tile(const Problem& problem, const Requant& quant,
     }
 }
 
-void compute_channel_tile(const Problem& problem, const Requant& quant,
-                          const Tile& tile, Output& output) {
+void compute_channel_tile(const Problem& problem, const Requant& quant, const Tile& tile,
+                          Output& output) {
     validate_problem(problem);
     require(problem.n == 1, "channel tiles need one output column per group");
     // The grid of a channel-wise problem: one group of G columns.
@@ -931,8 +934,7 @@ void compute_channel_tile(const Problem& problem, const Requant& quant,
         output.accumulators.resize(output_size);
         output.quantized.resize(output_size);
     }
-    require(output.accumulators.size() == output_size &&
-                output.quantized.size() == output_size,
+    require(output.accumulators.size() == output_size && output.quantized.size() == output_size,
             "output vectors do not match M*G*N");
     const auto row_k = problem.groups * problem.k;
     // Channel by channel: each output channel is its own group's dot product
@@ -956,10 +958,9 @@ void compute_channel_tile(const Problem& problem, const Requant& quant,
     }
 }
 
-
 namespace {
-void pack_value(std::vector<std::uint8_t>& bytes, std::size_t offset,
-                std::uint64_t index, std::uint64_t bits, std::uint8_t value) {
+void pack_value(std::vector<std::uint8_t>& bytes, std::size_t offset, std::uint64_t index,
+                std::uint64_t bits, std::uint8_t value) {
     const auto bit = checked_mul(index, bits);
     const auto at = offset + static_cast<std::size_t>(bit / 8);
     bytes.at(at) |= static_cast<std::uint8_t>((value & ((UINT64_C(1) << bits) - 1)) << (bit % 8));
@@ -968,18 +969,20 @@ void pack_value(std::vector<std::uint8_t>& bytes, std::size_t offset,
 std::uint8_t unpack_value(const std::vector<std::uint8_t>& bytes, std::size_t offset,
                           std::uint64_t index, std::uint64_t bits) {
     const auto bit = checked_mul(index, bits);
-    return static_cast<std::uint8_t>((bytes.at(offset + static_cast<std::size_t>(bit / 8)) >>
-                                      (bit % 8)) & ((UINT64_C(1) << bits) - 1));
+    return static_cast<std::uint8_t>(
+        (bytes.at(offset + static_cast<std::size_t>(bit / 8)) >> (bit % 8)) &
+        ((UINT64_C(1) << bits) - 1));
 }
 
 std::int8_t signed_packed(std::uint8_t value, std::uint64_t bits) {
     const auto sign = UINT64_C(1) << (bits - 1);
-    const auto decoded = (value & sign) ? static_cast<int>(value) - static_cast<int>(UINT64_C(1) << bits) :
-                                        static_cast<int>(value);
+    const auto decoded = (value & sign) ?
+                             static_cast<int>(value) - static_cast<int>(UINT64_C(1) << bits) :
+                             static_cast<int>(value);
     return static_cast<std::int8_t>(decoded);
 }
 
-template<class Consumer>
+template <class Consumer>
 void visit_encoded(const Config& config, const EncodedWeightPanel& panel, Consumer consume) {
     const auto& format = config.weights;
     const auto count = checked_mul(panel.k, panel.cols);
@@ -989,7 +992,8 @@ void visit_encoded(const Config& config, const EncodedWeightPanel& panel, Consum
                        (static_cast<std::uint64_t>(panel.buffer[1]) << 8);
     if (format.encoding == WeightEncoding::Palette) {
         require(panel.buffer[2] == format.palette_bits && field >= 1 &&
-                    field <= (UINT64_C(1) << format.palette_bits), "invalid palette header");
+                    field <= (UINT64_C(1) << format.palette_bits),
+                "invalid palette header");
         const auto offset = static_cast<std::size_t>(4 + field);
         require(panel.buffer.size() ==
                     checked_add(offset, ceil_div(checked_mul(count, format.palette_bits), 8)),
@@ -1001,21 +1005,25 @@ void visit_encoded(const Config& config, const EncodedWeightPanel& panel, Consum
         }
     } else {
         require(format.encoding == WeightEncoding::Sparse && field == format.sparse_block &&
-                    panel.buffer[2] == format.bits, "invalid sparse weight header");
+                    panel.buffer[2] == format.bits,
+                "invalid sparse weight header");
         const auto blocks = ceil_div(count, format.sparse_block);
         const auto offset = static_cast<std::size_t>(4 + ceil_div(blocks, 8));
-        require(panel.buffer.size() == checked_add(offset,
-                    ceil_div(checked_mul(panel.retained_values, format.bits), 8)),
-                "encoded sparse length is invalid");
+        require(
+            panel.buffer.size() ==
+                checked_add(offset, ceil_div(checked_mul(panel.retained_values, format.bits), 8)),
+            "encoded sparse length is invalid");
         std::uint64_t stored = 0;
         for (std::uint64_t block = 0; block < blocks; ++block) {
-            if (!(panel.buffer.at(4 + static_cast<std::size_t>(block / 8)) & (1U << (block % 8)))) continue;
+            if (!(panel.buffer.at(4 + static_cast<std::size_t>(block / 8)) & (1U << (block % 8))))
+                continue;
             const auto start = checked_mul(block, format.sparse_block);
             const auto end = std::min(count, checked_add(start, format.sparse_block));
             for (auto index = start; index < end; ++index) {
                 require(stored < panel.retained_values, "sparse bitmap exceeds stored payload");
-                consume(index, signed_packed(
-                    unpack_value(panel.buffer, offset, stored++, format.bits), format.bits));
+                consume(index,
+                        signed_packed(unpack_value(panel.buffer, offset, stored++, format.bits),
+                                      format.bits));
             }
         }
         require(stored == panel.retained_values, "sparse payload exceeds bitmap");
@@ -1080,8 +1088,10 @@ std::vector<EncodedWeightPanel> encode_weights(const Config& config, const Probl
                         indices[value] = static_cast<int>(lut.size());
                         lut.push_back(value);
                     }
-                    panel.buffer.assign(static_cast<std::size_t>(checked_add(4 + lut.size(),
-                        ceil_div(checked_mul(count, format.palette_bits), 8))), 0);
+                    panel.buffer.assign(
+                        static_cast<std::size_t>(checked_add(
+                            4 + lut.size(), ceil_div(checked_mul(count, format.palette_bits), 8))),
+                        0);
                     panel.buffer[0] = static_cast<std::uint8_t>(lut.size() & 255U);
                     panel.buffer[1] = static_cast<std::uint8_t>(lut.size() >> 8);
                     panel.buffer[2] = static_cast<std::uint8_t>(format.palette_bits);
@@ -1114,14 +1124,16 @@ std::vector<EncodedWeightPanel> encode_weights(const Config& config, const Probl
                             static_cast<std::uint8_t>(1U << (run % 8));
                         const auto old = panel.retained_values;
                         panel.retained_values = checked_add(panel.retained_values, end - start);
-                        panel.buffer.resize(offset + static_cast<std::size_t>(
-                            ceil_div(checked_mul(panel.retained_values, format.bits), 8)), 0);
+                        panel.buffer.resize(
+                            offset + static_cast<std::size_t>(ceil_div(
+                                         checked_mul(panel.retained_values, format.bits), 8)),
+                            0);
                         for (auto index = start; index < end; ++index)
                             pack_value(panel.buffer, offset, old + index - start, format.bits,
                                        static_cast<std::uint8_t>(weight(index)));
                     }
-                    panel.decode_cycles = checked_add(ceil_div(runs, rate),
-                                                      ceil_div(panel.retained_values, rate));
+                    panel.decode_cycles =
+                        checked_add(ceil_div(runs, rate), ceil_div(panel.retained_values, rate));
                 }
                 panels.push_back(std::move(panel));
             }
@@ -1131,14 +1143,16 @@ std::vector<EncodedWeightPanel> encode_weights(const Config& config, const Probl
 }
 
 const EncodedWeightPanel& weight_panel(const Config& config,
-    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, std::uint64_t block) {
+                                       const std::vector<EncodedWeightPanel>& panels,
+                                       const Tile& tile, std::uint64_t block) {
     const auto tile_n = config.mapping.tile_n;
     require(tile_n >= 1, "encoded column panel width must be positive");
     require(tile.col % tile_n == 0, "encoded tile must align with output column panels");
     const auto column_panels = ceil_div(config.shape.n, tile_n);
-    const auto& panel = panels.at(static_cast<std::size_t>(checked_add(checked_mul(
-        checked_add(checked_mul(tile.group, column_panels), tile.col / tile_n),
-        reduction_blocks(config)), block)));
+    const auto& panel = panels.at(static_cast<std::size_t>(checked_add(
+        checked_mul(checked_add(checked_mul(tile.group, column_panels), tile.col / tile_n),
+                    reduction_blocks(config)),
+        block)));
     require(panel.group == tile.group && panel.col == tile.col && panel.cols == tile.cols &&
                 panel.k == panel_k(config, block) &&
                 panel.k_start == checked_mul(block, panel_size(config)),
@@ -1147,7 +1161,8 @@ const EncodedWeightPanel& weight_panel(const Config& config,
 }
 
 void compute_tile_encoded(const Problem& problem, const Config& config,
-    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, Output& output) {
+                          const std::vector<EncodedWeightPanel>& panels, const Tile& tile,
+                          Output& output) {
     // Per-tile checks only: validate(config) ran when the panels were encoded,
     // and repeating its O(G*N) channel scan per tile would be quadratic.
     validate_shape(config);
@@ -1183,15 +1198,17 @@ void compute_tile_encoded(const Problem& problem, const Config& config,
             const auto column = tile.group * problem.k + k;
             for (std::uint64_t row = 0; row < tile.rows; ++row) {
                 const auto a = static_cast<std::int32_t>(problem.activations.at(
-                    static_cast<std::size_t>((tile.row + row) * row_k + column))) -
-                    config.quant.input_zero;
-                sums.at(static_cast<std::size_t>(row * tile.cols + col)) += static_cast<std::int64_t>(a) * w;
+                                   static_cast<std::size_t>((tile.row + row) * row_k + column))) -
+                               config.quant.input_zero;
+                sums.at(static_cast<std::size_t>(row * tile.cols + col)) +=
+                    static_cast<std::int64_t>(a) * w;
             }
         });
     }
     for (std::uint64_t row = 0; row < tile.rows; ++row)
         for (std::uint64_t col = 0; col < tile.cols; ++col) {
-            const auto value = checked_accumulator(sums.at(static_cast<std::size_t>(row * tile.cols + col)));
+            const auto value =
+                checked_accumulator(sums.at(static_cast<std::size_t>(row * tile.cols + col)));
             const auto index = static_cast<std::size_t>((tile.row + row) * width + base + col);
             output.accumulators.at(index) = value;
             output.quantized.at(index) = requantize_unchecked(value, config.quant, base + col);
@@ -1199,15 +1216,16 @@ void compute_tile_encoded(const Problem& problem, const Config& config,
 }
 
 std::uint64_t encoded_panel_compute_cycles(const Config& config, const Tile& tile,
-    std::uint64_t block, const EncodedWeightPanel& panel) {
+                                           std::uint64_t block, const EncodedWeightPanel& panel) {
     const auto& compute = config.arch.compute;
     require(panel.k == panel_k(config, block) && panel.cols == tile.cols,
             "encoded weight panel does not match tile");
     // Sparse MAC work covers the nonzero-centered weights only; the decoder
     // overlaps it as in compute_panel_cycles.
-    const auto macs = config.weights.encoding == WeightEncoding::Sparse ?
-        ceil_div(checked_mul(tile.rows, panel.nonzero_values), compute.macs_per_cycle) :
-        mac_cycles(config, tile.rows, tile.cols, panel.k);
+    const auto macs =
+        config.weights.encoding == WeightEncoding::Sparse ?
+            ceil_div(checked_mul(tile.rows, panel.nonzero_values), compute.macs_per_cycle) :
+            mac_cycles(config, tile.rows, tile.cols, panel.k);
     return checked_add(std::max(macs, panel.decode_cycles), compute.pipeline_cycles);
 }
 
@@ -1224,8 +1242,7 @@ std::uint64_t panel_k(const Config& config, std::uint64_t block) {
     return std::min(size, config.shape.k - checked_mul(block, size));
 }
 
-std::uint64_t panel_read_bytes(const Config& config, const Tile& tile,
-                               std::uint64_t block) {
+std::uint64_t panel_read_bytes(const Config& config, const Tile& tile, std::uint64_t block) {
     validate_shape(config);
     validate_tile(tile, config);
     validate_mapping(config);
@@ -1233,8 +1250,7 @@ std::uint64_t panel_read_bytes(const Config& config, const Tile& tile,
                        weight_side_bytes(config, panel_k(config, block), tile.cols, block == 0));
 }
 
-std::uint64_t activation_panel_bytes(const Config& config, const Tile& tile,
-                                     std::uint64_t block) {
+std::uint64_t activation_panel_bytes(const Config& config, const Tile& tile, std::uint64_t block) {
     validate_shape(config);
     validate_tile(tile, config);
     validate_mapping(config);
@@ -1246,8 +1262,7 @@ std::uint64_t activation_panel_bytes(const Config& config, const Tile& tile,
     return checked_mul(conv_extent(spans).pixels, conv_channels(config, groups.count));
 }
 
-std::uint64_t activation_cache_key(const Config& config, const Tile& tile,
-                                   std::uint64_t block) {
+std::uint64_t activation_cache_key(const Config& config, const Tile& tile, std::uint64_t block) {
     validate_shape(config);
     validate_tile(tile, config);
     const auto& map = config.mapping;
@@ -1255,13 +1270,12 @@ std::uint64_t activation_cache_key(const Config& config, const Tile& tile,
     require(block < blocks, "reduction block is outside K");
     const auto unit = channel_wise(config) ? tile.col / map.tile_n : tile.group;
     const auto row_tiles = ceil_div(config.shape.m, map.tile_m);
-    return checked_add(checked_mul(checked_add(checked_mul(unit, row_tiles),
-                                               tile.row / map.tile_m), blocks),
-                       block);
+    return checked_add(
+        checked_mul(checked_add(checked_mul(unit, row_tiles), tile.row / map.tile_m), blocks),
+        block);
 }
 
-std::uint64_t panel_compute_cycles(const Config& config, const Tile& tile,
-                                   std::uint64_t block) {
+std::uint64_t panel_compute_cycles(const Config& config, const Tile& tile, std::uint64_t block) {
     validate_shape(config);
     validate_tile(tile, config);
     validate_mapping(config);
@@ -1304,8 +1318,8 @@ std::uint64_t dense_weight_offset(const Config& config, const Tile& tile, std::u
         return checked_add(checked_mul(blocks - 1, panel(depth, cols)), panel(last_depth, cols));
     };
     const auto edge = columns % tile_n;
-    const auto group_bytes = checked_add(checked_mul(columns / tile_n, column(tile_n)),
-                                         edge ? column(edge) : 0);
+    const auto group_bytes =
+        checked_add(checked_mul(columns / tile_n, column(tile_n)), edge ? column(edge) : 0);
     require(block < blocks, "reduction block is outside K");
     return checked_add(checked_add(checked_mul(tile.group, group_bytes),
                                    checked_mul(tile.col / tile_n, column(tile_n))),
@@ -1338,8 +1352,8 @@ void activation_runs(const Config& config, const Tile& tile, std::uint64_t block
                 continue;
             }
             for (auto group = groups.first; group < groups.first + groups.count; ++group)
-                runs.push_back({checked_add(base, checked_add(checked_mul(group, shape.k), start)),
-                                depth});
+                runs.push_back(
+                    {checked_add(base, checked_add(checked_mul(group, shape.k), start)), depth});
         }
         return;
     }
@@ -1349,18 +1363,17 @@ void activation_runs(const Config& config, const Tile& tile, std::uint64_t block
     std::vector<InputSpan> spans;
     conv_input_spans(config, tile.row, tile.rows, block, spans);
     for (const auto& span : spans) {
-        const auto row = checked_add(activation_base,
-                                     checked_mul(checked_mul(span.row, conv.input_w),
-                                                 conv.input_c));
+        const auto row = checked_add(
+            activation_base, checked_mul(checked_mul(span.row, conv.input_w), conv.input_c));
         if (channels == conv.input_c) {
             runs.push_back({checked_add(row, checked_mul(span.first, conv.input_c)),
                             checked_mul(span.last - span.first + 1, conv.input_c)});
             continue;
         }
         for (auto x = span.first; x <= span.last; ++x)
-            runs.push_back({checked_add(row, checked_add(checked_mul(x, conv.input_c),
-                                                         first_channel)),
-                            channels});
+            runs.push_back(
+                {checked_add(row, checked_add(checked_mul(x, conv.input_c), first_channel)),
+                 channels});
     }
 }
 
@@ -1393,19 +1406,19 @@ void tile_store_runs(const Config& config, const Tile& tile, std::vector<Address
     runs.clear();
     runs.reserve(static_cast<std::size_t>(tile.rows));
     for (std::uint64_t row = tile.row; row < tile.row + tile.rows; ++row)
-        runs.push_back({checked_add(output_base,
-                                    checked_add(checked_mul(row, stride), column)), tile.cols});
+        runs.push_back(
+            {checked_add(output_base, checked_add(checked_mul(row, stride), column)), tile.cols});
 }
 
 Burst next_burst(const AxiConfig& axi, std::uint64_t address, std::uint64_t end) {
     require(address < end, "a burst starts inside its run");
-    require(axi.data_bytes >= 1 && axi_boundary_bytes % axi.data_bytes == 0 &&
-                axi.max_burst_beats >= 1,
-            "AXI beats must divide 4 KiB and bursts hold at least one beat");
+    require(
+        axi.data_bytes >= 1 && axi_boundary_bytes % axi.data_bytes == 0 && axi.max_burst_beats >= 1,
+        "AXI beats must divide 4 KiB and bursts hold at least one beat");
     const auto first_beat = address / axi.data_bytes;
     const auto boundary = checked_mul(address / axi_boundary_bytes + 1, axi_boundary_bytes);
-    const auto beat_limit = checked_mul(checked_add(first_beat, axi.max_burst_beats),
-                                        axi.data_bytes);
+    const auto beat_limit =
+        checked_mul(checked_add(first_beat, axi.max_burst_beats), axi.data_bytes);
     const auto stop = std::min({end, boundary, beat_limit});
     return {address, stop - address, ceil_div(stop, axi.data_bytes) - first_beat};
 }
@@ -1490,12 +1503,12 @@ std::uint64_t tile_unit(const Config& config, const ClusterPlan& plan, const Til
     const auto& map = config.mapping;
     validate_tile(tile, config);
     switch (plan.split) {
-    case ClusterSplit::Groups:
-        return tile.group;
-    case ClusterSplit::Rows:
-        return tile.group * ceil_div(shape.m, map.tile_m) + tile.row / map.tile_m;
-    case ClusterSplit::Columns:
-        return tile.group * ceil_div(grid_columns(config), map.tile_n) + tile.col / map.tile_n;
+        case ClusterSplit::Groups:
+            return tile.group;
+        case ClusterSplit::Rows:
+            return tile.group * ceil_div(shape.m, map.tile_m) + tile.row / map.tile_m;
+        case ClusterSplit::Columns:
+            return tile.group * ceil_div(grid_columns(config), map.tile_n) + tile.col / map.tile_n;
     }
     throw std::logic_error("unknown cluster split");
 }
@@ -1546,9 +1559,11 @@ ColumnCosts encoded_column_costs(const Config& config,
     require(config.weights.encoding != WeightEncoding::Dense,
             "encoded column costs require compressed weights");
     const auto blocks = reduction_blocks(config);
-    require(panels.size() == checked_mul(checked_mul(config.shape.groups,
-                ceil_div(config.shape.n, config.mapping.tile_n)), blocks),
-            "encoded weight panels must cover every column and reduction panel");
+    require(
+        panels.size() == checked_mul(checked_mul(config.shape.groups,
+                                                 ceil_div(config.shape.n, config.mapping.tile_n)),
+                                     blocks),
+        "encoded weight panels must cover every column and reduction panel");
     return [config, &panels, blocks](std::uint64_t group, std::uint64_t column_panel) {
         const auto& shape = config.shape;
         const auto& map = config.mapping;
@@ -1569,8 +1584,8 @@ ColumnCosts encoded_column_costs(const Config& config,
             for (std::size_t extent = 0; extent < 2; ++extent) {
                 if (!rows[extent]) continue;
                 tile.rows = rows[extent];
-                *cycles[extent] = checked_add(*cycles[extent],
-                    encoded_panel_compute_cycles(config, tile, block, panel));
+                *cycles[extent] = checked_add(
+                    *cycles[extent], encoded_panel_compute_cycles(config, tile, block, panel));
             }
         }
         return result;
@@ -1591,7 +1606,8 @@ namespace {
 class ActivationReads {
 public:
     explicit ActivationReads(const Config& config)
-        : config_(config), channels_(channel_wise(config)),
+        : config_(config),
+          channels_(channel_wise(config)),
           capacity_(config.arch.activation_cache_bytes) {
         const auto& shape = config.shape;
         const auto& map = config.mapping;
@@ -1721,7 +1737,8 @@ ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
     // Weight bytes read by `passes` sweeps over the same column panels.
     const auto weight_reads = [cache](const ColumnCost& columns, std::uint64_t passes) {
         const auto cacheable = cache && columns.cacheable <= cache ?
-            columns.cacheable : checked_mul(columns.cacheable, passes);
+                                   columns.cacheable :
+                                   checked_mul(columns.cacheable, passes);
         return checked_add(checked_mul(columns.uncacheable, passes), cacheable);
     };
 
@@ -1741,59 +1758,58 @@ ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
         const auto close_group = [&]() {
             if (passes) e.weight_bytes = checked_add(e.weight_bytes, weight_reads(columns, passes));
             if (group_tiles)
-                activations = checked_add(activations,
-                                          activation_reads.all_rows(group_tiles, group_columns));
+                activations =
+                    checked_add(activations, activation_reads.all_rows(group_tiles, group_columns));
             columns = {};
             passes = group_tiles = group_columns = 0;
         };
         const auto first = plan.first_unit(core);
         for (auto unit = first; unit < first + plan.unit_count(core); ++unit) {
-            std::uint64_t rows = shape.m, cols = grid_cols, tiles = 0, cycles = 0,
-                          record_sets = 0;
+            std::uint64_t rows = shape.m, cols = grid_cols, tiles = 0, cycles = 0, record_sets = 0;
             // Every tile reads its activation panels and its parameter
             // records, so a unit reads its column records once per row tile
             // in it and its activations as ActivationReads counts them.
             switch (plan.split) {
-            case ClusterSplit::Groups: {
-                const auto whole = group_costs(unit);
-                tiles = checked_mul(row_tiles, col_tiles);
-                cycles = all_rows_cycles(whole);
-                record_sets = row_tiles;
-                e.weight_bytes = checked_add(e.weight_bytes, weight_reads(whole, row_tiles));
-                activations = checked_add(activations,
-                                          activation_reads.all_rows(col_tiles, grid_cols));
-                break;
-            }
-            case ClusterSplit::Rows:
-                rows = rows_of(unit % row_tiles);
-                tiles = col_tiles;
-                record_sets = 1;
-                if (unit / row_tiles != group) {
-                    close_group();
-                    group = unit / row_tiles;
-                    columns = group_costs(group);
+                case ClusterSplit::Groups: {
+                    const auto whole = group_costs(unit);
+                    tiles = checked_mul(row_tiles, col_tiles);
+                    cycles = all_rows_cycles(whole);
+                    record_sets = row_tiles;
+                    e.weight_bytes = checked_add(e.weight_bytes, weight_reads(whole, row_tiles));
+                    activations =
+                        checked_add(activations, activation_reads.all_rows(col_tiles, grid_cols));
+                    break;
                 }
-                cycles = row_tile_cycles(columns, rows);
-                ++passes;
-                activations = checked_add(activations, activation_reads.row(
-                    unit % row_tiles, col_tiles, grid_cols));
-                break;
-            case ClusterSplit::Columns: {
-                cols = cols_of(unit % col_tiles);
-                tiles = row_tiles;
-                record_sets = row_tiles;
-                if (unit / col_tiles != group) {
-                    close_group();
-                    group = unit / col_tiles;
-                    passes = row_tiles;
+                case ClusterSplit::Rows:
+                    rows = rows_of(unit % row_tiles);
+                    tiles = col_tiles;
+                    record_sets = 1;
+                    if (unit / row_tiles != group) {
+                        close_group();
+                        group = unit / row_tiles;
+                        columns = group_costs(group);
+                    }
+                    cycles = row_tile_cycles(columns, rows);
+                    ++passes;
+                    activations = checked_add(
+                        activations, activation_reads.row(unit % row_tiles, col_tiles, grid_cols));
+                    break;
+                case ClusterSplit::Columns: {
+                    cols = cols_of(unit % col_tiles);
+                    tiles = row_tiles;
+                    record_sets = row_tiles;
+                    if (unit / col_tiles != group) {
+                        close_group();
+                        group = unit / col_tiles;
+                        passes = row_tiles;
+                    }
+                    const auto column = costs(group, unit % col_tiles);
+                    cycles = all_rows_cycles(column);
+                    add_costs(columns, column);
+                    ++group_tiles;
+                    group_columns = checked_add(group_columns, cols);
+                    break;
                 }
-                const auto column = costs(group, unit % col_tiles);
-                cycles = all_rows_cycles(column);
-                add_costs(columns, column);
-                ++group_tiles;
-                group_columns = checked_add(group_columns, cols);
-                break;
-            }
             }
             // The unit covers rows x cols outputs.
             e.tiles = checked_add(e.tiles, tiles);
@@ -1810,16 +1826,16 @@ ClusterEstimate estimate_cluster(const Config& config, const ClusterPlan& plan,
     for (const auto& e : estimate.cores) {
         estimate.read_bytes = checked_add(estimate.read_bytes, e.read_bytes);
         estimate.write_bytes = checked_add(estimate.write_bytes, e.write_bytes);
-        const auto port = axi ? std::max(ceil_div(e.read_bytes, memory.axi.data_bytes),
-                                         ceil_div(e.write_bytes, memory.axi.data_bytes)) :
-                                ceil_div(checked_add(e.read_bytes, e.write_bytes),
-                                         memory.bytes_per_cycle);
+        const auto port =
+            axi ? std::max(ceil_div(e.read_bytes, memory.axi.data_bytes),
+                           ceil_div(e.write_bytes, memory.axi.data_bytes)) :
+                  ceil_div(checked_add(e.read_bytes, e.write_bytes), memory.bytes_per_cycle);
         estimate.bound_cycles = std::max({estimate.bound_cycles, e.compute_cycles, port});
     }
     if (axi && memory.dram_bytes_per_cycle)
-        estimate.bound_cycles = std::max(estimate.bound_cycles,
-            ceil_div(checked_add(estimate.read_bytes, estimate.write_bytes),
-                     memory.dram_bytes_per_cycle));
+        estimate.bound_cycles = std::max(
+            estimate.bound_cycles, ceil_div(checked_add(estimate.read_bytes, estimate.write_bytes),
+                                            memory.dram_bytes_per_cycle));
     return estimate;
 }
 
@@ -1827,7 +1843,8 @@ Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n) {
     if (m.bound_cycles != n.bound_cycles)
         return m.bound_cycles < n.bound_cycles ? Partition::M : Partition::N;
     return checked_add(m.read_bytes, m.write_bytes) < checked_add(n.read_bytes, n.write_bytes) ?
-        Partition::M : Partition::N;
+               Partition::M :
+               Partition::N;
 }
 
 std::uint64_t tile_read_bytes(const Config& config, const Tile& tile) {

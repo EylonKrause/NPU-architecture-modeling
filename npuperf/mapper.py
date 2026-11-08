@@ -25,15 +25,17 @@ Choice. Per tile shape and slot count the full reduction and the three deepest f
 panels are scored with ``analytic.analyze``, ranked by the lowest estimate, then fewer DRAM
 bytes, then less SRAM. The closed form times each request alone and misses queueing on the
 shared DRAM: on a weight-streaming GEMV most candidates share the DRAM-bound estimate,
-which cannot order them. So the candidates are replayed with ``analytic.schedule``,
+which cannot order them. The candidates are therefore replayed with ``analytic.schedule``,
 which matches npu-sim cycle for cycle, in rank order, skipping a candidate whose
 ``analyze`` lower bound is no less than the fewest cycles replayed so far; the mapper keeps
 the fewest replayed cycles of the whole candidate set (ties by rank). Only a layer whose
 lower bounds separate its candidates replays few of them.
-Dataflow and partition stay as the design sets them.
-A heuristic over a fixed candidate set, not a compiler: no layer fusion, no layout or
-loop-order choice, no cross-layer buffering.
+
+Scope. The search chooses tile shape, panel depth, slot count, panel buffers, the cache
+split and the lowering of one layer. Dataflow and partition stay as the design sets them;
+layer fusion, data layout, loop order and buffering across layers are fixed.
 """
+
 from __future__ import annotations
 
 import functools
@@ -67,10 +69,15 @@ class Mapping:
 
     def flags(self) -> dict[str, int]:
         """npu-sim flags that apply the mapping on top of the design point's config."""
-        return {"tile_m": self.tile_m, "tile_n": self.tile_n, "tile_k": self.tile_k,
-                "buffer_slots": self.buffer_slots, "panel_buffers": self.panel_buffers,
-                "weight_cache_bytes": self.weight_cache_bytes,
-                "activation_cache_bytes": self.activation_cache_bytes}
+        return {
+            "tile_m": self.tile_m,
+            "tile_n": self.tile_n,
+            "tile_k": self.tile_k,
+            "buffer_slots": self.buffer_slots,
+            "panel_buffers": self.panel_buffers,
+            "weight_cache_bytes": self.weight_cache_bytes,
+            "activation_cache_bytes": self.activation_cache_bytes,
+        }
 
 
 def axis_options(extent: int, step: int) -> list[int]:
@@ -97,8 +104,7 @@ def depth_options(k: int, min_depth: int) -> list[int]:
 
 
 def slot_bytes(design: analytic.Design) -> int:
-    return analytic.scratchpad_bytes(design.replace(weight_cache_bytes=0,
-                                                    activation_cache_bytes=0))
+    return analytic.scratchpad_bytes(design.replace(weight_cache_bytes=0, activation_cache_bytes=0))
 
 
 def steps(design: analytic.Design) -> tuple[int, int]:
@@ -132,10 +138,13 @@ def activation_need(design: analytic.Design) -> int:
     panel is read twice: one column tile, or the depthwise datapath."""
     if design.channel_wise or design.grid_columns <= design.tile_n:
         return 0
-    return max(sum(analytic.activation_bytes(design, row, min(design.tile_m, design.m - row),
-                                             1, block)
-                   for block in range(design.reduction_blocks))
-               for row in range(0, design.m, design.tile_m))
+    return max(
+        sum(
+            analytic.activation_bytes(design, row, min(design.tile_m, design.m - row), 1, block)
+            for block in range(design.reduction_blocks)
+        )
+        for row in range(0, design.m, design.tile_m)
+    )
 
 
 def cache_splits(trial: analytic.Design, free: int) -> list[tuple[int, int]]:
@@ -147,22 +156,32 @@ def cache_splits(trial: analytic.Design, free: int) -> list[tuple[int, int]]:
     return splits
 
 
-def candidates(design: analytic.Design, min_depth: int, cache: bool = True,
-               panel_buffers: int | None = None) -> list[analytic.Design]:
+def candidates(
+    design: analytic.Design, min_depth: int, cache: bool = True, panel_buffers: int | None = None
+) -> list[analytic.Design]:
     """Every scored candidate, each with the free SRAM split between its caches (or both
     caches off)."""
     row_step, col_step = steps(design)
     buffers = design.panel_buffers if panel_buffers is None else panel_buffers
     out = []
-    shapes = [(tile_m, tile_n, slots) for tile_m in row_options(design, row_step)
-              for tile_n in axis_options(design.grid_columns, col_step)
-              for slots in range(1, design.buffer_slots + 1)]
+    shapes = [
+        (tile_m, tile_n, slots)
+        for tile_m in row_options(design, row_step)
+        for tile_n in axis_options(design.grid_columns, col_step)
+        for slots in range(1, design.buffer_slots + 1)
+    ]
     for tile_m, tile_n, slots in shapes:
         fitting = []
         for tile_k in tile_depths(design, min_depth):
-            trial = design.replace(tile_m=tile_m, tile_n=tile_n, tile_k=tile_k,
-                                   buffer_slots=slots, panel_buffers=buffers,
-                                   weight_cache_bytes=0, activation_cache_bytes=0)
+            trial = design.replace(
+                tile_m=tile_m,
+                tile_n=tile_n,
+                tile_k=tile_k,
+                buffer_slots=slots,
+                panel_buffers=buffers,
+                weight_cache_bytes=0,
+                activation_cache_bytes=0,
+            )
             if slot_bytes(trial) <= design.sram_bytes:
                 fitting.append(trial)
         full = [d for d in fitting if d.tile_k == 0]
@@ -172,8 +191,10 @@ def candidates(design: analytic.Design, min_depth: int, cache: bool = True,
                 out.append(trial)
                 continue
             free = design.sram_bytes - slot_bytes(trial)
-            out += [trial.replace(weight_cache_bytes=weights, activation_cache_bytes=act)
-                    for weights, act in cache_splits(trial, free)]
+            out += [
+                trial.replace(weight_cache_bytes=weights, activation_cache_bytes=act)
+                for weights, act in cache_splits(trial, free)
+            ]
     return out
 
 
@@ -181,8 +202,9 @@ def lowerings(design: analytic.Design) -> list[analytic.Design]:
     """The design on its conv geometry and, for a 1x1 convolution, on its plain operand."""
     if not design.conv:
         return [design]
-    plain = design.replace(**{name: getattr(analytic.Design(), name)
-                              for name in analytic.CONV_FIELDS})
+    plain = design.replace(
+        **{name: getattr(analytic.Design(), name) for name in analytic.CONV_FIELDS}
+    )
     pointwise = design.conv_kernel_h == design.conv_kernel_w == 1
     return [design, plain] if pointwise else [design]
 
@@ -191,8 +213,9 @@ def _rank(design: analytic.Design, analysis: analytic.Analysis) -> tuple[int, in
     return analysis.estimate_cycles, analysis.dram_bytes, slot_bytes(design)
 
 
-def replay_best(ranked: Sequence[tuple[object, analytic.Design, analytic.Analysis]]
-                ) -> tuple[int, int]:
+def replay_best(
+    ranked: Sequence[tuple[object, analytic.Design, analytic.Analysis]],
+) -> tuple[int, int]:
     """(fewest replayed cycles, index) over ``ranked``, the earliest index on a tie. A
     candidate whose lower bound is no less than the best so far cannot beat it, nor tie it
     from a later index, so it is not replayed."""
@@ -211,8 +234,7 @@ def replay_best(ranked: Sequence[tuple[object, analytic.Design, analytic.Analysi
 @functools.lru_cache(maxsize=4096)
 def map_layer(design: analytic.Design, min_depth: int = 32, cache: bool = True) -> Mapping:
     """The mapping for ``design``'s GEMM shape (m, n, k, groups) and conv geometry; see
-    the module text. ``cache`` False leaves both caches off instead of giving them the free
-    SRAM."""
+    the module text. With ``cache`` False both caches stay off and the free SRAM unused."""
     scored = []
     for buffers in (None, 1):
         for lowered in lowerings(design):
@@ -222,22 +244,42 @@ def map_layer(design: analytic.Design, min_depth: int = 32, cache: bool = True) 
         if scored or design.panel_buffers == 1:
             break
     if not scored:
-        raise ValueError(f"no tile of a {design.m}x{design.n}x{design.k} layer fits "
-                         f"{design.sram_bytes} B of SRAM with panels of at least "
-                         f"{min_depth} B")
+        raise ValueError(
+            f"no tile of a {design.m}x{design.n}x{design.k} layer fits "
+            f"{design.sram_bytes} B of SRAM with panels of at least "
+            f"{min_depth} B"
+        )
     # A stable sort: equal ranks keep the candidate order.
     ranked = sorted(scored, key=lambda entry: entry[0])
     cycles, order = replay_best(ranked)
     _, trial, analysis = ranked[order]
-    return Mapping(trial.tile_m, trial.tile_n, trial.tile_k, trial.buffer_slots,
-                   trial.weight_cache_bytes,
-                   analysis.scratchpad_bytes, analysis.estimate_cycles, analysis.dram_bytes,
-                   analysis.bound, trial.activation_cache_bytes, cycles, trial.panel_buffers,
-                   trial.conv)
+    return Mapping(
+        trial.tile_m,
+        trial.tile_n,
+        trial.tile_k,
+        trial.buffer_slots,
+        trial.weight_cache_bytes,
+        analysis.scratchpad_bytes,
+        analysis.estimate_cycles,
+        analysis.dram_bytes,
+        analysis.bound,
+        trial.activation_cache_bytes,
+        cycles,
+        trial.panel_buffers,
+        trial.conv,
+    )
 
 
-def map_gemm(design: analytic.Design, m: int, n: int, k: int, groups: int = 1,
-             min_depth: int = 32, cache: bool = True, **changes: object) -> Mapping:
+def map_gemm(
+    design: analytic.Design,
+    m: int,
+    n: int,
+    k: int,
+    groups: int = 1,
+    min_depth: int = 32,
+    cache: bool = True,
+    **changes: object,
+) -> Mapping:
     design = design.replace(m=m, n=n, k=k, groups=groups, **changes)
     if not design.channel_wise:
         # The depthwise rate cannot change a GEMM's mapping; one cache entry serves all.
@@ -245,27 +287,44 @@ def map_gemm(design: analytic.Design, m: int, n: int, k: int, groups: int = 1,
     return map_layer(design, min_depth, cache)
 
 
-def map_call(design: analytic.Design, gemm: workloads.Gemm, min_depth: int = 32,
-             cache: bool = True, **changes: object) -> Mapping:
+def map_call(
+    design: analytic.Design,
+    gemm: workloads.Gemm,
+    min_depth: int = 32,
+    cache: bool = True,
+    **changes: object,
+) -> Mapping:
     """map_gemm with the call's conv geometry, if it has one."""
-    geometry = dict(zip(analytic.CONV_FIELDS, gemm.conv))
-    return map_gemm(design, gemm.m, gemm.n, gemm.k, gemm.groups, min_depth, cache,
-                    **geometry, **changes)
+    geometry = dict(zip(analytic.CONV_FIELDS, gemm.conv, strict=False))
+    return map_gemm(
+        design, gemm.m, gemm.n, gemm.k, gemm.groups, min_depth, cache, **geometry, **changes
+    )
 
 
 @cli.main_guard("mapper")
 def main(argv: Sequence[str] | None = None) -> int:
     parser = cli.Parser("mapper", __doc__)
-    parser.add_argument("--design", required=True,
-                        help="design point (configs/<NAME>.json or a JSON path)")
+    parser.add_argument(
+        "--design", required=True, help="design point (configs/<NAME>.json or a JSON path)"
+    )
     parser.add_argument("--m", type=cli.positive_int, required=True, help="output rows")
-    parser.add_argument("--n", type=cli.positive_int, required=True,
-                        help="output channels per group")
-    parser.add_argument("--k", type=cli.positive_int, required=True,
-                        help="reduction depth per group")
-    parser.add_argument("--groups", type=cli.positive_int, default=1, help="groups")
-    parser.add_argument("--min-depth", type=cli.positive_int,
-                        help="smallest panel depth in bytes (default: the design point's)")
+    parser.add_argument(
+        "--n", type=cli.positive_int, required=True, help="output channels per group"
+    )
+    parser.add_argument(
+        "--k", type=cli.positive_int, required=True, help="reduction depth per group"
+    )
+    parser.add_argument(
+        "--groups",
+        type=cli.positive_int,
+        default=1,
+        help="GEMM groups (depthwise: G = channels with --n 1)",
+    )
+    parser.add_argument(
+        "--min-depth",
+        type=cli.positive_int,
+        help="smallest panel depth in bytes (default: the design point's)",
+    )
     cli.add_format_option(parser)
     args = parser.parse_args(argv)
     document = designs.load(args.design)

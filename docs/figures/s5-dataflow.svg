@@ -1,8 +1,8 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="820" height="600" viewBox="0 0 820 600" font-family="system-ui, -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif">
-<title>Array utilisation: output- vs weight-stationary</title>
+<title>Array utilization: output- vs weight-stationary</title>
 <rect width="820" height="600" fill="#ffffff"/>
 <defs><clipPath id="s5-plot"><rect x="62.04" y="58" width="735.96" height="488"/></clipPath></defs>
-<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Array utilisation: output- vs weight-stationary</text>
+<text x="14" y="31" font-size="15" fill="#0b0b0b" font-weight="600">Array utilization: output- vs weight-stationary</text>
 <text x="14" y="52" font-size="12" fill="#52514e">32x32 array, one core of client-16c; MACs / (compute-busy cycles x 1024); one mark per distinct layer shape</text>
 <g stroke="#e6e5df" stroke-width="1" fill="none">
 <line x1="62.04" y1="546" x2="796" y2="546"/>
@@ -48,8 +48,8 @@
 <text x="53.04" y="161.4" font-size="12" fill="#52514e" text-anchor="end">0.8</text>
 <text x="53.04" y="64.2" font-size="12" fill="#52514e" text-anchor="end">1.0</text>
 </g>
-<text x="429.02" y="588" font-size="13" fill="#0b0b0b" text-anchor="middle">output-stationary utilisation</text>
-<text x="21.2" y="303" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 303)">weight-stationary utilisation</text>
+<text x="429.02" y="588" font-size="13" fill="#0b0b0b" text-anchor="middle">output-stationary utilization</text>
+<text x="21.2" y="303" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 303)">weight-stationary utilization</text>
 <g clip-path="url(#s5-plot)">
 <path d="M62.04,546 L796,60" fill="none" stroke="#6f6e69" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 4"/>
 <circle cx="605.3" cy="90.38" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>

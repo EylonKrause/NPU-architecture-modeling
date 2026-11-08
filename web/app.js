@@ -1,9 +1,9 @@
 "use strict";
 // npu-sim live: binds GET /api/state (npuperf/live.py) to the page.
-//   telemetry  npu-sim live snapshot (schema_version 2, src/main.cpp snapshot_json; 1 from
-//              older builds). Its config is nested by option-table path (shape.m,
-//              arch.compute.macs_per_cycle, mapping.panel_buffers, ...); the page does not
-//              parse it, the controller resolves it into workload and machine.
+//   telemetry  npu-sim live snapshot (src/main.cpp snapshot_json, schema_version 1 or 2). Its
+//              config is nested by option-table path (shape.m, arch.compute.macs_per_cycle,
+//              mapping.panel_buffers, ...); the controller resolves it into workload and
+//              machine, and the page reads only those.
 //   workload   shape and weight format resolved from the snapshot config
 //   machine    peak rates, ridge point and analytic bound of the running design
 //   slices     counter deltas over the last advances (strip chart)
@@ -87,8 +87,8 @@ function tip(item, label) {
   return item;
 }
 
-// Keep a left-anchored label left of `right`; one that would cross it is anchored at its
-// end on `fallback` instead (never left of `left`).
+// Keeps a left-anchored label left of `right`; a label that would cross it is end-anchored
+// at `fallback`, clamped so it starts no further left than `left`.
 function inside(label, left, right, fallback) {
   let length = 0;
   try { length = label.getComputedTextLength(); } catch (error) { length = 0; }
@@ -221,7 +221,7 @@ function renderKpis(value) {
     text("kpi-bound-detail", `${int(analysis.lower_bound_cycles)} cyc` +
       (attained === null ? " lower bound" : ` · ${percent(attained)} attained`));
   } else if (isNum(t.compute_busy_cycles) && isNum(t.dma_busy_cycles) && t.cycles > 0) {
-    // No analytic model for this design: report busy fractions, not a bound class.
+    // Without an analytic model for this design the panel shows MAC and DMA busy fractions.
     text("kpi-bound", "—");
     text("kpi-bound-detail", `no analytic bound · MAC ${percent(t.compute_busy_cycles / t.cycles, 0)}` +
       ` DMA ${percent(t.dma_busy_cycles / t.cycles, 0)} busy`);
@@ -332,10 +332,9 @@ function renderRoofline(value) {
     (effective ? ` · ${sig(effective)} B/cyc with latency` : ""));
 }
 
-// Utilisation strip chart over the last STRIP_SLOTS slices.
+// Utilization strip chart over the last STRIP_SLOTS slices.
 
-// The snapshot counts DMA busy cycles for loads and stores together, so the chart shows the
-// total; a load/store split sampled from the DMA direction would be an estimate.
+// The snapshot counts load and store DMA busy cycles together; the DMA series is their sum.
 const STRIP_SERIES = [
   {key: "compute_busy_fraction", className: "series-mac", legend: "strip-mac", name: "MAC"},
   {key: "dma_busy_fraction", className: "series-dma", legend: "strip-dma", name: "DMA"},
@@ -361,7 +360,7 @@ function renderStrip(value) {
     empty(svg, width, height, "no slices yet");
     for (const series of STRIP_SERIES) text(series.legend, "—");
     text("strip-meta", `last ${STRIP_SLOTS} slices`);
-    svg.setAttribute("aria-label", "Utilisation per slice: no slices yet");
+    svg.setAttribute("aria-label", "Utilization per slice: no slices yet");
     svg.onmousemove = svg.onmouseleave = svg.onkeydown = svg.onblur = null;
     return;
   }
@@ -404,7 +403,7 @@ function renderStrip(value) {
   for (const series of STRIP_SERIES) text(series.legend, percent(shown[series.key]));
   const span = `job ${shown.job} · cycles ${int(shown.end_cycle - shown.cycles)}–${int(shown.end_cycle)}`;
   text("strip-meta", `${span} · line: ${STRIP_MEAN}-slice mean`);
-  svg.setAttribute("aria-label", `Utilisation per slice, ${span}: ` +
+  svg.setAttribute("aria-label", `Utilization per slice, ${span}: ` +
     STRIP_SERIES.map(series => `${series.name} ${percent(shown[series.key])} busy`).join(", ") +
     ". Left and right arrows select a slice.");
 
@@ -439,7 +438,7 @@ function renderStrip(value) {
 
 // A stage holds a tile from the sample that first shows it to the sample that shows a change.
 // At an unsampled interval every open segment ends where the interval starts and the next
-// sample opens new ones, so nothing is drawn where the stages were not observed.
+// sample opens new ones, so no segment spans cycles the sampler did not observe.
 function segments(transitions, now) {
   const open = {}, result = [], gaps = [];
   for (const transition of transitions) {
@@ -538,7 +537,7 @@ function renderGantt(value) {
   $("gantt-legend").hidden = !shownGaps.length;
 }
 
-// Output tile map, coloured by stage.
+// Output tile map, colored by stage.
 
 const TILE_STATES = ["pending", "resident", "loading", "computing", "storing", "stored"];
 

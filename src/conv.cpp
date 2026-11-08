@@ -19,8 +19,8 @@ bool in_dimension(std::uint64_t value) { return value >= 1 && value <= max_dimen
 // Output extent along one axis: floor((in + pads - extent) / stride) + 1, where
 // extent = dilation * (kernel - 1) + 1 is the kernel's reach into the input.
 std::uint64_t output_extent(std::uint64_t input, std::uint64_t kernel, std::uint64_t stride,
-                            std::uint64_t dilation, std::uint64_t pad_low,
-                            std::uint64_t pad_high, const char* axis) {
+                            std::uint64_t dilation, std::uint64_t pad_low, std::uint64_t pad_high,
+                            const char* axis) {
     const auto padded = checked_add(input, checked_add(pad_low, pad_high));
     const auto extent = checked_add(checked_mul(dilation, kernel - 1), 1);
     if (extent > padded)
@@ -48,8 +48,8 @@ ConvGeometry conv_geometry(const ShapeConfig& shape) {
     const auto& c = shape.conv;
     if (!implicit_conv(shape)) {
         require(c.kernel_h == 1 && c.kernel_w == 1 && c.stride_h == 1 && c.stride_w == 1 &&
-                    c.dilation_h == 1 && c.dilation_w == 1 && c.pad_top == 0 &&
-                    c.pad_left == 0 && c.pad_bottom == 0 && c.pad_right == 0,
+                    c.dilation_h == 1 && c.dilation_w == 1 && c.pad_top == 0 && c.pad_left == 0 &&
+                    c.pad_bottom == 0 && c.pad_right == 0,
                 "shape.conv kernel, stride, dilation and padding need the input extents "
                 "--conv-input-h, --conv-input-w and --conv-input-c");
         return {};
@@ -61,8 +61,8 @@ ConvGeometry conv_geometry(const ShapeConfig& shape) {
         !in_dimension(c.stride_w) || !in_dimension(c.dilation_h) || !in_dimension(c.dilation_w))
         fail("shape.conv kernel, stride and dilation must be in 1.." +
              std::to_string(max_dimension));
-    if (c.pad_top > max_dimension || c.pad_left > max_dimension ||
-        c.pad_bottom > max_dimension || c.pad_right > max_dimension)
+    if (c.pad_top > max_dimension || c.pad_left > max_dimension || c.pad_bottom > max_dimension ||
+        c.pad_right > max_dimension)
         fail("shape.conv padding must be at most " + std::to_string(max_dimension));
     // The NHWC tensor's byte offsets stay exact in 64 bits.
     checked_mul(checked_mul(c.input_h, c.input_w), c.input_c);
@@ -78,9 +78,9 @@ ConvGeometry conv_geometry(const ShapeConfig& shape) {
     g.kernel_row_k = checked_mul(c.kernel_w, g.group_channels);
     const auto pixels = checked_mul(g.output_h, g.output_w);
     if (shape.m != pixels)
-        fail("with shape.conv, M must equal output height x width = " +
-             std::to_string(g.output_h) + " x " + std::to_string(g.output_w) + " = " +
-             std::to_string(pixels) + ", got " + std::to_string(shape.m));
+        fail("with shape.conv, M must equal output height x width = " + std::to_string(g.output_h) +
+             " x " + std::to_string(g.output_w) + " = " + std::to_string(pixels) + ", got " +
+             std::to_string(shape.m));
     const auto k = checked_mul(c.kernel_h, g.kernel_row_k);
     if (shape.k != k)
         fail("with shape.conv, K must equal kernel_h x kernel_w x input_c / groups = " +
@@ -125,9 +125,11 @@ void conv_input_spans(const Config& config, std::uint64_t first_output, std::uin
         height - 1, to_signed(oy_last) * stride_h +
                         to_signed(kernel.first + kernel.count - 1) * dilation_h - top);
     if (lowest > highest) return;
-    struct Hull { std::int64_t first, last; };
-    const auto none = Hull{std::numeric_limits<std::int64_t>::max(),
-                           std::numeric_limits<std::int64_t>::min()};
+    struct Hull {
+        std::int64_t first, last;
+    };
+    const auto none =
+        Hull{std::numeric_limits<std::int64_t>::max(), std::numeric_limits<std::int64_t>::min()};
     std::vector<Hull> hulls(static_cast<std::size_t>(highest - lowest + 1), none);
     for (auto oy = oy_first; oy <= oy_last; ++oy) {
         const auto a = to_signed(oy == oy_first ? first_output % g.output_w : 0);
@@ -183,16 +185,19 @@ std::vector<std::int8_t> im2col(const Config& config, const std::vector<std::int
             for (std::uint64_t kx = 0; kx < c.kernel_w; ++kx) {
                 const auto ix =
                     to_signed(ox * c.stride_w + kx * c.dilation_w) - to_signed(c.pad_left);
-                const bool inside = iy >= 0 && iy < to_signed(c.input_h) && ix >= 0 &&
-                                    ix < to_signed(c.input_w);
+                const bool inside =
+                    iy >= 0 && iy < to_signed(c.input_h) && ix >= 0 && ix < to_signed(c.input_w);
                 const auto pixel = inside ? (static_cast<std::uint64_t>(iy) * c.input_w +
-                                             static_cast<std::uint64_t>(ix)) * c.input_c : 0;
+                                             static_cast<std::uint64_t>(ix)) *
+                                                c.input_c :
+                                            0;
                 for (std::uint64_t group = 0; group < shape.groups; ++group) {
                     const auto column = group * shape.k + (ky * c.kernel_w + kx) * g.group_channels;
                     for (std::uint64_t ci = 0; ci < g.group_channels; ++ci)
                         operand[static_cast<std::size_t>(m * row_k + column + ci)] =
                             inside ? input[static_cast<std::size_t>(
-                                         pixel + group * g.group_channels + ci)] : padding;
+                                         pixel + group * g.group_channels + ci)] :
+                                     padding;
                 }
             }
         }

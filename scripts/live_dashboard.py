@@ -3,6 +3,7 @@
 
 Entry point for npuperf.live (also: python -m npuperf.live).
 """
+
 import sys
 from pathlib import Path
 

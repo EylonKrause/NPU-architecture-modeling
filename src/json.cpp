@@ -73,8 +73,10 @@ private:
             value.text = parse_string();
         } else if (c == '-' || (c >= '0' && c <= '9')) parse_number(value);
         else if (c == 't' || c == 'f' || c == 'n') parse_literal(value);
-        else fail(c < 0x20 || c >= 0x7f ? std::string("unexpected byte") :
-                  std::string("unexpected character '") + static_cast<char>(c) + "'");
+        else
+            fail(c < 0x20 || c >= 0x7f ?
+                     std::string("unexpected byte") :
+                     std::string("unexpected character '") + static_cast<char>(c) + "'");
         return value;
     }
 
@@ -215,16 +217,34 @@ private:
         const auto c = peek();
         const char* simple = nullptr;
         switch (c) {
-        case '"': simple = "\""; break;
-        case '\\': simple = "\\"; break;
-        case '/': simple = "/"; break;
-        case 'b': simple = "\b"; break;
-        case 'f': simple = "\f"; break;
-        case 'n': simple = "\n"; break;
-        case 'r': simple = "\r"; break;
-        case 't': simple = "\t"; break;
-        case 'u': break;
-        default: fail("invalid escape sequence");
+            case '"':
+                simple = "\"";
+                break;
+            case '\\':
+                simple = "\\";
+                break;
+            case '/':
+                simple = "/";
+                break;
+            case 'b':
+                simple = "\b";
+                break;
+            case 'f':
+                simple = "\f";
+                break;
+            case 'n':
+                simple = "\n";
+                break;
+            case 'r':
+                simple = "\r";
+                break;
+            case 't':
+                simple = "\t";
+                break;
+            case 'u':
+                break;
+            default:
+                fail("invalid escape sequence");
         }
         advance();
         if (simple) {
@@ -327,12 +347,18 @@ std::optional<double> JsonValue::as_double() const {
 
 std::string_view json_type_name(JsonValue::Type type) {
     switch (type) {
-    case JsonValue::Type::Null: return "null";
-    case JsonValue::Type::Boolean: return "a boolean";
-    case JsonValue::Type::Number: return "a number";
-    case JsonValue::Type::String: return "a string";
-    case JsonValue::Type::Array: return "an array";
-    case JsonValue::Type::Object: return "an object";
+        case JsonValue::Type::Null:
+            return "null";
+        case JsonValue::Type::Boolean:
+            return "a boolean";
+        case JsonValue::Type::Number:
+            return "a number";
+        case JsonValue::Type::String:
+            return "a string";
+        case JsonValue::Type::Array:
+            return "an array";
+        case JsonValue::Type::Object:
+            return "an object";
     }
     return "an unknown value";
 }
@@ -347,16 +373,30 @@ void write_json_string(std::ostream& stream, std::string_view text) {
     for (const char c : text) {
         const auto byte = static_cast<unsigned char>(c);
         switch (c) {
-        case '"': stream << "\\\""; break;
-        case '\\': stream << "\\\\"; break;
-        case '\b': stream << "\\b"; break;
-        case '\f': stream << "\\f"; break;
-        case '\n': stream << "\\n"; break;
-        case '\r': stream << "\\r"; break;
-        case '\t': stream << "\\t"; break;
-        default:
-            if (byte < 0x20) stream << "\\u00" << hex[byte >> 4] << hex[byte & 15U];
-            else stream << c;
+            case '"':
+                stream << "\\\"";
+                break;
+            case '\\':
+                stream << "\\\\";
+                break;
+            case '\b':
+                stream << "\\b";
+                break;
+            case '\f':
+                stream << "\\f";
+                break;
+            case '\n':
+                stream << "\\n";
+                break;
+            case '\r':
+                stream << "\\r";
+                break;
+            case '\t':
+                stream << "\\t";
+                break;
+            default:
+                if (byte < 0x20) stream << "\\u00" << hex[byte >> 4] << hex[byte & 15U];
+                else stream << c;
         }
     }
     stream << '"';
@@ -369,7 +409,7 @@ void write_json_number(std::ostream& stream, double value) {
     }
     std::ostringstream text;
     text.imbue(std::locale::classic());
-    // Integers below 2^53 print exactly without an exponent: 200, not 2e+02.
+    // Integral values of magnitude below 2^53 print in fixed notation: 200 as 200.
     if (value == std::floor(value) && std::fabs(value) < 9007199254740992.0) {
         text << std::fixed << std::setprecision(0) << value;
     } else {

@@ -24,6 +24,7 @@ when a config disagrees with its rule: the depthwise datapath rate (npuperf.stud
 which reports its rule beside the Arm-model rate on the other two points) and the cores'
 SRAM (S10).
 """
+
 from __future__ import annotations
 
 import math
@@ -47,8 +48,12 @@ TEXT_KEYS = ("name", "description")
 # tile_rule and npuperf.mapper keep panels at least this deep.
 MIN_PANEL_DEPTH = {"edge-256": 128, "mobile-2k": 128, "client-16c": 128, "workstation-32c": 128}
 # The memory behind each point's AXI port.
-EXTERNAL_MEMORY = {"edge-256": "DRAM", "mobile-2k": "DRAM", "client-16c": "DRAM",
-                   "workstation-32c": "DRAM"}
+EXTERNAL_MEMORY = {
+    "edge-256": "DRAM",
+    "mobile-2k": "DRAM",
+    "client-16c": "DRAM",
+    "workstation-32c": "DRAM",
+}
 # Output microblock (height, width, channels) the depthwise operation runs on in Arm's
 # performance model of the part a point is sized from: Vela 5.2.0 architecture_features.py
 # for the Ethos-U55-256, and Regor ethos_u85.cpp for the Ethos-U85-2048, whose 8-bit
@@ -84,8 +89,8 @@ def vela_depthwise_rate(name: str, taps: int = DEPTHWISE_KERNEL_TAPS) -> int | N
     ``name`` is sized from, or None for a point without one. Each step covers 4 taps for
     every output of the microblock in 4 cycles, so a 3x3 kernel takes 3 steps and fills 9 of
     their 12 tap slots: three quarters of the microblock's output count. npu-sim's
-    depthwise datapath has no kernel step, so the configs take this rate rather than the
-    microblock's peak."""
+    depthwise datapath has no kernel step, so the configs take this per-kernel rate, which
+    sits below the microblock's peak."""
     block = DEPTHWISE_UBLOCK.get(name)
     if block is None:
         return None
@@ -137,6 +142,7 @@ def design(document: Mapping[str, Any]) -> analytic.Design:
 
 # ------------------------------------------------------------------ rules --
 
+
 def slot_bytes(d: analytic.Design) -> int:
     """SRAM the tile slots reserve when a tile is full size and spans more than one panel:
     the reservation of every layer at most, since edge tiles and single panels need less."""
@@ -177,8 +183,9 @@ def tile_rule(d: analytic.Design, min_depth: int) -> tuple[int, int]:
     step = math.lcm(d.array_rows, d.array_cols)
     tile = 1 << math.ceil(math.log2(step))
     if tile % step:
-        raise ValueError(f"no power of two is a multiple of the {d.array_rows}x{d.array_cols} "
-                         "array")
+        raise ValueError(
+            f"no power of two is a multiple of the {d.array_rows}x{d.array_cols} array"
+        )
     best = None
     while tile <= MAX_DIMENSION:
         depth = _deepest(d, tile, min_depth)
@@ -187,8 +194,9 @@ def tile_rule(d: analytic.Design, min_depth: int) -> tuple[int, int]:
         best = (tile, depth)
         tile *= 2
     if best is None:
-        raise ValueError(f"no {step}-multiple tile fits {d.sram_bytes} B with tile_k >= "
-                         f"{min_depth}")
+        raise ValueError(
+            f"no {step}-multiple tile fits {d.sram_bytes} B with tile_k >= {min_depth}"
+        )
     return best
 
 
@@ -203,25 +211,28 @@ def burst_rule(read_outstanding: int, read_latency: int) -> int:
     while read_outstanding * beats < read_latency + beats:
         beats *= 2
         if beats > MAX_BURST_BEATS:
-            raise ValueError(f"{read_outstanding} outstanding reads cannot cover "
-                             f"{read_latency} cycles with {MAX_BURST_BEATS}-beat bursts")
+            raise ValueError(
+                f"{read_outstanding} outstanding reads cannot cover "
+                f"{read_latency} cycles with {MAX_BURST_BEATS}-beat bursts"
+            )
     return beats
 
 
 # ---------------------------------------------------------------- summary --
 
+
 @dataclass(frozen=True)
 class Summary:
     name: str
-    macs_per_cycle: int          # every core
+    macs_per_cycle: int  # every core
     array: str
     cores: int
     frequency_mhz: float
     peak_tops: float
-    sram_bytes: int              # per core
-    weight_cache_bytes: int      # per core, inside sram_bytes
+    sram_bytes: int  # per core
+    weight_cache_bytes: int  # per core, inside sram_bytes
     depthwise_macs_per_cycle: int  # per core
-    axi_bits: int                # per core port
+    axi_bits: int  # per core port
     dram_bytes_per_cycle: int
     dram_gbps: float
     ridge_macs_per_byte: float
@@ -230,19 +241,25 @@ class Summary:
 def summary(document: Mapping[str, Any]) -> Summary:
     d = design(document)
     if d.memory_model != "axi" or not d.dram_bytes_per_cycle or not d.axi_data_bytes:
-        raise ValueError(f"{document['name']}: a design point uses the axi memory model with "
-                         "a DRAM rate")
+        raise ValueError(
+            f"{document['name']}: a design point uses the axi memory model with a DRAM rate"
+        )
     peak = d.peak_macs_per_cycle
     return Summary(
-        name=document["name"], macs_per_cycle=peak,
+        name=document["name"],
+        macs_per_cycle=peak,
         array=f"{d.array_rows}x{d.array_cols}" if d.array else "vector",
-        cores=d.cores, frequency_mhz=d.frequency_mhz,
+        cores=d.cores,
+        frequency_mhz=d.frequency_mhz,
         peak_tops=OPS_PER_MAC * peak * d.frequency_mhz / 1e6,
-        sram_bytes=d.sram_bytes, weight_cache_bytes=d.weight_cache_bytes,
-        depthwise_macs_per_cycle=d.depthwise_macs_per_cycle, axi_bits=8 * d.axi_data_bytes,
+        sram_bytes=d.sram_bytes,
+        weight_cache_bytes=d.weight_cache_bytes,
+        depthwise_macs_per_cycle=d.depthwise_macs_per_cycle,
+        axi_bits=8 * d.axi_data_bytes,
         dram_bytes_per_cycle=d.dram_bytes_per_cycle,
         dram_gbps=d.dram_bytes_per_cycle * d.frequency_mhz / 1e3,
-        ridge_macs_per_byte=d.ridge)
+        ridge_macs_per_byte=d.ridge,
+    )
 
 
 def _per_core(cores: int, text: str) -> str:
@@ -251,16 +268,36 @@ def _per_core(cores: int, text: str) -> str:
 
 def markdown(rows: Sequence[Summary]) -> str:
     """The design-point table of docs/design-points.md."""
-    header = ("Design point", "MAC/cycle", "Array", "Cores", "Clock", "Peak TOP/s", "SRAM",
-              "Depthwise MAC/cycle", "AXI", "DRAM B/cycle", "DRAM GB/s", "Ridge MAC/B")
+    header = (
+        "Design point",
+        "MAC/cycle",
+        "Array",
+        "Cores",
+        "Clock",
+        "Peak TOP/s",
+        "SRAM",
+        "Depthwise MAC/cycle",
+        "AXI",
+        "DRAM B/cycle",
+        "DRAM GB/s",
+        "Ridge MAC/B",
+    )
     lines = ["| " + " | ".join(header) + " |", "|" + "---|" * len(header)]
     for row in rows:
-        cells = (f"`{row.name}`", str(row.macs_per_cycle), row.array, str(row.cores),
-                 f"{row.frequency_mhz:g} MHz", f"{row.peak_tops:.6g}",
-                 _per_core(row.cores, f"{row.sram_bytes / 1024:g} KiB"),
-                 _per_core(row.cores, str(row.depthwise_macs_per_cycle)),
-                 _per_core(row.cores, f"{row.axi_bits}-bit"), str(row.dram_bytes_per_cycle),
-                 f"{row.dram_gbps:.6g}", f"{row.ridge_macs_per_byte:.4g}")
+        cells = (
+            f"`{row.name}`",
+            str(row.macs_per_cycle),
+            row.array,
+            str(row.cores),
+            f"{row.frequency_mhz:g} MHz",
+            f"{row.peak_tops:.6g}",
+            _per_core(row.cores, f"{row.sram_bytes / 1024:g} KiB"),
+            _per_core(row.cores, str(row.depthwise_macs_per_cycle)),
+            _per_core(row.cores, f"{row.axi_bits}-bit"),
+            str(row.dram_bytes_per_cycle),
+            f"{row.dram_gbps:.6g}",
+            f"{row.ridge_macs_per_byte:.4g}",
+        )
         lines.append("| " + " | ".join(cells) + " |")
     return "\n".join(lines) + "\n"
 
@@ -268,11 +305,16 @@ def markdown(rows: Sequence[Summary]) -> str:
 @cli.main_guard("designs")
 def main(argv: Sequence[str] | None = None) -> int:
     parser = cli.Parser("designs", __doc__)
-    parser.add_argument("names", nargs="*", metavar="NAME",
-                        help="design points (configs/<NAME>.json or a JSON path); default: "
-                             + ", ".join(DESIGN_POINTS))
-    parser.add_argument("--format", choices=("markdown", "json"), default="markdown",
-                        help="stdout format")
+    parser.add_argument(
+        "names",
+        nargs="*",
+        metavar="NAME",
+        help="design points (configs/<NAME>.json or a JSON path); default: "
+        + ", ".join(DESIGN_POINTS),
+    )
+    parser.add_argument(
+        "--format", choices=("markdown", "json"), default="markdown", help="stdout format"
+    )
     args = parser.parse_args(argv)
     rows = [summary(load(name)) for name in args.names or DESIGN_POINTS]
     if args.format == "json":

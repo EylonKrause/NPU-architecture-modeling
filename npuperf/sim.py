@@ -1,12 +1,14 @@
 """Run npu-sim and its sibling executables.
 
-``run()`` accepts either an argv-style flag list or a dict of flags, so options the
-simulator gains later pass through without changes here: ``{"tile_m": 8, "relu": True}``
+``run()`` takes an argv-style flag list or a dict of flags and passes every option through
+unchecked, so a new npu-sim option needs no change here: ``{"tile_m": 8, "relu": True}``
 becomes ``--tile-m 8 --relu``. ``LiveSession`` drives the ``--live-stdio`` protocol.
 """
+
 from __future__ import annotations
 
 import collections
+import contextlib
 import functools
 import json
 import math
@@ -14,9 +16,9 @@ import queue
 import subprocess
 import threading
 import time
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from collections.abc import Iterator, Mapping, Sequence
 from typing import Any
 
 from . import binary as binaries
@@ -33,8 +35,13 @@ _MISSING = object()
 class SimError(RuntimeError):
     """An executable exited with an error or produced unusable output."""
 
-    def __init__(self, message: str, returncode: int | None = None, stderr: str = "",
-                 command: Sequence[str] = ()):
+    def __init__(
+        self,
+        message: str,
+        returncode: int | None = None,
+        stderr: str = "",
+        command: Sequence[str] = (),
+    ):
         super().__init__(message)
         self.returncode = returncode
         self.stderr = stderr
@@ -91,7 +98,8 @@ def _scalar(text: str) -> Any:
 
 
 def from_flags(tokens: Sequence[Any]) -> dict[str, Any]:
-    """Inverse of ``to_flags`` for argv lists: ``--tile-m 8 --relu`` -> {"tile_m": 8, "relu": True}."""
+    """Inverse of ``to_flags`` for argv lists:
+    ``--tile-m 8 --relu`` -> {"tile_m": 8, "relu": True}."""
     tokens = [str(token) for token in tokens]
     result: dict[str, Any] = {}
     index = 0
@@ -109,19 +117,25 @@ def from_flags(tokens: Sequence[Any]) -> dict[str, Any]:
     return result
 
 
-# Flat result-config keys (npu-sim flag names) and the option-table paths (SPEC 1.1) that
-# hold them in a nested config. Several leaves are renamed (weight_bits -> weights.bits), so
-# a leaf-name search alone would miss them.
+# Flat result-config keys (npu-sim flag names) and the option-table paths (src/options.cpp)
+# that hold them in a nested config. Several leaves are renamed (weight_bits ->
+# weights.bits), so a leaf-name search alone misses them.
 CONFIG_PATHS = {
-    "m": "shape.m", "n": "shape.n", "k": "shape.k", "groups": "shape.groups",
+    "m": "shape.m",
+    "n": "shape.n",
+    "k": "shape.k",
+    "groups": "shape.groups",
     "seed": "shape.seed",
     "macs_per_cycle": "arch.compute.macs_per_cycle",
-    "array_rows": "arch.compute.array_rows", "array_cols": "arch.compute.array_cols",
-    "dataflow": "arch.compute.dataflow", "pipeline_cycles": "arch.compute.pipeline_cycles",
+    "array_rows": "arch.compute.array_rows",
+    "array_cols": "arch.compute.array_cols",
+    "dataflow": "arch.compute.dataflow",
+    "pipeline_cycles": "arch.compute.pipeline_cycles",
     "weight_decode_values_per_cycle": "arch.compute.weight_decode_values_per_cycle",
     "memory_model": "arch.memory.model",
     "memory_bytes_per_cycle": "arch.memory.bytes_per_cycle",
-    "memory_latency": "arch.memory.latency", "dma_burst_bytes": "arch.memory.burst_bytes",
+    "memory_latency": "arch.memory.latency",
+    "dma_burst_bytes": "arch.memory.burst_bytes",
     "dram_bytes_per_cycle": "arch.memory.dram_bytes_per_cycle",
     "axi_data_bytes": "arch.memory.axi.data_bytes",
     "axi_max_burst_beats": "arch.memory.axi.max_burst_beats",
@@ -129,19 +143,42 @@ CONFIG_PATHS = {
     "axi_write_outstanding": "arch.memory.axi.write_outstanding",
     "axi_read_latency": "arch.memory.axi.read_latency",
     "axi_write_latency": "arch.memory.axi.write_latency",
-    "sram_bytes": "arch.sram_bytes", "weight_cache_bytes": "arch.weight_cache_bytes",
-    "frequency_mhz": "arch.frequency_mhz", "cores": "arch.cores",
-    "tile_m": "mapping.tile_m", "tile_n": "mapping.tile_n", "tile_k": "mapping.tile_k",
-    "buffer_slots": "mapping.buffer_slots", "panel_buffers": "mapping.panel_buffers",
+    "sram_bytes": "arch.sram_bytes",
+    "weight_cache_bytes": "arch.weight_cache_bytes",
+    "frequency_mhz": "arch.frequency_mhz",
+    "cores": "arch.cores",
+    "tile_m": "mapping.tile_m",
+    "tile_n": "mapping.tile_n",
+    "tile_k": "mapping.tile_k",
+    "buffer_slots": "mapping.buffer_slots",
+    "panel_buffers": "mapping.panel_buffers",
     "partition": "mapping.partition",
-    "weight_bits": "weights.bits", "weight_encoding": "weights.encoding",
-    "palette_bits": "weights.palette_bits", "sparse_block": "weights.sparse_block",
-    "timing": "sim.timing", "timing_only": "sim.timing_only",
+    "weight_bits": "weights.bits",
+    "weight_encoding": "weights.encoding",
+    "palette_bits": "weights.palette_bits",
+    "sparse_block": "weights.sparse_block",
+    "timing": "sim.timing",
+    "timing_only": "sim.timing_only",
     "depthwise_macs_per_cycle": "arch.compute.depthwise_macs_per_cycle",
     "activation_cache_bytes": "arch.activation_cache_bytes",
-    **{f"conv_{leaf}": f"shape.conv.{leaf}" for leaf in (
-        "input_h", "input_w", "input_c", "kernel_h", "kernel_w", "stride_h", "stride_w",
-        "dilation_h", "dilation_w", "pad_top", "pad_left", "pad_bottom", "pad_right")},
+    **{
+        f"conv_{leaf}": f"shape.conv.{leaf}"
+        for leaf in (
+            "input_h",
+            "input_w",
+            "input_c",
+            "kernel_h",
+            "kernel_w",
+            "stride_h",
+            "stride_w",
+            "dilation_h",
+            "dilation_w",
+            "pad_top",
+            "pad_left",
+            "pad_bottom",
+            "pad_right",
+        )
+    },
 }
 FLAT_KEYS = {path: key for key, path in CONFIG_PATHS.items()}
 
@@ -156,7 +193,8 @@ def _at_path(config: Mapping[str, Any], path: str) -> Any:
 
 
 def config_value(config: Mapping[str, Any], key: str, default: Any = _MISSING) -> Any:
-    """Look up ``key`` in a result's config, flat (older npu-sim) or nested (option table).
+    """Look up ``key`` in a result's config, flat (schema_version 1) or nested by option-table
+    path (schema_version 2).
 
     ``key`` is a flat key ("weight_bits"), an option-table path ("weights.bits") or a leaf
     name. Known keys resolve through CONFIG_PATHS in both directions; anything else falls
@@ -179,6 +217,7 @@ def config_value(config: Mapping[str, Any], key: str, default: Any = _MISSING) -
                 found.append(value)
             elif isinstance(value, Mapping):
                 visit(value)
+
     visit(config)
     if len(found) == 1:
         return found[0]
@@ -195,9 +234,9 @@ def _nonnegative_int(result: Mapping[str, Any], key: str) -> int:
 
 
 def result_numerics(result: Mapping[str, Any]) -> str | None:
-    """"bit-exact" (numerical_match true), "skipped" (a --timing-only run, which reports
-    numerical_match null or omits it), or None for any other combination. Results from
-    builds older than the "numerics" field are bit-exact when numerical_match is true."""
+    """ "bit-exact" (numerical_match true), "skipped" (a --timing-only run, which reports
+    numerical_match null or omits it), or None for any other combination. A result without
+    a "numerics" field is bit-exact when numerical_match is true."""
     match = result.get("numerical_match")
     numerics = result.get("numerics", "bit-exact" if match is True else None)
     if numerics == "bit-exact" and match is True:
@@ -208,7 +247,8 @@ def result_numerics(result: Mapping[str, Any]) -> str | None:
 
 
 def schema_version(value: Any) -> int | None:
-    """The result or snapshot layout version of ``value``, or None if it is not one we read."""
+    """The result or snapshot layout version of ``value``; None for a layout outside
+    RESULT_SCHEMA_VERSIONS."""
     if not isinstance(value, Mapping):
         return None
     version = value.get("schema_version")
@@ -224,9 +264,17 @@ def validate_result(result: Any) -> dict:
     numerics = result_numerics(result)
     if numerics is None:
         raise CheckError("simulator did not report full numerical agreement")
-    for key in ("cycles", "macs", "read_bytes", "write_bytes", "compute_busy_cycles",
-                "dma_busy_cycles", "peak_inflight_tiles", "slot_wait_cycles",
-                "scratchpad_bytes"):
+    for key in (
+        "cycles",
+        "macs",
+        "read_bytes",
+        "write_bytes",
+        "compute_busy_cycles",
+        "dma_busy_cycles",
+        "peak_inflight_tiles",
+        "slot_wait_cycles",
+        "scratchpad_bytes",
+    ):
         _nonnegative_int(result, key)
     if result["cycles"] == 0:
         raise CheckError("cycle count must be positive")
@@ -235,19 +283,28 @@ def validate_result(result: Any) -> dict:
         for key in ("compute_busy_cycles", "dma_busy_cycles"):
             if result[key] > result["cycles"]:
                 raise CheckError(f"resource busy cycles exceed elapsed cycles: {key}")
-    for key in ("simulation_wall_seconds", "compute_utilization", "memory_utilization",
-                "modeled_latency_ns"):
+    for key in (
+        "simulation_wall_seconds",
+        "compute_utilization",
+        "memory_utilization",
+        "modeled_latency_ns",
+    ):
         value = result.get(key)
-        if isinstance(value, bool) or not isinstance(value, (int, float)) \
-                or not math.isfinite(value) or value < 0:
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+        ):
             raise CheckError(f"invalid finite nonnegative result: {key}")
         if key.endswith("utilization") and value > 1 and not clustered:
             raise CheckError(f"utilization must be a fraction: {key}")
     if not isinstance(result.get("config"), dict):
         raise CheckError("missing configuration object")
     output_hash = result.get("output_hash")
-    if numerics == "bit-exact" and (isinstance(output_hash, bool)
-                                    or not isinstance(output_hash, (str, int))):
+    if numerics == "bit-exact" and (
+        isinstance(output_hash, bool) or not isinstance(output_hash, (str, int))
+    ):
         raise CheckError("missing deterministic output hash")
     return result
 
@@ -290,8 +347,11 @@ class SimResult(Mapping):
         return self.raw.get("numerics", "bit-exact")
 
     def as_run(self) -> dict:
-        return {"command": self.command, "subprocess_wall_seconds": self.wall_seconds,
-                "result": self.raw}
+        return {
+            "command": self.command,
+            "subprocess_wall_seconds": self.wall_seconds,
+            "result": self.raw,
+        }
 
 
 def execute(binary: Path | str, flags: Flags, timeout: float = 60) -> tuple[dict, list[str], float]:
@@ -299,29 +359,42 @@ def execute(binary: Path | str, flags: Flags, timeout: float = 60) -> tuple[dict
     command = [str(binary)] + to_flags(flags)
     started = time.perf_counter()
     try:
-        process = subprocess.run(command, capture_output=True, text=True, timeout=timeout,
-                                 check=False)
+        process = subprocess.run(
+            command, capture_output=True, text=True, timeout=timeout, check=False
+        )
     except OSError as error:
         raise SimError(f"cannot run {binary}: {error}", command=command) from error
     elapsed = time.perf_counter() - started
     name = Path(str(binary)).name
     if process.returncode != 0:
         detail = " ".join(process.stderr.split())[:2000]
-        raise SimError(f"{name} exited with status {process.returncode}: {detail}",
-                       process.returncode, process.stderr, command)
+        raise SimError(
+            f"{name} exited with status {process.returncode}: {detail}",
+            process.returncode,
+            process.stderr,
+            command,
+        )
     try:
         value = json.loads(process.stdout)
     except json.JSONDecodeError as error:
-        raise SimError(f"{name} stdout is not one JSON object", 0, process.stderr,
-                       command) from error
+        raise SimError(
+            f"{name} stdout is not one JSON object", 0, process.stderr, command
+        ) from error
     if not isinstance(value, dict) or schema_version(value) is None:
-        raise SimError(f"{name} did not return a schema_version 1 or 2 object", 0,
-                       process.stderr, command)
+        raise SimError(
+            f"{name} did not return a schema_version 1 or 2 object", 0, process.stderr, command
+        )
     return value, command, elapsed
 
 
-def run(config: Flags, binary: Path | str | None = None, timeout: float = 60, *,
-        check: bool = True, build_dir: Path | str | None = None) -> SimResult:
+def run(
+    config: Flags,
+    binary: Path | str | None = None,
+    timeout: float = 60,
+    *,
+    check: bool = True,
+    build_dir: Path | str | None = None,
+) -> SimResult:
     """Run npu-sim once. ``check`` validates the result (counters, numerics, hash)."""
     executable = binaries.resolve(binary, "npu-sim", build_dir)
     value, command, elapsed = execute(executable, config, timeout)
@@ -333,8 +406,9 @@ def run(config: Flags, binary: Path | str | None = None, timeout: float = 60, *,
 @functools.lru_cache(maxsize=16)
 def _help(binary: str, mtime: float) -> str:
     try:
-        process = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=30,
-                                 check=False)
+        process = subprocess.run(
+            [binary, "--help"], capture_output=True, text=True, timeout=30, check=False
+        )
     except (OSError, subprocess.TimeoutExpired):
         return ""
     return process.stdout + process.stderr
@@ -367,14 +441,20 @@ class LiveSession:
         command = [str(self.binary), "--live-stdio", *to_flags(flags)]
         try:
             self.process = subprocess.Popen(
-                command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                text=True, encoding="utf-8", bufsize=1)
+                command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+            )
         except OSError as error:
             raise LiveError(f"cannot start {self.binary.name}: {error}") from error
-        self._readers = [threading.Thread(target=self._read_stdout, name="npu-live-stdout",
-                                          daemon=True),
-                         threading.Thread(target=self._read_stderr, name="npu-live-stderr",
-                                          daemon=True)]
+        self._readers = [
+            threading.Thread(target=self._read_stdout, name="npu-live-stdout", daemon=True),
+            threading.Thread(target=self._read_stderr, name="npu-live-stderr", daemon=True),
+        ]
         for reader in self._readers:
             reader.start()
 
@@ -398,10 +478,8 @@ class LiveSession:
                     raise LiveError("simulator reply is not a JSON object")
                 self.messages.put(value, timeout=self.response_timeout)
         except (ValueError, OSError, LiveError, queue.Full) as error:
-            try:
+            with contextlib.suppress(queue.Full):
                 self.messages.put_nowait(LiveError(f"invalid simulator reply: {error}"))
-            except queue.Full:
-                pass
 
     def _read_stderr(self) -> None:
         stderr = self.process.stderr
@@ -416,8 +494,9 @@ class LiveSession:
         try:
             value = self.messages.get(timeout=self.response_timeout)
         except queue.Empty as error:
-            raise LiveError(f"simulator did not reply within {self.response_timeout:g} s") \
-                from error
+            raise LiveError(
+                f"simulator did not reply within {self.response_timeout:g} s"
+            ) from error
         if isinstance(value, Exception):
             if self.stderr_tail:
                 raise LiveError(f"{value}: {self.stderr_tail[-1]}")
@@ -465,12 +544,10 @@ class LiveSession:
             self._readers[1].join(timeout=1)  # stderr reaches EOF once the child exits
             for stream in (process.stdin, process.stdout, process.stderr):
                 if stream is not None:
-                    try:
+                    with contextlib.suppress(OSError):
                         stream.close()
-                    except OSError:
-                        pass
 
-    def __enter__(self) -> "LiveSession":
+    def __enter__(self) -> LiveSession:
         return self
 
     def __exit__(self, *_: object) -> None:

@@ -1,6 +1,6 @@
 /* npu-sim live. Tokens first; dark values replace them under prefers-color-scheme.
    Contrast (WCAG 2.2): text tokens reach 4.5:1 on --bg and --panel; chart marks reach 3:1
-   on --panel and on the lanes (--bg); --ink-* is the tile-number colour on each stage's bar
+   on --panel and on the lanes (--bg); --ink-* is the tile-number color on each stage's bar
    (4.5:1); white on --accent-fill is 4.5:1. */
 
 :root {
@@ -361,8 +361,8 @@ table.data td.empty { text-align: left; color: var(--faint); font-family: var(--
   .kpi:nth-child(4) { border-left: 0; }
   .kpi:nth-child(n + 4) { border-top: 1px solid var(--rule-soft); }
   .row-a, .row-b, .row-c { grid-template-columns: minmax(0, 1fr); }
-  /* Column layout: stretch the title block to the bar so the machine line ellipsizes
-     instead of widening the page. */
+  /* Column layout: the title block takes the bar width, so a long machine line ellipsizes
+     and the page keeps its width. */
   .ident { flex-direction: column; align-items: stretch; align-self: stretch; gap: 0;
            width: 100%; min-width: 0; }
   .machine { max-width: 100%; }

@@ -6,26 +6,49 @@ NPU1:  ``NPU1 M N K`` then the activations (row-major, M x G*K), the weights
 NPUQ1: ``NPUQ1 C`` then one ``weight_zero multiplier shift`` line per output channel
        (C = G*N). Shifts are signed.
 """
+
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
 
 
-def format_problem(m: int, n: int, k: int, activations: Sequence[int], weights: Sequence[int],
-                   bias: Sequence[int], groups: int = 1) -> str:
+def format_problem(
+    m: int,
+    n: int,
+    k: int,
+    activations: Sequence[int],
+    weights: Sequence[int],
+    bias: Sequence[int],
+    groups: int = 1,
+) -> str:
     if min(m, n, k, groups) < 1:
         raise ValueError("NPU1 dimensions and groups must be positive")
-    if (len(activations) != m * groups * k or len(weights) != groups * k * n
-            or len(bias) != groups * n):
+    if (
+        len(activations) != m * groups * k
+        or len(weights) != groups * k * n
+        or len(bias) != groups * n
+    ):
         raise ValueError(f"tensor sizes do not match NPU1 {m} {n} {k} with {groups} group(s)")
-    lines = [f"NPU1 {m} {n} {k}", " ".join(map(str, activations)), " ".join(map(str, weights)),
-             " ".join(map(str, bias))]
+    lines = [
+        f"NPU1 {m} {n} {k}",
+        " ".join(map(str, activations)),
+        " ".join(map(str, weights)),
+        " ".join(map(str, bias)),
+    ]
     return "\n".join(lines) + "\n"
 
 
-def write_problem(path: Path | str, m: int, n: int, k: int, activations: Sequence[int],
-                  weights: Sequence[int], bias: Sequence[int], groups: int = 1) -> Path:
+def write_problem(
+    path: Path | str,
+    m: int,
+    n: int,
+    k: int,
+    activations: Sequence[int],
+    weights: Sequence[int],
+    bias: Sequence[int],
+    groups: int = 1,
+) -> Path:
     path = Path(path)
     path.write_text(format_problem(m, n, k, activations, weights, bias, groups), encoding="ascii")
     return path

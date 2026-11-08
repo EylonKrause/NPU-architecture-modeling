@@ -4,11 +4,11 @@
 #include "npu/paths.hpp"
 #include "npu/version.hpp"
 #include <algorithm>
-#include <chrono>
 #include <cctype>
+#include <chrono>
 #include <cmath>
-#include <fstream>
 #include <filesystem>
+#include <fstream>
 #include <iomanip>
 #include <iostream>
 #include <limits>
@@ -49,9 +49,8 @@ std::string nonempty_path(std::string_view flag, std::string_view value) {
     return std::string(value);
 }
 
-// Run-control flags choose inputs, outputs and the session mode. They are not
-// configuration: results do not echo them. A flag with an empty placeholder
-// takes no value.
+// Run-control flags choose inputs, outputs and the session mode; results do
+// not echo them. A flag with an empty placeholder takes no value.
 struct RunOption {
     std::string_view flag, placeholder, help;
     void (*apply)(Arguments& args, std::string_view value);
@@ -114,9 +113,7 @@ void usage() {
     npu::write_config_help(std::cout);
 }
 
-void version() {
-    std::cout << "npu-sim " << npu::version << " (" << npu::git_describe << ")\n";
-}
+void version() { std::cout << "npu-sim " << npu::version << " (" << npu::git_describe << ")\n"; }
 
 Arguments parse(int argc, char* argv[]) {
     Arguments args;
@@ -171,8 +168,8 @@ Arguments parse(int argc, char* argv[]) {
         throw std::invalid_argument(
             "--timing-only runs without tensors; --input and --dump-output need a bit-exact run");
     const auto& quant = args.builder.config.quant;
-    if (!args.quantization_path.empty() && (!quant.weight_zero_points.empty() ||
-                                           !quant.multipliers.empty() || !quant.shifts.empty()))
+    if (!args.quantization_path.empty() &&
+        (!quant.weight_zero_points.empty() || !quant.multipliers.empty() || !quant.shifts.empty()))
         throw std::invalid_argument(
             "per-channel parameters come from --quantization-file or a config file, not both");
     return args;
@@ -180,7 +177,8 @@ Arguments parse(int argc, char* argv[]) {
 
 void validate_paths(const Arguments& args) {
     const std::vector<std::pair<std::string, std::string>> outputs = {
-        {"VCD", args.vcd_path}, {"progress JSONL", args.progress_path},
+        {"VCD", args.vcd_path},
+        {"progress JSONL", args.progress_path},
         {"CSV trace", args.builder.config.sim.trace_path}};
     auto inputs = args.config_paths;
     inputs.push_back(args.input_path);
@@ -188,12 +186,15 @@ void validate_paths(const Arguments& args) {
     for (std::size_t i = 0; i < outputs.size(); ++i) {
         if (outputs[i].second.empty()) continue;
         for (std::size_t j = i + 1; j < outputs.size(); ++j) {
-            if (!outputs[j].second.empty() && npu::same_file_path(outputs[i].second, outputs[j].second))
-                throw std::invalid_argument("output paths conflict: " + outputs[i].first + " and " + outputs[j].first);
+            if (!outputs[j].second.empty() &&
+                npu::same_file_path(outputs[i].second, outputs[j].second))
+                throw std::invalid_argument("output paths conflict: " + outputs[i].first + " and " +
+                                            outputs[j].first);
         }
         for (const auto& input : inputs) {
             if (!input.empty() && npu::same_file_path(outputs[i].second, input))
-                throw std::invalid_argument("output path conflicts with an input file: " + outputs[i].first);
+                throw std::invalid_argument("output path conflicts with an input file: " +
+                                            outputs[i].first);
         }
     }
 }
@@ -204,10 +205,9 @@ bool input_token(std::istream& stream, std::string& token) {
     if (!stream.good()) return false;
     while (true) {
         const auto next = stream.peek();
-        if (next == std::char_traits<char>::eof() ||
-            std::isspace(static_cast<unsigned char>(next))) break;
-        if (token.size() == 32)
-            throw std::invalid_argument("input token exceeds 32 characters");
+        if (next == std::char_traits<char>::eof() || std::isspace(static_cast<unsigned char>(next)))
+            break;
+        if (token.size() == 32) throw std::invalid_argument("input token exceeds 32 characters");
         token.push_back(static_cast<char>(stream.get()));
     }
     return !token.empty();
@@ -218,7 +218,10 @@ npu::Problem input_problem(Arguments& args) {
         // The model reads only the shape; no tensors exist.
         const auto& shape = args.builder.config.shape;
         npu::Problem shell;
-        shell.m = shape.m; shell.n = shape.n; shell.k = shape.k; shell.groups = shape.groups;
+        shell.m = shape.m;
+        shell.n = shape.n;
+        shell.k = shape.k;
+        shell.groups = shape.groups;
         return shell;
     }
     if (args.input_path.empty()) return npu::make_problem(args.builder.config);
@@ -228,7 +231,8 @@ npu::Problem input_problem(Arguments& args) {
     const char* const dimensions[] = {"shape.m", "shape.n", "shape.k"};
     for (const auto* path : dimensions)
         if (args.builder.source(path) == npu::OptionSource::CommandLine)
-            throw std::invalid_argument("--input dimensions come from its header; omit --m/--n/--k");
+            throw std::invalid_argument(
+                "--input dimensions come from its header; omit --m/--n/--k");
     std::ifstream file(args.input_path);
     if (!file) throw std::invalid_argument("cannot open input tensor file");
     std::string magic, header[3];
@@ -249,7 +253,10 @@ npu::Problem input_problem(Arguments& args) {
     }
     npu::validate(c);
     npu::Problem p;
-    p.m = c.shape.m; p.n = c.shape.n; p.k = c.shape.k; p.groups = c.shape.groups;
+    p.m = c.shape.m;
+    p.n = c.shape.n;
+    p.k = c.shape.k;
+    p.groups = c.shape.groups;
     const auto channels = npu::checked_mul(c.shape.groups, c.shape.n);
     p.activations.resize(static_cast<std::size_t>(
         npu::checked_mul(c.shape.m, npu::checked_mul(c.shape.groups, c.shape.k))));
@@ -263,7 +270,8 @@ npu::Problem input_problem(Arguments& args) {
             const bool weight = values == &p.weights;
             const auto low = weight && c.weights.bits == 4 ? -8 : -128;
             const auto high = weight && c.weights.bits == 4 ? 7 : 127;
-            if (x < low || x > high) throw std::invalid_argument("tensor value outside configured signed precision");
+            if (x < low || x > high)
+                throw std::invalid_argument("tensor value outside configured signed precision");
             value = static_cast<std::int8_t>(x);
         }
     }
@@ -299,11 +307,13 @@ void input_quantization(Arguments& args) {
         q.shifts.push_back(npu::parse_int32(shift, "NPUQ1 shift"));
     }
     std::string extra;
-    if (input_token(file, extra)) throw std::invalid_argument("unexpected trailing quantization token");
+    if (input_token(file, extra))
+        throw std::invalid_argument("unexpected trailing quantization token");
     if (!file.eof()) throw std::invalid_argument("quantization read failed");
 }
 
-template<class T> void array_json(const std::vector<T>& values, std::ostream& stream = std::cout) {
+template <class T>
+void array_json(const std::vector<T>& values, std::ostream& stream = std::cout) {
     stream << '[';
     for (std::size_t i = 0; i < values.size(); ++i) {
         if (i != 0) stream << ',';
@@ -320,7 +330,7 @@ void check_numerics(const npu::Config& c, const npu::Accelerator& model,
                     const npu::Output& expected) {
     if (c.sim.timing_only) return;
     if (model.completed() && (model.output().accumulators != expected.accumulators ||
-        model.output().quantized != expected.quantized))
+                              model.output().quantized != expected.quantized))
         throw std::runtime_error("numerical validation failed");
 }
 
@@ -335,16 +345,14 @@ double fraction(std::uint64_t value, std::uint64_t total) {
 void channels_json(std::ostream& stream, const npu::Config& c, const npu::MemoryView& memory,
                    std::uint64_t cycles, bool live) {
     const auto& m = c.arch.memory;
-    const auto beat_bytes = m.model == npu::MemoryModel::Axi ? m.axi.data_bytes :
-                                                               m.bytes_per_cycle;
+    const auto beat_bytes = m.model == npu::MemoryModel::Axi ? m.axi.data_bytes : m.bytes_per_cycle;
     const auto channel = [&](const char* name, const npu::ChannelView& view) {
         const auto& s = view.statistics;
         stream << '"' << name << "\":{\"requests\":" << s.requests << ",\"bursts\":" << s.bursts
                << ",\"beats\":" << s.beats << ",\"payload_bytes\":" << s.payload_bytes
                << ",\"busy_cycles\":" << s.busy_cycles
                << ",\"mean_latency_cycles\":" << fraction(s.latency_cycles, s.requests)
-               << ",\"max_latency_cycles\":" << s.max_latency_cycles
-               << ",\"burst_efficiency\":"
+               << ",\"max_latency_cycles\":" << s.max_latency_cycles << ",\"burst_efficiency\":"
                << fraction(s.payload_bytes, npu::checked_mul(s.beats, beat_bytes))
                << ",\"achieved_bytes_per_cycle\":" << fraction(s.payload_bytes, cycles)
                << ",\"peak_outstanding\":" << s.peak_outstanding;
@@ -391,31 +399,31 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
     // Cluster utilizations are the mean over cores.
     const auto core_cycles = npu::checked_mul(snap.cycles, model.cores());
     const auto ratio = [core_cycles](std::uint64_t busy) { return fraction(busy, core_cycles); };
-    stream << std::boolalpha << std::setprecision(17)
-        << "{\"schema_version\":" << schema_version << ",\"type\":\"" << type
-        << "\",\"simulation\":true,\"config\":";
+    stream << std::boolalpha << std::setprecision(17) << "{\"schema_version\":" << schema_version
+           << ",\"type\":\"" << type << "\",\"simulation\":true,\"config\":";
     npu::write_config_json(stream, c);
-    stream << ",\"cycles\":" << snap.cycles
-        << ",\"completed\":" << snap.completed << ",\"validated\":" << checked
-        << ",\"numerics\":\"" << numerics_name(c) << '"'
-        << ",\"numerical_match\":" << (checked ? "true" : "null")
-        << ",\"macs\":" << s.macs << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
-        << ",\"executed_macs\":" << s.executed_macs << ",\"skipped_macs\":" << s.skipped_macs
-        << ",\"weight_decode_cycles\":" << s.weight_decode_cycles
-        << ",\"decoded_weight_values\":" << s.decoded_weight_values
-        << ",\"weight_read_bytes\":" << s.weight_read_bytes
-        << ",\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
-        << ",\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
-        << ",\"compute_busy_cycles\":" << s.compute_busy_cycles << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
-        << ",\"compute_utilization\":" << ratio(s.compute_busy_cycles)
-        << ",\"memory_utilization\":" << ratio(s.dma_busy_cycles)
-        << ",\"inflight_tiles\":" << snap.inflight_tiles
-        << ",\"read_queue_depth\":" << snap.read_queue_depth << ",\"write_queue_depth\":" << snap.write_queue_depth
-        << ",\"dma_busy\":" << snap.dma_busy << ",\"compute_busy\":" << snap.compute_busy
-        << ",\"dma_read\":" << snap.dma_read << ",\"dma_write\":" << snap.dma_write
-        << ",\"dma_tile_id\":" << snap.dma_tile_id
-        << ",\"dma_block_id\":" << snap.dma_block_id << ",\"compute_tile_id\":" << snap.compute_tile_id
-        << ",\"compute_block_id\":" << snap.compute_block_id << ",\"memory\":";
+    stream << ",\"cycles\":" << snap.cycles << ",\"completed\":" << snap.completed
+           << ",\"validated\":" << checked << ",\"numerics\":\"" << numerics_name(c) << '"'
+           << ",\"numerical_match\":" << (checked ? "true" : "null") << ",\"macs\":" << s.macs
+           << ",\"read_bytes\":" << s.read_bytes << ",\"write_bytes\":" << s.write_bytes
+           << ",\"executed_macs\":" << s.executed_macs << ",\"skipped_macs\":" << s.skipped_macs
+           << ",\"weight_decode_cycles\":" << s.weight_decode_cycles
+           << ",\"decoded_weight_values\":" << s.decoded_weight_values
+           << ",\"weight_read_bytes\":" << s.weight_read_bytes
+           << ",\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
+           << ",\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
+           << ",\"compute_busy_cycles\":" << s.compute_busy_cycles
+           << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
+           << ",\"compute_utilization\":" << ratio(s.compute_busy_cycles)
+           << ",\"memory_utilization\":" << ratio(s.dma_busy_cycles)
+           << ",\"inflight_tiles\":" << snap.inflight_tiles
+           << ",\"read_queue_depth\":" << snap.read_queue_depth
+           << ",\"write_queue_depth\":" << snap.write_queue_depth
+           << ",\"dma_busy\":" << snap.dma_busy << ",\"compute_busy\":" << snap.compute_busy
+           << ",\"dma_read\":" << snap.dma_read << ",\"dma_write\":" << snap.dma_write
+           << ",\"dma_tile_id\":" << snap.dma_tile_id << ",\"dma_block_id\":" << snap.dma_block_id
+           << ",\"compute_tile_id\":" << snap.compute_tile_id
+           << ",\"compute_block_id\":" << snap.compute_block_id << ",\"memory\":";
     memory_json(stream, c, snap.memory, snap.cycles, true);
     stream << ",\"cluster\":";
     plan_json(stream, model.plan());
@@ -424,17 +432,15 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
         const auto& view = snap.cores[static_cast<std::size_t>(core)];
         const auto& v = view.statistics;
         const auto core_tiles = model.core_tiles(core);
-        stream << (core ? "," : "") << "{\"core\":" << core
-               << ",\"completed\":" << view.completed << ",\"cycles\":" << view.cycles
-               << ",\"tiles_total\":" << core_tiles
+        stream << (core ? "," : "") << "{\"core\":" << core << ",\"completed\":" << view.completed
+               << ",\"cycles\":" << view.cycles << ",\"tiles_total\":" << core_tiles
                << ",\"tiles_completed\":" << v.completed_tiles
                << ",\"panels_total\":" << npu::checked_mul(core_tiles, blocks)
                << ",\"panels_completed\":" << v.computed_panels
                << ",\"loaded_panels\":" << v.loaded_panels
-               << ",\"inflight_tiles\":" << view.inflight_tiles
-               << ",\"dma_busy\":" << view.dma_busy << ",\"compute_busy\":" << view.compute_busy
-               << ",\"dma_read\":" << view.dma_read << ",\"dma_write\":" << view.dma_write
-               << ",\"dma_tile_id\":" << view.dma_tile_id
+               << ",\"inflight_tiles\":" << view.inflight_tiles << ",\"dma_busy\":" << view.dma_busy
+               << ",\"compute_busy\":" << view.compute_busy << ",\"dma_read\":" << view.dma_read
+               << ",\"dma_write\":" << view.dma_write << ",\"dma_tile_id\":" << view.dma_tile_id
                << ",\"dma_block_id\":" << view.dma_block_id
                << ",\"compute_tile_id\":" << view.compute_tile_id
                << ",\"compute_block_id\":" << view.compute_block_id << ",\"macs\":" << v.macs
@@ -444,35 +450,43 @@ void snapshot_json(std::ostream& stream, const npu::Config& c, const npu::Proble
         channels_json(stream, c, view.memory, snap.cycles, true);
         stream << "}}";
     }
-    stream
-        << "],\"tiles_total\":" << tiles << ",\"tiles_completed\":" << s.completed_tiles
-        << ",\"panels_total\":" << npu::checked_mul(tiles, blocks)
-        << ",\"panels_completed\":" << s.computed_panels << ",\"loaded_panels\":" << s.loaded_panels
-        << ",\"modeled_latency_ns\":" << static_cast<double>(snap.cycles) * 1000.0 / c.arch.frequency_mhz
-        << ",\"active_stages\":[";
+    stream << "],\"tiles_total\":" << tiles << ",\"tiles_completed\":" << s.completed_tiles
+           << ",\"panels_total\":" << npu::checked_mul(tiles, blocks)
+           << ",\"panels_completed\":" << s.computed_panels
+           << ",\"loaded_panels\":" << s.loaded_panels << ",\"modeled_latency_ns\":"
+           << static_cast<double>(snap.cycles) * 1000.0 / c.arch.frequency_mhz
+           << ",\"active_stages\":[";
     const char* separator = "";
-    for (const auto& [active, stage] : {std::pair{snap.memory.read.active, "load"},
-                                        std::pair{snap.memory.write.active, "store"},
-                                        std::pair{snap.compute_busy, "compute"}}) {
+    for (const auto& [active, stage] :
+         {std::pair{snap.memory.read.active, "load"}, std::pair{snap.memory.write.active, "store"},
+          std::pair{snap.compute_busy, "compute"}}) {
         if (!active) continue;
         stream << separator << '"' << stage << '"';
         separator = ",";
     }
     stream << "],\"output_hash\":";
-    if (checked) stream << '"' << npu::output_hash(model.output()) << '"'; else stream << "null";
+    if (checked) stream << '"' << npu::output_hash(model.output()) << '"';
+    else stream << "null";
     stream << ",\"input_preview\":";
-    array_json(std::vector<std::int8_t>(problem.activations.begin(),
-        problem.activations.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(16, problem.activations.size()))), stream);
+    array_json(std::vector<std::int8_t>(
+                   problem.activations.begin(),
+                   problem.activations.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(
+                                                     16, problem.activations.size()))),
+               stream);
     stream << ",\"output_preview\":";
-    if (snap.completed) array_json(std::vector<std::int8_t>(model.output().quantized.begin(),
-        model.output().quantized.begin() + static_cast<std::ptrdiff_t>(std::min<std::size_t>(16, model.output().quantized.size()))), stream);
+    if (snap.completed)
+        array_json(std::vector<std::int8_t>(model.output().quantized.begin(),
+                                            model.output().quantized.begin() +
+                                                static_cast<std::ptrdiff_t>(std::min<std::size_t>(
+                                                    16, model.output().quantized.size()))),
+                   stream);
     else stream << "[]";
     stream << "}\n" << std::flush;
     if (!stream) throw std::runtime_error("cannot write simulation progress");
 }
 
-void live_commands(const npu::Config& c, const npu::Problem& problem,
-                   npu::Accelerator& model, const npu::Output& expected, std::ostream* progress) {
+void live_commands(const npu::Config& c, const npu::Problem& problem, npu::Accelerator& model,
+                   const npu::Output& expected, std::ostream* progress) {
     sc_core::sc_start(sc_core::SC_ZERO_TIME);
     const auto emit = [&](const char* type = "snapshot") {
         check_numerics(c, model, expected);
@@ -486,7 +500,8 @@ void live_commands(const npu::Config& c, const npu::Problem& problem,
             if (std::cin.eof()) return;
             std::cin.clear();
             std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            std::cout << "{\"type\":\"error\",\"error\":\"command exceeds 256 characters\"}\n" << std::flush;
+            std::cout << "{\"type\":\"error\",\"error\":\"command exceeds 256 characters\"}\n"
+                      << std::flush;
             continue;
         }
         std::istringstream line(command);
@@ -498,12 +513,16 @@ void live_commands(const npu::Config& c, const npu::Problem& problem,
                 if (!cycles || cycles > 10000000) throw std::invalid_argument("invalid slice");
                 if (!model.completed()) {
                     const auto before = sc_core::sc_time_stamp();
-                    sc_core::sc_start(sc_core::sc_time::from_value(cycles), sc_core::SC_RUN_TO_TIME);
-                    if (!model.completed() && (sc_core::sc_time_stamp() == before || !sc_core::sc_pending_activity()))
+                    sc_core::sc_start(sc_core::sc_time::from_value(cycles),
+                                      sc_core::SC_RUN_TO_TIME);
+                    if (!model.completed() &&
+                        (sc_core::sc_time_stamp() == before || !sc_core::sc_pending_activity()))
                         throw std::runtime_error("simulation stalled before completion");
                 }
             } catch (const std::invalid_argument&) {
-                std::cout << "{\"type\":\"error\",\"error\":\"advance requires cycles in 1..10000000\"}\n" << std::flush;
+                std::cout
+                    << "{\"type\":\"error\",\"error\":\"advance requires cycles in 1..10000000\"}\n"
+                    << std::flush;
                 continue;
             }
             emit();
@@ -511,7 +530,9 @@ void live_commands(const npu::Config& c, const npu::Problem& problem,
             emit(verb == "stop" ? "stopped" : "snapshot");
             if (verb == "stop") return;
         } else {
-            std::cout << "{\"type\":\"error\",\"error\":\"expected advance N, snapshot, or stop\"}\n" << std::flush;
+            std::cout
+                << "{\"type\":\"error\",\"error\":\"expected advance N, snapshot, or stop\"}\n"
+                << std::flush;
         }
     }
 }
@@ -528,16 +549,17 @@ void cluster_json(std::ostream& stream, const npu::Config& c, const npu::Acceler
         largest = std::max(largest, model.statistics(core).macs);
     stream << ",\n\"cluster\":";
     plan_json(stream, model.plan());
-    stream << ",\"makespan_cycles\":" << total.cycles << ",\"imbalance\":"
-           << fraction(npu::checked_mul(largest, model.cores()), total.macs)
+    stream << ",\"makespan_cycles\":" << total.cycles
+           << ",\"imbalance\":" << fraction(npu::checked_mul(largest, model.cores()), total.macs)
            << ",\"dram_bound_cycles\":"
            << (axi && memory.dram_bytes_per_cycle ?
-                   npu::ceil_div(dram, memory.dram_bytes_per_cycle) : 0)
+                   npu::ceil_div(dram, memory.dram_bytes_per_cycle) :
+                   0)
            << ",\"predicted\":{";
     for (const auto partition : {npu::Partition::M, npu::Partition::N}) {
         const auto& estimate = model.estimate(partition);
-        stream << (partition == npu::Partition::M ? "" : ",") << '"'
-               << npu::to_string(partition) << "\":{\"read_bytes\":" << estimate.read_bytes
+        stream << (partition == npu::Partition::M ? "" : ",") << '"' << npu::to_string(partition)
+               << "\":{\"read_bytes\":" << estimate.read_bytes
                << ",\"write_bytes\":" << estimate.write_bytes
                << ",\"bound_cycles\":" << estimate.bound_cycles << '}';
     }
@@ -547,9 +569,9 @@ void cluster_json(std::ostream& stream, const npu::Config& c, const npu::Acceler
         const auto s = model.statistics(core);
         stream << (core ? ",\n" : "\n") << "{\"core\":" << core
                << ",\"first_unit\":" << plan.first_unit(core)
-               << ",\"units\":" << plan.unit_count(core)
-               << ",\"tiles\":" << model.core_tiles(core) << ",\"cycles\":" << s.cycles
-               << ",\"macs\":" << s.macs << ",\"executed_macs\":" << s.executed_macs
+               << ",\"units\":" << plan.unit_count(core) << ",\"tiles\":" << model.core_tiles(core)
+               << ",\"cycles\":" << s.cycles << ",\"macs\":" << s.macs
+               << ",\"executed_macs\":" << s.executed_macs
                << ",\"compute_busy_cycles\":" << s.compute_busy_cycles
                << ",\"dma_busy_cycles\":" << s.dma_busy_cycles
                << ",\"compute_utilization\":" << fraction(s.compute_busy_cycles, total.cycles)
@@ -590,66 +612,71 @@ void report(const npu::Config& c, const npu::Accelerator& model, double seconds,
     }
     const auto& memory = c.arch.memory;
     if (memory.model == npu::MemoryModel::Axi && memory.dram_bytes_per_cycle)
-        lower_bound = std::max(lower_bound, npu::ceil_div(model.memory().dram_bytes,
-                                                          memory.dram_bytes_per_cycle));
+        lower_bound = std::max(
+            lower_bound, npu::ceil_div(model.memory().dram_bytes, memory.dram_bytes_per_cycle));
     std::cout << std::setprecision(17) << std::boolalpha;
     std::cout << "{\n\"schema_version\":" << schema_version << ",\n\"config\":";
     npu::write_config_json(std::cout, c);
     std::cout << ",\n"
-        << "\"cycles\":" << s.cycles << ",\n\"macs\":" << s.macs
-        << ",\n\"executed_macs\":" << s.executed_macs << ",\n\"skipped_macs\":" << s.skipped_macs
-        << ",\n\"weight_decode_cycles\":" << s.weight_decode_cycles
-        << ",\n\"decoded_weight_values\":" << s.decoded_weight_values
-        << ",\n\"weight_read_bytes\":" << s.weight_read_bytes
-        << ",\n\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
-        << ",\n\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
-        << ",\n\"read_bytes\":" << s.read_bytes << ",\n\"write_bytes\":" << s.write_bytes
-        << ",\n\"compute_busy_cycles\":" << s.compute_busy_cycles
-        << ",\n\"dma_busy_cycles\":" << s.dma_busy_cycles
-        << ",\n\"peak_inflight_tiles\":" << s.peak_inflight_tiles
-        << ",\n\"slot_wait_cycles\":" << s.slot_wait_cycles
-        << ",\n\"panel_wait_cycles\":" << s.panel_wait_cycles
-        << ",\n\"reduction_blocks\":" << npu::reduction_blocks(c)
-        << ",\n\"effective_macs_per_cycle\":" << peak_macs
-        << ",\n\"peak_memory_bytes_per_cycle\":" << npu::peak_memory_bytes_per_cycle(c)
-        << ",\n\"dma_requests\":" << s.dma_requests << ",\n\"dma_bursts\":" << s.dma_bursts
-        << ",\n\"weight_cache_hits\":" << s.weight_cache_hits
-        << ",\n\"weight_cache_misses\":" << s.weight_cache_misses
-        << ",\n\"weight_bytes_saved\":" << s.weight_bytes_saved
-        << ",\n\"peak_cached_weight_bytes\":" << s.peak_cached_weight_bytes
-        << ",\n\"activation_read_bytes\":" << s.activation_read_bytes
-        << ",\n\"activation_cache_hits\":" << s.activation_cache_hits
-        << ",\n\"activation_cache_misses\":" << s.activation_cache_misses
-        << ",\n\"activation_bytes_saved\":" << s.activation_bytes_saved
-        << ",\n\"peak_cached_activation_bytes\":" << s.peak_cached_activation_bytes
-        << ",\n\"depthwise_macs\":" << s.depthwise_macs
-        << ",\n\"depthwise_peak_macs_per_cycle\":" << depthwise_peak
-        << ",\n\"depthwise_mac_utilization\":"
-        << fraction(s.depthwise_macs, npu::checked_mul(depthwise_peak, s.cycles))
-        << ",\n\"scratchpad_bytes\":" << npu::scratchpad_bytes(c)
-        << ",\n\"numerics\":\"" << numerics_name(c) << '"';
+              << "\"cycles\":" << s.cycles << ",\n\"macs\":" << s.macs
+              << ",\n\"executed_macs\":" << s.executed_macs
+              << ",\n\"skipped_macs\":" << s.skipped_macs
+              << ",\n\"weight_decode_cycles\":" << s.weight_decode_cycles
+              << ",\n\"decoded_weight_values\":" << s.decoded_weight_values
+              << ",\n\"weight_read_bytes\":" << s.weight_read_bytes
+              << ",\n\"encoded_weight_storage_bytes\":" << s.encoded_weight_storage_bytes
+              << ",\n\"dense_weight_storage_bytes\":" << s.dense_weight_storage_bytes
+              << ",\n\"read_bytes\":" << s.read_bytes << ",\n\"write_bytes\":" << s.write_bytes
+              << ",\n\"compute_busy_cycles\":" << s.compute_busy_cycles
+              << ",\n\"dma_busy_cycles\":" << s.dma_busy_cycles
+              << ",\n\"peak_inflight_tiles\":" << s.peak_inflight_tiles
+              << ",\n\"slot_wait_cycles\":" << s.slot_wait_cycles
+              << ",\n\"panel_wait_cycles\":" << s.panel_wait_cycles
+              << ",\n\"reduction_blocks\":" << npu::reduction_blocks(c)
+              << ",\n\"effective_macs_per_cycle\":" << peak_macs
+              << ",\n\"peak_memory_bytes_per_cycle\":" << npu::peak_memory_bytes_per_cycle(c)
+              << ",\n\"dma_requests\":" << s.dma_requests << ",\n\"dma_bursts\":" << s.dma_bursts
+              << ",\n\"weight_cache_hits\":" << s.weight_cache_hits
+              << ",\n\"weight_cache_misses\":" << s.weight_cache_misses
+              << ",\n\"weight_bytes_saved\":" << s.weight_bytes_saved
+              << ",\n\"peak_cached_weight_bytes\":" << s.peak_cached_weight_bytes
+              << ",\n\"activation_read_bytes\":" << s.activation_read_bytes
+              << ",\n\"activation_cache_hits\":" << s.activation_cache_hits
+              << ",\n\"activation_cache_misses\":" << s.activation_cache_misses
+              << ",\n\"activation_bytes_saved\":" << s.activation_bytes_saved
+              << ",\n\"peak_cached_activation_bytes\":" << s.peak_cached_activation_bytes
+              << ",\n\"depthwise_macs\":" << s.depthwise_macs
+              << ",\n\"depthwise_peak_macs_per_cycle\":" << depthwise_peak
+              << ",\n\"depthwise_mac_utilization\":"
+              << fraction(s.depthwise_macs, npu::checked_mul(depthwise_peak, s.cycles))
+              << ",\n\"scratchpad_bytes\":" << npu::scratchpad_bytes(c) << ",\n\"numerics\":\""
+              << numerics_name(c) << '"';
     if (c.sim.timing_only) std::cout << ",\n\"output_hash\":null,\n\"numerical_match\":null";
-    else std::cout << ",\n\"output_hash\":" << npu::output_hash(model.output())
-                   << ",\n\"numerical_match\":true";
-    std::cout
-        << ",\n\"simulation_wall_seconds\":" << seconds
-        << ",\n\"compute_utilization\":" << static_cast<double>(s.compute_busy_cycles) / core_cycles
-        << ",\n\"memory_utilization\":" << static_cast<double>(s.dma_busy_cycles) / core_cycles
-        << ",\n\"mac_utilization\":" << static_cast<double>(s.executed_macs) /
-            (static_cast<double>(peak_macs) * static_cast<double>(s.cycles))
-        << ",\n\"dma_payload_utilization\":" << static_cast<double>(s.read_bytes + s.write_bytes) /
-            (static_cast<double>(npu::peak_memory_bytes_per_cycle(c)) *
-             static_cast<double>(s.cycles))
-        << ",\n\"arithmetic_intensity_macs_per_byte\":" << static_cast<double>(s.macs) /
-            static_cast<double>(s.read_bytes + s.write_bytes)
-        << ",\n\"resource_lower_bound_cycles\":" << lower_bound
-        << ",\n\"modeled_latency_ns\":"
-        << static_cast<double>(s.cycles) * 1000.0 / c.arch.frequency_mhz << ",\n\"memory\":";
+    else
+        std::cout << ",\n\"output_hash\":" << npu::output_hash(model.output())
+                  << ",\n\"numerical_match\":true";
+    std::cout << ",\n\"simulation_wall_seconds\":" << seconds << ",\n\"compute_utilization\":"
+              << static_cast<double>(s.compute_busy_cycles) / core_cycles
+              << ",\n\"memory_utilization\":"
+              << static_cast<double>(s.dma_busy_cycles) / core_cycles << ",\n\"mac_utilization\":"
+              << static_cast<double>(s.executed_macs) /
+                     (static_cast<double>(peak_macs) * static_cast<double>(s.cycles))
+              << ",\n\"dma_payload_utilization\":"
+              << static_cast<double>(s.read_bytes + s.write_bytes) /
+                     (static_cast<double>(npu::peak_memory_bytes_per_cycle(c)) *
+                      static_cast<double>(s.cycles))
+              << ",\n\"arithmetic_intensity_macs_per_byte\":"
+              << static_cast<double>(s.macs) / static_cast<double>(s.read_bytes + s.write_bytes)
+              << ",\n\"resource_lower_bound_cycles\":" << lower_bound
+              << ",\n\"modeled_latency_ns\":"
+              << static_cast<double>(s.cycles) * 1000.0 / c.arch.frequency_mhz << ",\n\"memory\":";
     memory_json(std::cout, c, model.memory(), s.cycles, false);
     cluster_json(std::cout, c, model, s);
     if (dump) {
-        std::cout << ",\n\"accumulators\":"; array_json(model.output().accumulators);
-        std::cout << ",\n\"outputs\":"; array_json(model.output().quantized);
+        std::cout << ",\n\"accumulators\":";
+        array_json(model.output().accumulators);
+        std::cout << ",\n\"outputs\":";
+        array_json(model.output().quantized);
     }
     std::cout << "\n}\n";
 }
@@ -660,8 +687,14 @@ int sc_main(int argc, char* argv[]) {
         // --help and --version answer even when other arguments are invalid.
         for (int i = 1; i < argc; ++i) {
             const std::string_view flag(argv[i]);
-            if (flag == "--help") { usage(); return 0; }
-            if (flag == "--version") { version(); return 0; }
+            if (flag == "--help") {
+                usage();
+                return 0;
+            }
+            if (flag == "--version") {
+                version();
+                return 0;
+            }
         }
         auto args = parse(argc, argv);
         validate_paths(args);
@@ -674,14 +707,14 @@ int sc_main(int argc, char* argv[]) {
             std::cout << '\n';
             return 0;
         }
-        const auto expected = config.sim.timing_only ? npu::Output{} :
-                                                       npu::reference(problem, config.quant);
+        const auto expected =
+            config.sim.timing_only ? npu::Output{} : npu::reference(problem, config.quant);
         sc_core::sc_set_time_resolution(1, sc_core::SC_NS);
         sc_core::sc_report_handler::set_handler(diagnostic_report);
         sc_core::sc_report_handler::set_actions(sc_core::SC_INFO, sc_core::SC_DO_NOTHING);
         npu::Accelerator model("npu", config, problem);
-        std::unique_ptr<sc_core::sc_trace_file, decltype(&sc_core::sc_close_vcd_trace_file)>
-            waves(nullptr, &sc_core::sc_close_vcd_trace_file);
+        std::unique_ptr<sc_core::sc_trace_file, decltype(&sc_core::sc_close_vcd_trace_file)> waves(
+            nullptr, &sc_core::sc_close_vcd_trace_file);
         if (!args.vcd_path.empty()) {
             std::ofstream probe(args.vcd_path);
             if (!probe) throw std::invalid_argument("cannot open VCD waveform path");
@@ -710,14 +743,17 @@ int sc_main(int argc, char* argv[]) {
             snapshot_json(progress, config, problem, model);
             while (!model.completed()) {
                 const auto previous = sc_core::sc_time_stamp();
-                sc_core::sc_start(sc_core::sc_time::from_value(args.slice_cycles), sc_core::SC_RUN_TO_TIME);
-                if (!model.completed() && (sc_core::sc_time_stamp() == previous || !sc_core::sc_pending_activity()))
+                sc_core::sc_start(sc_core::sc_time::from_value(args.slice_cycles),
+                                  sc_core::SC_RUN_TO_TIME);
+                if (!model.completed() &&
+                    (sc_core::sc_time_stamp() == previous || !sc_core::sc_pending_activity()))
                     throw std::runtime_error("simulation stalled before completion");
                 check_numerics(config, model, expected);
                 snapshot_json(progress, config, problem, model);
             }
         } else sc_core::sc_start();
-        const double seconds = std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
+        const double seconds =
+            std::chrono::duration<double>(std::chrono::steady_clock::now() - before).count();
         if (!model.completed()) throw std::runtime_error("model deadlocked before completion");
         check_numerics(config, model, expected);
         if (!config.sim.trace_path.empty()) {

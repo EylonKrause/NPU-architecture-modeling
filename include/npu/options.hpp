@@ -14,14 +14,14 @@ namespace npu {
 
 // One Config field. The pointer type held selects how CLI text and JSON values
 // are parsed, validated for type and printed. Every enum listed has EnumNames.
-template <class... T> struct FieldTypes {
+template <class... T>
+struct FieldTypes {
     using Mutable = std::variant<T*...>;
     using Const = std::variant<const T*...>;
 };
 using OptionFieldTypes = FieldTypes<std::uint64_t, std::int32_t, std::uint32_t, double, bool,
-                                    std::string, Rounding, RescaleMode, WeightEncoding,
-                                    TimingMode, Dataflow, MemoryModel, Partition,
-                                    std::vector<std::int32_t>>;
+                                    std::string, Rounding, RescaleMode, WeightEncoding, TimingMode,
+                                    Dataflow, MemoryModel, Partition, std::vector<std::int32_t>>;
 using FieldRef = OptionFieldTypes::Mutable;
 using ConstFieldRef = OptionFieldTypes::Const;
 

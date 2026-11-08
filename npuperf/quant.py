@@ -1,20 +1,20 @@
-"""Integer requantisation oracle, independent of the C++ datapath.
+"""Integer requantization oracle, written independently of the C++ datapath.
 
 Three rescale modes, matching npu-sim --rescale:
 
-native       today's sign-magnitude rounding: round(|acc * M| / 2^shift) with ties away
-             from zero (``rounding="away"``) or to even, then the sign; M <= INT32_MAX,
-             shift 0..31.
+native       sign-magnitude rounding: round(|acc * M| / 2^shift) with ties away from zero
+             (``rounding="away"``) or to even, then the sign; M <= INT32_MAX, shift 0..31.
 tosa-single  TOSA 1.0.2 RESCALE apply_scale_32 with SINGLE_ROUND.
 tosa-double  TOSA 1.0.2 RESCALE apply_scale_32 with DOUBLE_ROUND.
 
-The TOSA modes are computed here through the TFLite formulation, not the TOSA pseudo-code,
-so the oracle checks the simulator against a second published definition:
+The TOSA modes are computed through the TFLite formulation, so the oracle checks the
+simulator, which follows the TOSA pseudo-code, against a second published definition:
 tosa-single == TFLite MultiplyByQuantizedMultiplier built with TFLITE_SINGLE_ROUNDING,
 tosa-double == TFLite's default (gemmlowp SaturatingRoundingDoublingHighMul followed by
 RoundingDivideByPOT), with ``tflite_shift = 31 - tosa_shift``. Every mode then adds the
 output zero point, applies ReLU at the output zero point when requested and saturates to INT8.
 """
+
 from __future__ import annotations
 
 import math
@@ -41,8 +41,9 @@ def round_div(value: int, denominator: int, rounding: str = "away") -> int:
     if rounding not in ("away", "even"):
         raise ValueError("rounding must be away or even")
     quotient, remainder = divmod(abs(value), denominator)
-    if 2 * remainder > denominator or (2 * remainder == denominator
-                                       and (rounding == "away" or quotient % 2)):
+    if 2 * remainder > denominator or (
+        2 * remainder == denominator and (rounding == "away" or quotient % 2)
+    ):
         quotient += 1
     return -quotient if value < 0 else quotient
 
@@ -57,6 +58,7 @@ def rescale_native(value: int, multiplier: int, shift: int, rounding: str = "awa
 
 
 # gemmlowp fixedpoint.h, written for Python integers with C++ int32/int64 semantics.
+
 
 def _truncating_div(numerator: int, denominator: int) -> int:
     quotient = abs(numerator) // abs(denominator)
@@ -85,7 +87,8 @@ def tflite_double_rounding(x: int, quantized_multiplier: int, shift: int) -> int
     left, right = (shift, 0) if shift > 0 else (0, -shift)
     shifted = _int32(x * (1 << left), "left-shifted accumulator")
     return rounding_divide_by_pot(
-        saturating_rounding_doubling_high_mul(shifted, quantized_multiplier), right)
+        saturating_rounding_doubling_high_mul(shifted, quantized_multiplier), right
+    )
 
 
 def tflite_single_rounding(x: int, quantized_multiplier: int, shift: int) -> int:
@@ -111,8 +114,9 @@ def rescale_tosa(value: int, multiplier: int, shift: int, double_round: bool = F
     return tflite_single_rounding(value, multiplier, tflite_shift)
 
 
-def rescale(value: int, multiplier: int, shift: int, mode: str = "native",
-            rounding: str = "away") -> int:
+def rescale(
+    value: int, multiplier: int, shift: int, mode: str = "native", rounding: str = "away"
+) -> int:
     if mode == "native":
         return rescale_native(value, multiplier, shift, rounding)
     if mode in ("tosa-single", "tosa-double"):
@@ -122,8 +126,9 @@ def rescale(value: int, multiplier: int, shift: int, mode: str = "native",
 
 def requantize(value: int, q: Mapping[str, Any]) -> int:
     """INT32 accumulator -> INT8 output for one channel's parameters ``q``."""
-    scaled = rescale(value, q["multiplier"], q["shift"], q.get("rescale", "native"),
-                     q.get("rounding", "away"))
+    scaled = rescale(
+        value, q["multiplier"], q["shift"], q.get("rescale", "native"), q.get("rounding", "away")
+    )
     scaled += q.get("output_zero", 0)
     if q.get("relu", False):
         scaled = max(scaled, q.get("output_zero", 0))
@@ -150,11 +155,20 @@ def quantize_multiplier(scale: float) -> tuple[int, int]:
     return fixed, shift
 
 
-def gemm_reference(activations: Sequence[int], weights: Sequence[int], bias: Sequence[int],
-                   m: int, n: int, k: int, *, input_zero: int = 0,
-                   weight_zero: int | Sequence[int] = 0, quant: Mapping[str, Any] | None = None,
-                   lanes: Sequence[Mapping[str, Any]] | None = None,
-                   groups: int = 1) -> tuple[list[int], list[int]]:
+def gemm_reference(
+    activations: Sequence[int],
+    weights: Sequence[int],
+    bias: Sequence[int],
+    m: int,
+    n: int,
+    k: int,
+    *,
+    input_zero: int = 0,
+    weight_zero: int | Sequence[int] = 0,
+    quant: Mapping[str, Any] | None = None,
+    lanes: Sequence[Mapping[str, Any]] | None = None,
+    groups: int = 1,
+) -> tuple[list[int], list[int]]:
     """Scalar (grouped) GEMM: activations M x G*K, weights G blocks of K x N, bias G*N.
 
     ``quant`` gives the layer parameters; ``lanes`` (one per output channel, G*N) override
@@ -162,8 +176,11 @@ def gemm_reference(activations: Sequence[int], weights: Sequence[int], bias: Seq
     both row-major M x G*N.
     """
     channels = groups * n
-    if len(activations) != m * groups * k or len(weights) != groups * k * n \
-            or len(bias) != channels:
+    if (
+        len(activations) != m * groups * k
+        or len(weights) != groups * k * n
+        or len(bias) != channels
+    ):
         raise ValueError("reference tensor sizes do not match the GEMM shape")
     zeros = list(weight_zero) if isinstance(weight_zero, Sequence) else [weight_zero] * channels
     if len(zeros) != channels:
@@ -181,10 +198,14 @@ def gemm_reference(activations: Sequence[int], weights: Sequence[int], bias: Seq
             a_base = row * row_stride + group * k
             w_base = group * k * n + col
             for r in range(k):
-                total += (activations[a_base + r] - input_zero) * (weights[w_base + r * n]
-                                                                  - zeros[channel])
+                total += (activations[a_base + r] - input_zero) * (
+                    weights[w_base + r * n] - zeros[channel]
+                )
             _int32(total, "accumulator")
             accumulators.append(total)
-            outputs.append(requantize(total, params[channel]) if quant is not None or lanes
-                           else saturate(total))
+            outputs.append(
+                requantize(total, params[channel])
+                if quant is not None or lanes
+                else saturate(total)
+            )
     return accumulators, outputs

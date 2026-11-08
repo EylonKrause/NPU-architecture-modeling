@@ -3,6 +3,7 @@
 Needs the optional numpy and onnx packages (requirements-onnx.txt). Static shapes only;
 NCHW inputs and outputs convert to and from the runtime's NHWC on the host.
 """
+
 from __future__ import annotations
 
 from collections.abc import Sequence
@@ -20,18 +21,33 @@ def dependencies():
         import numpy as np
         import onnx
     except ImportError as error:
-        raise ValueError("optional ONNX dependencies are missing; install requirements-onnx.txt in a virtual environment") from error
+        raise ValueError(
+            "optional ONNX dependencies are missing; install requirements-onnx.txt in a "
+            "virtual environment"
+        ) from error
     return onnx, np
 
 
 def exact_rescale(input_scale, weight_scale, output_scale):
-    """Represent the exact float32 values' ratio, without approximation."""
+    """(multiplier, shift) with multiplier / 2^shift equal to the exact ratio of the three
+    float32 scales; a ratio that needs rounding is a ValueError."""
     for value in (input_scale, weight_scale, output_scale):
         runtime.scale_value(value)
-    ratio = Fraction.from_float(float(input_scale)) * Fraction.from_float(float(weight_scale)) / Fraction.from_float(float(output_scale))
+    ratio = (
+        Fraction.from_float(float(input_scale))
+        * Fraction.from_float(float(weight_scale))
+        / Fraction.from_float(float(output_scale))
+    )
     denominator = ratio.denominator
-    if denominator & (denominator - 1) or denominator > (1 << 31) or ratio.numerator > runtime.INT32_MAX:
-        raise ValueError("ONNX scale ratio is not exactly representable by multiplier/2^shift (INT32 multiplier, shift 0..31)")
+    if (
+        denominator & (denominator - 1)
+        or denominator > (1 << 31)
+        or ratio.numerator > runtime.INT32_MAX
+    ):
+        raise ValueError(
+            "ONNX scale ratio is not exactly representable by multiplier/2^shift "
+            "(INT32 multiplier, shift 0..31)"
+        )
     return ratio.numerator, denominator.bit_length() - 1
 
 
@@ -39,7 +55,7 @@ def load_model(path):
     onnx, _ = dependencies()
     if Path(path).stat().st_size > MAX_MODEL_BYTES:
         raise ValueError("ONNX model exceeds 32 MiB limit")
-    # External-data paths come from the model file; never follow them.
+    # External-data paths come from the untrusted model file, so they are never followed.
     return onnx.load_model(str(path), load_external_data=False)
 
 
@@ -68,13 +84,17 @@ def _input_spec(spec, shape, scale, zero):
         raise ValueError("ONNX supplied input dtype/shape does not match model")
     if "scale" in spec and runtime.scale_value(spec["scale"]) != scale:
         raise ValueError("supplied input scale conflicts with ONNX initializer")
-    if "zero_point" in spec and runtime.integer(spec["zero_point"], "input zero", -128, 127) != zero:
+    if (
+        "zero_point" in spec
+        and runtime.integer(spec["zero_point"], "input zero", -128, 127) != zero
+    ):
         raise ValueError("supplied input zero point conflicts with ONNX initializer")
     return runtime.parse_tensor({**spec, "scale": scale, "zero_point": zero})
 
 
 def import_model(model, supplied_inputs):
-    """Return a runnable graph-runtime document; no model code is executed."""
+    """Graph-runtime document of ``model`` with ``supplied_inputs`` bound. The model is
+    parsed and checked, never executed."""
     onnx, np = dependencies()
     if model.ByteSize() > MAX_MODEL_BYTES:
         raise ValueError("ONNX model exceeds 32 MiB limit")
@@ -94,13 +114,27 @@ def import_model(model, supplied_inputs):
         dimensions = list(initializer.dims)
         if dimensions:
             runtime.shape_value(dimensions)
-        if initializer.data_type not in (onnx.TensorProto.INT8, onnx.TensorProto.INT32, onnx.TensorProto.FLOAT):
-            raise ValueError("unsupported ONNX initializer type; only INT8, INT32 and FLOAT scales are supported")
+        if initializer.data_type not in (
+            onnx.TensorProto.INT8,
+            onnx.TensorProto.INT32,
+            onnx.TensorProto.FLOAT,
+        ):
+            raise ValueError(
+                "unsupported ONNX initializer type; only INT8, INT32 and FLOAT scales are supported"
+            )
         initializers[initializer.name] = initializer
     for node in model.graph.node:
         if node.domain or node.op_type not in ("QLinearMatMul", "QLinearConv"):
-            raise ValueError("unsupported ONNX operator: " + (node.domain + ":" if node.domain else "") + node.op_type)
-        allowed = set() if node.op_type == "QLinearMatMul" else {"auto_pad", "dilations", "group", "kernel_shape", "pads", "strides"}
+            raise ValueError(
+                "unsupported ONNX operator: "
+                + (node.domain + ":" if node.domain else "")
+                + node.op_type
+            )
+        allowed = (
+            set()
+            if node.op_type == "QLinearMatMul"
+            else {"auto_pad", "dilations", "group", "kernel_shape", "pads", "strides"}
+        )
         if any(attribute.name not in allowed for attribute in node.attribute):
             raise ValueError("unsupported ONNX node attribute")
         expected_types = {"auto_pad": onnx.AttributeProto.STRING, "group": onnx.AttributeProto.INT}
@@ -115,13 +149,18 @@ def import_model(model, supplied_inputs):
     except (onnx.checker.ValidationError, onnx.shape_inference.InferenceError) as error:
         raise ValueError("ONNX checker/shape inference rejected model: " + str(error)) from error
     shapes = {}
-    for info in list(inferred.graph.input) + list(inferred.graph.value_info) + list(inferred.graph.output):
+    for info in (
+        list(inferred.graph.input) + list(inferred.graph.value_info) + list(inferred.graph.output)
+    ):
         if info.name not in initializers:
             shapes[info.name] = static_shape(info, onnx)
     external_names = {value.name for value in model.graph.input if value.name not in initializers}
     if not isinstance(supplied_inputs, dict) or set(supplied_inputs) != external_names:
-        raise ValueError("supplied input names must exactly match non-initializer ONNX graph inputs")
+        raise ValueError(
+            "supplied input names must exactly match non-initializer ONNX graph inputs"
+        )
     decoded = {}
+
     def constant(name, dtype):
         if name not in initializers:
             raise ValueError("weights, scales, zero points and bias must be ONNX initializers")
@@ -133,30 +172,46 @@ def import_model(model, supplied_inputs):
             except (ValueError, TypeError) as error:
                 raise ValueError("malformed ONNX initializer: " + name) from error
         return decoded[name]
+
     def scalar(name, dtype):
         value = constant(name, dtype)
         if value.ndim != 0:
-            raise ValueError("input/output quantization and MatMul weights require scalar scales and zero points")
+            raise ValueError(
+                "input/output quantization and MatMul weights require scalar scales and zero points"
+            )
         result = value.item()
-        return runtime.scale_value(result) if dtype == onnx.TensorProto.FLOAT else runtime.integer(int(result), "zero point", -128, 127)
+        return (
+            runtime.scale_value(result)
+            if dtype == onnx.TensorProto.FLOAT
+            else runtime.integer(int(result), "zero point", -128, 127)
+        )
+
     def parameter(name, shape, values, scale, zero, dtype="int8"):
         if name in tensors:
             raise ValueError("internal ONNX parameter name collision")
-        spec = {"dtype": dtype, "shape": list(shape), "data": values,
-                "scale": scale, "zero_point": zero}
+        spec = {
+            "dtype": dtype,
+            "shape": list(shape),
+            "data": values,
+            "scale": scale,
+            "zero_point": zero,
+        }
         runtime.parse_tensor(spec)
         tensors[name] = spec
+
     tensors, nodes, states = {}, [], {}
     # Choose generated parameter names that cannot alias any model value.
     occupied = set(shapes) | set(initializers)
     for source_node in model.graph.node:
         occupied.update(source_node.output)
+
     def fresh_name(index, suffix):
-        candidate = "__onnx_{}_{}".format(index, suffix)
+        candidate = f"__onnx_{index}_{suffix}"
         while candidate in occupied:
             candidate += "_"
         occupied.add(candidate)
         return candidate
+
     def bind_activation(name, scale, zero, layout):
         if name not in shapes:
             raise ValueError("missing static shape for ONNX activation: " + name)
@@ -166,7 +221,9 @@ def import_model(model, supplied_inputs):
                 raise ValueError("inconsistent quantization/layout for shared ONNX activation")
             return
         if name not in supplied_inputs:
-            raise ValueError("ONNX activation must be an external input or earlier supported node output")
+            raise ValueError(
+                "ONNX activation must be an external input or earlier supported node output"
+            )
         tensor = _input_spec(supplied_inputs[name], shape, scale, zero)
         values = tensor.data
         runtime_shape = shape
@@ -175,16 +232,33 @@ def import_model(model, supplied_inputs):
                 raise ValueError("QLinearConv requires rank-four NCHW input")
             batches, channels, height, width = shape
             runtime_shape = (batches, height, width, channels)
-            values = np.asarray(values, dtype=np.int8).reshape(shape).transpose(0, 2, 3, 1).reshape(-1).tolist()
+            values = (
+                np.asarray(values, dtype=np.int8)
+                .reshape(shape)
+                .transpose(0, 2, 3, 1)
+                .reshape(-1)
+                .tolist()
+            )
         parameter(name, runtime_shape, values, scale, zero)
         states[name] = (scale, zero, layout)
+
     for index, source in enumerate(model.graph.node):
         matmul = source.op_type == "QLinearMatMul"
-        if len(source.output) != 1 or len(source.input) not in ((8,) if matmul else (8, 9)) or any(not name for name in source.input[:8]):
+        if (
+            len(source.output) != 1
+            or len(source.input) not in ((8,) if matmul else (8, 9))
+            or any(not name for name in source.input[:8])
+        ):
             raise ValueError("unsupported ONNX operator input/output arity")
         x, xs, xz, w, ws, wz, ys, yz = source.input[:8]
-        input_scale, input_zero = scalar(xs, onnx.TensorProto.FLOAT), scalar(xz, onnx.TensorProto.INT8)
-        output_scale, output_zero = scalar(ys, onnx.TensorProto.FLOAT), scalar(yz, onnx.TensorProto.INT8)
+        input_scale, input_zero = (
+            scalar(xs, onnx.TensorProto.FLOAT),
+            scalar(xz, onnx.TensorProto.INT8),
+        )
+        output_scale, output_zero = (
+            scalar(ys, onnx.TensorProto.FLOAT),
+            scalar(yz, onnx.TensorProto.INT8),
+        )
         layout = "NC" if matmul else "NHWC"
         bind_activation(x, input_scale, input_zero, layout)
         weight = constant(w, onnx.TensorProto.INT8)
@@ -206,11 +280,33 @@ def import_model(model, supplied_inputs):
             channels = int(weight.shape[0])
             scales_array = constant(ws, onnx.TensorProto.FLOAT)
             zeros_array = constant(wz, onnx.TensorProto.INT8)
-            if scales_array.shape != zeros_array.shape or scales_array.shape not in ((), (channels,)):
-                raise ValueError("Conv weight scale/zero shapes must match and be scalar or per-output-channel")
-            weight_scales = [runtime.scale_value(float(v)) for v in (scales_array.reshape(-1).tolist() if scales_array.ndim else [scales_array.item()] * channels)]
-            weight_zeros = [int(v) for v in (zeros_array.reshape(-1).tolist() if zeros_array.ndim else [zeros_array.item()] * channels)]
-            attrs = {attribute.name: onnx.helper.get_attribute_value(attribute) for attribute in source.attribute}
+            if scales_array.shape != zeros_array.shape or scales_array.shape not in (
+                (),
+                (channels,),
+            ):
+                raise ValueError(
+                    "Conv weight scale/zero shapes must match and be scalar or per-output-channel"
+                )
+            weight_scales = [
+                runtime.scale_value(float(v))
+                for v in (
+                    scales_array.reshape(-1).tolist()
+                    if scales_array.ndim
+                    else [scales_array.item()] * channels
+                )
+            ]
+            weight_zeros = [
+                int(v)
+                for v in (
+                    zeros_array.reshape(-1).tolist()
+                    if zeros_array.ndim
+                    else [zeros_array.item()] * channels
+                )
+            ]
+            attrs = {
+                attribute.name: onnx.helper.get_attribute_value(attribute)
+                for attribute in source.attribute
+            }
             group = runtime.integer(attrs.get("group", 1), "Conv group", 1, 4096)
             input_channels = shapes[x][1]
             if input_channels != int(weight.shape[1]) * group:
@@ -219,16 +315,28 @@ def import_model(model, supplied_inputs):
                 weight_shape = (weight.shape[2], weight.shape[3], weight.shape[1], weight.shape[0])
                 weight_values = weight.transpose(2, 3, 1, 0).reshape(-1).tolist()
                 op = "Conv2D"
-            elif group == input_channels and int(weight.shape[1]) == 1 and channels % input_channels == 0:
+            elif (
+                group == input_channels
+                and int(weight.shape[1]) == 1
+                and channels % input_channels == 0
+            ):
                 multiplier = channels // input_channels
                 weight_shape = (weight.shape[2], weight.shape[3], input_channels, multiplier)
-                weight_values = weight.reshape(input_channels, multiplier, weight.shape[2], weight.shape[3]).transpose(2, 3, 0, 1).reshape(-1).tolist()
+                weight_values = (
+                    weight.reshape(input_channels, multiplier, weight.shape[2], weight.shape[3])
+                    .transpose(2, 3, 0, 1)
+                    .reshape(-1)
+                    .tolist()
+                )
                 op = "DepthwiseConv2D"
             else:
                 raise ValueError("grouped Conv is unsupported except depthwise")
-            node = {"name": (source.name or "onnx_node") + "_" + str(index), "op": op,
-                    "strides": list(attrs.get("strides", [1, 1])),
-                    "dilations": list(attrs.get("dilations", [1, 1]))}
+            node = {
+                "name": (source.name or "onnx_node") + "_" + str(index),
+                "op": op,
+                "strides": list(attrs.get("strides", [1, 1])),
+                "dilations": list(attrs.get("dilations", [1, 1])),
+            }
             if "kernel_shape" in attrs and list(attrs["kernel_shape"]) != list(weight.shape[2:]):
                 raise ValueError("Conv kernel_shape disagrees with weight dimensions")
             auto_pad = attrs.get("auto_pad", b"NOTSET").decode("ascii")
@@ -245,24 +353,38 @@ def import_model(model, supplied_inputs):
                 sh, sw = runtime.pair(node["strides"], "strides", [1, 1])
                 dh, dw = runtime.pair(node["dilations"], "dilations", [1, 1])
                 height, width = shapes[x][2:]
-                ph = max(0, ((height + sh - 1) // sh - 1) * sh + (weight.shape[2] - 1) * dh + 1 - height)
-                pw = max(0, ((width + sw - 1) // sw - 1) * sw + (weight.shape[3] - 1) * dw + 1 - width)
+                ph = max(
+                    0, ((height + sh - 1) // sh - 1) * sh + (weight.shape[2] - 1) * dh + 1 - height
+                )
+                pw = max(
+                    0, ((width + sw - 1) // sw - 1) * sw + (weight.shape[3] - 1) * dw + 1 - width
+                )
                 node["padding"] = [(ph + 1) // 2, ph // 2, (pw + 1) // 2, pw // 2]
             else:
                 raise ValueError("unsupported Conv auto_pad")
-            geometry = runtime.spatial(node, shapes[x][2], shapes[x][3], int(weight.shape[2]), int(weight.shape[3]))
+            geometry = runtime.spatial(
+                node, shapes[x][2], shapes[x][3], int(weight.shape[2]), int(weight.shape[3])
+            )
             expected_shape = (shapes[x][0], channels, geometry[0], geometry[1])
         if shapes[output_name] != expected_shape:
-            raise ValueError("ONNX inferred/declared output shape disagrees with the supported operator form")
+            raise ValueError(
+                "ONNX inferred/declared output shape disagrees with the supported operator form"
+            )
         ratios = [exact_rescale(input_scale, scale, output_scale) for scale in weight_scales]
         weight_name = fresh_name(index, "weight")
         parameter(weight_name, weight_shape, weight_values, weight_scales[0], weight_zeros[0])
         operands = [x, weight_name]
-        q = {"multiplier": ratios[0][0], "shift": ratios[0][1],
-             "output_scale": output_scale, "output_zero": output_zero,
-             "rounding": "even", "weight_zero_points": weight_zeros,
-             "multipliers": [pair[0] for pair in ratios], "shifts": [pair[1] for pair in ratios],
-             "weight_scales": weight_scales}
+        q = {
+            "multiplier": ratios[0][0],
+            "shift": ratios[0][1],
+            "output_scale": output_scale,
+            "output_zero": output_zero,
+            "rounding": "even",
+            "weight_zero_points": weight_zeros,
+            "multipliers": [pair[0] for pair in ratios],
+            "shifts": [pair[1] for pair in ratios],
+            "weight_scales": weight_scales,
+        }
         if not matmul and len(source.input) == 9 and source.input[8]:
             bias = constant(source.input[8], onnx.TensorProto.INT32)
             if bias.shape != (channels,):
@@ -279,10 +401,19 @@ def import_model(model, supplied_inputs):
     outputs = [value.name for value in model.graph.output]
     if any(name not in states for name in outputs):
         raise ValueError("ONNX graph outputs must be supported node outputs")
-    graph = {"schema_version": 1, "name": model.graph.name or "onnx_quantized_graph",
-             "tensors": tensors, "inputs": sorted(external_names), "nodes": nodes,
-             "outputs": outputs, "io_layouts": {name: {"internal": "NHWC", "external": "NCHW"}
-                                                 for name in outputs if states[name][2] == "NHWC"}}
+    graph = {
+        "schema_version": 1,
+        "name": model.graph.name or "onnx_quantized_graph",
+        "tensors": tensors,
+        "inputs": sorted(external_names),
+        "nodes": nodes,
+        "outputs": outputs,
+        "io_layouts": {
+            name: {"internal": "NHWC", "external": "NCHW"}
+            for name in outputs
+            if states[name][2] == "NHWC"
+        },
+    }
     runtime.validate_graph(graph)
     return graph
 
@@ -291,10 +422,15 @@ def import_model(model, supplied_inputs):
 def main(argv: Sequence[str] | None = None) -> int:
     parser = cli.Parser("onnx_import", __doc__)
     parser.add_argument("model", type=Path, help="ONNX model")
-    parser.add_argument("--inputs", type=Path, required=True,
-                        help="JSON map of ONNX-layout INT8 inputs")
-    parser.add_argument("--output", type=Path, required=True,
-                        help="write the graph-runtime JSON to this new file")
+    parser.add_argument(
+        "--inputs", type=Path, required=True, help="JSON map of ONNX-layout INT8 inputs"
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="graph-runtime JSON to write; an existing file needs --force",
+    )
     parser.add_argument("--force", action="store_true", help="overwrite --output if it exists")
     parser.add_argument("--run", action="store_true", help="also run the graph on npu-sim")
     cli.add_binary_options(parser)
@@ -305,9 +441,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     if args.run:
         report = runtime.run_graph(document, cli.simulator(args), timeout=args.timeout)
     else:
-        report = {"schema_version": 1, "graph_path": str(args.output),
-                  "nodes": len(document["nodes"]), "outputs": document["outputs"],
-                  "rounding": "even", "scale_ratios": "exact"}
+        report = {
+            "schema_version": 1,
+            "graph_path": str(args.output),
+            "nodes": len(document["nodes"]),
+            "outputs": document["outputs"],
+            "rounding": "even",
+            "scale_ratios": "exact",
+        }
     print(jsonio.dumps(report), end="")
     return 0
 

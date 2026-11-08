@@ -13,7 +13,7 @@
   "https://huggingface.co/unsloth/Llama-3.2-1B/raw/main/config.json (ungated mirror of meta-llama/Llama-3.2-1B config.json)",
   "https://huggingface.co/meta-llama/Llama-3.2-1B"
  ],
- "notes": "config.json: hidden_size 2048, intermediate_size 8192, num_attention_heads 32, num_key_value_heads 8, head_dim 64, num_hidden_layers 16, vocab_size 128256, tie_word_embeddings true, no attention/MLP bias, SiLU-gated MLP, RMSNorm, RoPE (llama3 scaling, theta 5e5). Prefill of a 128-token prompt, batch 1: every projection has M=128. Attention matmuls (b_operand=activations) read the KV cache, not weights. repeat = 16 layers (x32 heads for attention matmuls). The INT8 KV cache for this context is in totals.",
+ "notes": "config.json: hidden_size 2048, intermediate_size 8192, num_attention_heads 32, num_key_value_heads 8, head_dim 64, num_hidden_layers 16, vocab_size 128256, tie_word_embeddings true, no attention/MLP bias, SiLU-gated MLP, RMSNorm, RoPE (llama3 scaling, theta 5e5). Prefill of a 128-token prompt, batch 1: every projection has M=128. Attention matmuls (b_operand=activations) take their B operand from the KV cache. repeat = 16 layers (x32 heads for attention matmuls). The INT8 KV cache for this context is in totals.",
  "layers": [
   {
    "name": "q_proj",
@@ -92,7 +92,7 @@
     "G": 8,
     "calls": 16
    },
-   "note": "per query head; 4 query heads share each KV head. Causal mask: only 8256 of 16384 score entries are live (50.4%)."
+   "note": "per query head; 4 query heads share each KV head; causal mask: 8256 of 16384 score entries live (50.4%)"
   },
   {
    "name": "attn_context_PV",

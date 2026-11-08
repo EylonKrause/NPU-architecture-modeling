@@ -1,8 +1,8 @@
-# Backport the official SystemC MSVC ostream compatibility fix:
+# Backports the upstream SystemC fix for MSVC ostream compatibility to the pinned 3.0.2 source:
 # https://github.com/accellera-official/systemc/commit/3570c374f3c98e060d6267183ccb8de51aab5129
-# The download remains pinned to SystemC 3.0.2. Never rewrite an unknown or
-# locally modified dependency file; accept only the original or patched content,
-# allowing either platform's line endings.
+# The file is rewritten only when it hashes to the 3.0.2 original (either line ending); a
+# file that already hashes to the patched content is left alone, and any other content stops
+# the configure.
 if(NOT DEFINED NPU_SYSTEMC_SOURCE_DIR)
   message(FATAL_ERROR "NPU_SYSTEMC_SOURCE_DIR is required for the SystemC MSVC compatibility patch")
 endif()
@@ -27,4 +27,4 @@ if(NOT _npu_io_result STREQUAL _npu_io_patched)
   message(FATAL_ERROR "SystemC MSVC compatibility patch did not produce the expected source")
 endif()
 file(WRITE "${_npu_io_file}" "${_npu_io_content}")
-message(STATUS "Applied official SystemC MSVC ostream compatibility fix")
+message(STATUS "Applied the upstream SystemC MSVC ostream fix to ${_npu_io_file}")

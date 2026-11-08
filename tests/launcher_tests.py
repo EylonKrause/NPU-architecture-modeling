@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Run the public one-command launcher against a real SystemC executable."""
+"""run.py: startup from another directory against a built npu-sim, a validated job on the
+dashboard, clean shutdown, and one-line errors for bad arguments and environments."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import queue
 import re
 import signal
@@ -16,9 +17,9 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "run.py"
@@ -31,11 +32,15 @@ class LauncherProcess:
 
     def __init__(self, arguments: list[str], working_directory: Path):
         self.url = ""
-        self.errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+        self.errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")  # noqa: SIM115
         self.process = subprocess.Popen(
             [sys.executable, "-u", str(LAUNCHER), *arguments],
-            cwd=working_directory, stdout=subprocess.PIPE, stderr=self.errors,
-            text=True, encoding="utf-8", bufsize=1,
+            cwd=working_directory,
+            stdout=subprocess.PIPE,
+            stderr=self.errors,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
         )
         self.lines: queue.Queue[str | None] = queue.Queue()
 
@@ -80,11 +85,13 @@ class LauncherProcess:
             if os.name == "posix":
                 self.process.send_signal(signal.SIGINT)
             else:
-                # TerminateProcess cannot run Python signal cleanup on Windows.
-                # First stop the owned simulator through its public control API.
+                # TerminateProcess skips Python signal handlers on Windows, so the
+                # simulator child is stopped through /api/control first.
                 if self.url:
                     request = Request(
-                        self.url + "/api/control", data=b'{"action":"stop"}', method="POST",
+                        self.url + "/api/control",
+                        data=b'{"action":"stop"}',
+                        method="POST",
                         headers={"Content-Type": "application/json", "Origin": self.url},
                     )
                     try:
@@ -108,23 +115,35 @@ class LauncherTests(unittest.TestCase):
     def run_launcher(self, arguments: list[str], *, env: dict[str, str] | None = None):
         with tempfile.TemporaryDirectory(prefix="npu-launcher-cwd-") as directory:
             return subprocess.run(
-                [sys.executable, str(LAUNCHER), *arguments], cwd=directory,
-                env=env, capture_output=True, text=True, encoding="utf-8", timeout=20,
+                [sys.executable, str(LAUNCHER), *arguments],
+                cwd=directory,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=20,
             )
 
-    def assert_friendly_failure(self, result, status: int, *terms: str) -> None:
+    def assert_clean_failure(self, result, status: int, *terms: str) -> None:
         self.assertEqual(result.returncode, status, result.stderr)
         self.assertTrue(result.stderr.startswith("run.py: "), result.stderr)
         self.assertNotIn("Traceback (most recent call last)", result.stderr)
-        self.assertTrue(result.stderr.strip(), "A failed startup needs a readable explanation.")
+        self.assertTrue(result.stderr.strip(), "failed startup printed no diagnostic")
         for term in terms:
             self.assertIn(term.lower(), result.stderr.lower())
 
-    def test_launches_from_another_directory_and_automatically_validates_inference(self):
+    def test_launches_from_another_directory_and_validates_a_job(self):
         with tempfile.TemporaryDirectory(prefix="npu-launcher-cwd-") as directory:
             launcher = LauncherProcess(
-                ["--skip-build", "--build-dir", str(BUILD_DIRECTORY),
-                 "--port", "0", "--no-browser"], Path(directory),
+                [
+                    "--skip-build",
+                    "--build-dir",
+                    str(BUILD_DIRECTORY),
+                    "--port",
+                    "0",
+                    "--no-browser",
+                ],
+                Path(directory),
             )
             url = ""
             try:
@@ -152,7 +171,7 @@ class LauncherTests(unittest.TestCase):
                 launcher.close()
             if os.name == "posix":
                 self.assertEqual(launcher.process.returncode, 0)
-            self.assertTrue(url, "Startup must announce a usable local URL.")
+            self.assertTrue(url, "launcher printed no local URL")
             with self.assertRaises((URLError, ConnectionError, TimeoutError, OSError)):
                 urlopen(url + "/api/state", timeout=1)
 
@@ -166,23 +185,25 @@ class LauncherTests(unittest.TestCase):
             (["--jobs", "0"], "jobs"),
         ]:
             with self.subTest(arguments=arguments):
-                self.assert_friendly_failure(self.run_launcher(arguments), 2, term)
+                self.assert_clean_failure(self.run_launcher(arguments), 2, term)
 
     def test_missing_binary_has_actionable_error(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-binary-") as directory:
             result = self.run_launcher(
-                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
-            self.assert_friendly_failure(result, 2, "npu-sim", "without --skip-build")
+                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"]
+            )
+            self.assert_clean_failure(result, 2, "npu-sim", "without --skip-build")
 
     def test_corrupt_executable_is_rejected_before_serving(self):
         with tempfile.TemporaryDirectory(prefix="npu-bad-binary-") as directory:
             executable = Path(directory) / ("npu-sim.exe" if os.name == "nt" else "npu-sim")
-            executable.write_bytes(b"This is not a simulator executable.\n")
+            executable.write_bytes(b"plain text without an executable header\n")
             if os.name == "posix":
                 executable.chmod(0o755)
             result = self.run_launcher(
-                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
-            self.assert_friendly_failure(result, 1, "npu-sim")
+                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"]
+            )
+            self.assert_clean_failure(result, 1, "npu-sim")
             self.assertNotRegex(result.stdout, r"http://127\.0\.0\.1:\d+")
 
     def test_busy_port_is_reported_before_any_build(self):
@@ -193,9 +214,10 @@ class LauncherTests(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix="npu-busy-port-") as directory:
                 build = Path(directory) / "must-not-be-created"
                 result = self.run_launcher(
-                    ["--build-dir", str(build), "--port", str(port), "--no-browser"])
-                self.assert_friendly_failure(result, 1, "port", str(port))
-                self.assertFalse(build.exists(), "A busy port should fail before configuring a build.")
+                    ["--build-dir", str(build), "--port", str(port), "--no-browser"]
+                )
+                self.assert_clean_failure(result, 1, "port", str(port))
+                self.assertFalse(build.exists(), "busy port reported after configuring a build")
 
     def test_port_is_reusable_right_after_a_restart(self):
         # The server closes the connection first ("Connection: close"), so its side of the
@@ -203,14 +225,16 @@ class LauncherTests(unittest.TestCase):
         # succeeds only with SO_REUSEADDR, the option DashboardServer sets.
         sys.path.insert(0, str(ROOT))
         from npuperf import live
+
         first = live.DashboardServer(("127.0.0.1", 0))
         port = first.server_address[1]
         thread = threading.Thread(target=first.serve_forever, daemon=True)
         thread.start()
         client = socket.create_connection(("127.0.0.1", port), timeout=3)
         try:
-            client.sendall(b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
-                           b"Connection: close\r\n\r\n" % port)
+            client.sendall(
+                b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nConnection: close\r\n\r\n" % port
+            )
             while client.recv(4096):  # read to EOF: the server has closed its end
                 pass
         finally:
@@ -228,7 +252,7 @@ class LauncherTests(unittest.TestCase):
                 ["--build-only", "--build-dir", str(Path(directory) / "build"), "--no-browser"],
                 env=environment,
             )
-            self.assert_friendly_failure(result, 1, "cmake")
+            self.assert_clean_failure(result, 1, "cmake")
             self.assertRegex(result.stderr.lower(), r"install|prerequisite|require|not found")
 
 

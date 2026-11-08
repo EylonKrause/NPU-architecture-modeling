@@ -3,6 +3,7 @@
 
 Entry point for npuperf.mobile_suite (also: python -m npuperf.mobile_suite).
 """
+
 import sys
 from pathlib import Path
 

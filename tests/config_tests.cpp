@@ -103,16 +103,40 @@ void check_option_table() {
             require(last - first + 1 == count, "group rows are contiguous: " + group);
         }
     }
-    // Every flag the simulator accepted before the option table still works.
-    for (const auto* legacy : {"--m", "--n", "--k", "--tile-m", "--tile-n", "--tile-k",
-             "--weight-bits", "--weight-encoding", "--palette-bits", "--sparse-block",
-             "--weight-decode-values-per-cycle", "--array-rows", "--array-cols",
-             "--macs-per-cycle", "--memory-bytes-per-cycle", "--memory-latency",
-             "--dma-burst-bytes", "--weight-cache-bytes", "--pipeline-cycles",
-             "--buffer-slots", "--sram-bytes", "--seed", "--frequency-mhz", "--timing",
-             "--input-zero", "--weight-zero", "--output-zero", "--multiplier", "--shift",
-             "--rounding", "--relu", "--trace"})
-        option(legacy);
+    // Each flat flag name that scripts pass resolves to an option-table row.
+    for (const auto* flag : {"--m",
+                             "--n",
+                             "--k",
+                             "--tile-m",
+                             "--tile-n",
+                             "--tile-k",
+                             "--weight-bits",
+                             "--weight-encoding",
+                             "--palette-bits",
+                             "--sparse-block",
+                             "--weight-decode-values-per-cycle",
+                             "--array-rows",
+                             "--array-cols",
+                             "--macs-per-cycle",
+                             "--memory-bytes-per-cycle",
+                             "--memory-latency",
+                             "--dma-burst-bytes",
+                             "--weight-cache-bytes",
+                             "--pipeline-cycles",
+                             "--buffer-slots",
+                             "--sram-bytes",
+                             "--seed",
+                             "--frequency-mhz",
+                             "--timing",
+                             "--input-zero",
+                             "--weight-zero",
+                             "--output-zero",
+                             "--multiplier",
+                             "--shift",
+                             "--rounding",
+                             "--relu",
+                             "--trace"})
+        option(flag);
     require(npu::is_switch(option("--relu")) && npu::is_switch(option("--timing-only")) &&
                 !npu::is_switch(option("--m")) && !npu::is_switch(option("--groups")),
             "switches");
@@ -199,7 +223,8 @@ void check_json_reader() {
     const auto document = npu::parse_json(
         "{\"s\":\"\\u00e9\\ud83d\\ude00\\n\\/\", \"u\":18446744073709551615, "
         "\"big\":18446744073709551616, \"neg\":-1, \"fraction\":1.0, \"e\":2E3, \"huge\":1e999, "
-        "\"tiny\":1e-400, \"t\":true, \"f\":false, \"z\":null, \"list\":[1,[2],{}]}", "test");
+        "\"tiny\":1e-400, \"t\":true, \"f\":false, \"z\":null, \"list\":[1,[2],{}]}",
+        "test");
     require(document.keys.size() == 12 && document.keys[0] == "s" && document.keys[11] == "list",
             "member order is preserved");
     const auto& items = document.items;
@@ -212,8 +237,8 @@ void check_json_reader() {
     require(!items[5].integer && items[5].as_double() == 2000.0, "exponent");
     require(!items[6].as_double(), "overflowing double");
     require(items[7].as_double() && *items[7].as_double() >= 0.0, "underflow rounds toward zero");
-    require(items[8].boolean && !items[9].boolean &&
-                items[10].type == npu::JsonValue::Type::Null, "literals");
+    require(items[8].boolean && !items[9].boolean && items[10].type == npu::JsonValue::Type::Null,
+            "literals");
     require(items[11].items.size() == 3 && items[11].items[1].items[0].as_uint64() == 2U,
             "nested arrays");
     require(items[1].line == 1 && items[1].column > 1, "values carry positions");
@@ -329,8 +354,9 @@ void check_override_order() {
     npu::ConfigBuilder builder;
     const auto& m = option("--m");
     builder.set(m, "4");
-    require(builder.config.shape.m == 4 &&
-                builder.source("shape.m") == npu::OptionSource::CommandLine, "flag sets value");
+    require(
+        builder.config.shape.m == 4 && builder.source("shape.m") == npu::OptionSource::CommandLine,
+        "flag sets value");
     load_text(builder, "{\"shape\":{\"m\":8}}");
     require(builder.config.shape.m == 8 && builder.source("shape.m") == npu::OptionSource::File,
             "a later file replaces an earlier flag");
@@ -398,15 +424,14 @@ void check_command_line_values() {
     require(builder.config.arch.frequency_mhz == -3.0, "decimal values parse");
     builder.set(option("--frequency-mhz"), "2E2");
     require(builder.config.arch.frequency_mhz == 200.0, "exponent form");
-    // The strtod forms the flag took before the option table: a leading '+',
-    // a point with digits on one side only, leading zeros.
+    // --frequency-mhz accepts every strtod decimal form: a leading '+', a point with
+    // digits on one side only, leading zeros.
     const std::pair<const char*, double> decimals[] = {
-        {".5", 0.5}, {"5.", 5.0}, {"+5", 5.0}, {"+.5", 0.5}, {"007", 7.0},
-        {"5.e1", 50.0}, {"-.5E+1", -5.0}, {"1e-3", 0.001}};
+        {".5", 0.5},  {"5.", 5.0},    {"+5", 5.0},      {"+.5", 0.5},
+        {"007", 7.0}, {"5.e1", 50.0}, {"-.5E+1", -5.0}, {"1e-3", 0.001}};
     for (const auto& [text, value] : decimals) {
         builder.set(option("--frequency-mhz"), text);
-        require(builder.config.arch.frequency_mhz == value,
-                "decimal form " + std::string(text));
+        require(builder.config.arch.frequency_mhz == value, "decimal form " + std::string(text));
     }
     builder.set(option("--input-zero"), "-129");
     require(builder.config.quant.input_zero == -129, "range checks belong to validate()");
@@ -432,7 +457,8 @@ void check_command_line_values() {
     builder.set(option("--weight-encoding"), "sparse");
     builder.set(option("--timing"), "cycle");
     require(builder.config.weights.encoding == npu::WeightEncoding::Sparse &&
-                builder.config.sim.timing == npu::TimingMode::Cycle, "enum flags");
+                builder.config.sim.timing == npu::TimingMode::Cycle,
+            "enum flags");
     rejects([&] { npu::parse_uint64("x", "NPU1 header"); },
             "NPU1 header: expected an unsigned 64-bit integer, got 'x'");
 }
@@ -451,16 +477,15 @@ void collect_leaves(const npu::JsonValue& value, const std::string& prefix,
 void check_echo() {
     const auto defaults = npu::parse_json(npu::config_json(npu::Config{}), "echo");
     require(defaults.keys == std::vector<std::string>{"name", "description", "shape", "arch",
-                                                       "mapping", "weights", "quant", "sim"},
+                                                      "mapping", "weights", "quant", "sim"},
             "top-level groups in table order");
-    require(defaults.items[3].keys == std::vector<std::string>{"compute", "memory", "sram_bytes",
-                                                               "weight_cache_bytes",
-                                                               "activation_cache_bytes",
-                                                               "frequency_mhz", "cores"},
+    require(defaults.items[3].keys ==
+                std::vector<std::string>{"compute", "memory", "sram_bytes", "weight_cache_bytes",
+                                         "activation_cache_bytes", "frequency_mhz", "cores"},
             "arch nests compute and memory");
-    require(defaults.items[2].keys.back() == "conv" &&
-                defaults.items[2].items.back().keys.size() == 13,
-            "shape nests the convolution keys last");
+    require(
+        defaults.items[2].keys.back() == "conv" && defaults.items[2].items.back().keys.size() == 13,
+        "shape nests the convolution keys last");
     require(defaults.items[4].keys.back() == "partition" &&
                 defaults.items[4].items.back().text == "auto",
             "mapping ends with the cluster partition, auto by default");
@@ -511,19 +536,18 @@ void check_echo() {
         require(builder.source(entry.path) == npu::OptionSource::File,
                 "echo assigns " + std::string(entry.path));
     const auto& r = builder.config;
-    require(r.shape.seed == (1ULL << 40) && r.shape.groups == 3 &&
-                r.arch.frequency_mhz == c.arch.frequency_mhz &&
-                r.quant.multipliers == c.quant.multipliers && r.quant.shifts == c.quant.shifts &&
-                r.quant.rescale == c.quant.rescale && r.sim.timing_only && r.name == c.name &&
-                r.sim.trace_path == c.sim.trace_path &&
-                r.arch.memory.model == npu::MemoryModel::Axi &&
-                r.arch.memory.dram_bytes_per_cycle == 24 && r.arch.memory.axi.data_bytes == 64 &&
-                r.arch.memory.axi.write_latency == 1000000000 && r.arch.cores == 64 &&
-                r.mapping.partition == npu::Partition::M &&
-                r.shape.conv.input_c == 6 && r.shape.conv.dilation_h == 2 &&
-                r.shape.conv.pad_right == 1 && r.arch.compute.depthwise_macs_per_cycle == 48 &&
-                r.arch.activation_cache_bytes == 777,
-            "echoed values are exact");
+    require(
+        r.shape.seed == (1ULL << 40) && r.shape.groups == 3 &&
+            r.arch.frequency_mhz == c.arch.frequency_mhz &&
+            r.quant.multipliers == c.quant.multipliers && r.quant.shifts == c.quant.shifts &&
+            r.quant.rescale == c.quant.rescale && r.sim.timing_only && r.name == c.name &&
+            r.sim.trace_path == c.sim.trace_path && r.arch.memory.model == npu::MemoryModel::Axi &&
+            r.arch.memory.dram_bytes_per_cycle == 24 && r.arch.memory.axi.data_bytes == 64 &&
+            r.arch.memory.axi.write_latency == 1000000000 && r.arch.cores == 64 &&
+            r.mapping.partition == npu::Partition::M && r.shape.conv.input_c == 6 &&
+            r.shape.conv.dilation_h == 2 && r.shape.conv.pad_right == 1 &&
+            r.arch.compute.depthwise_macs_per_cycle == 48 && r.arch.activation_cache_bytes == 777,
+        "echoed values are exact");
 }
 
 }  // namespace

@@ -31,10 +31,10 @@ if(NOT NPU_SANITIZERS STREQUAL "")
 endif()
 
 # npu_sanitize_systemc(<target>): the exemptions a fetched SystemC needs, on its own objects
-# only. SystemC invokes process bodies through sc_process_host member-function pointers, which
-# UBSan's vptr check rejects (sc_process.h, reproduced with a one-method module), so every
-# SystemC-driven test would abort in kernel code. Project code keeps the vptr check for its
-# sc_module subclasses and payload casts; the build.ubsan-vptr test holds it to that.
+# only. SystemC invokes process bodies through sc_process_host member-function pointers
+# (sc_process.h), which UBSan's vptr check rejects, so every SystemC-driven test would abort
+# in kernel code. Project code keeps the vptr check for its sc_module subclasses and payload
+# casts; build.ubsan-vptr verifies it.
 function(npu_sanitize_systemc target)
   if("undefined" IN_LIST NPU_SANITIZERS)
     target_compile_options(${target} PRIVATE -fno-sanitize=vptr)

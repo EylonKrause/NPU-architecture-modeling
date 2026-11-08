@@ -1,10 +1,10 @@
 # SoC integration
 
 Three SystemC executables place the NPU model in a system context: a TLM-2.0 coprocessor with a
-register interface and an interrupt, a multicore platform with QoS dispatch, DVFS and power
+register interface and an interrupt, a multi-core platform with QoS dispatch, DVFS and power
 gating, and a transformer decoder engine with a DRAM-resident KV cache. A Python tool adds an
 energy estimate to any `npu-sim` result. Model scope for all four is stated once, in
-[methodology.md](methodology.md#model-fidelity).
+[methodology](methodology.md#model-fidelity).
 
 | Executable | Source | Models | CTest |
 |---|---|---|---|
@@ -204,7 +204,7 @@ sequenceDiagram
     H-xR: write START = 1 returns GENERIC_ERROR
     E->>D: read A, W, bias in transactions of up to 64 B
     H->>D: scratch read 0x5000 waits on the shared DRAM timeline
-    loop four 2x3 output tiles
+    loop output tiles 2x3, 2x2, 1x3 and 1x2
         E->>E: compute, ceil(Mt*Nt*K/4) + 2 cycles per tile
     end
     E->>D: write C 0x3000, accumulators 0x4000
@@ -310,12 +310,12 @@ The engine calls the `npu-sim` kernel (`npu::compute_tile`, `npu::tile_compute_c
 |---|---|
 | GEMM | $C = A W + \mathrm{bias}$, $M = 3$, $N = 5$, $K = 7$ |
 | Tile | 2 x 3 outputs, one reduction panel of 7 |
-| Datapath | Vector mode, 4 MACs per cycle, 2 pipeline cycles per panel |
+| Datapath | Vector datapath, 4 MACs per cycle, 2 pipeline cycles per panel |
 | Requantization | `native`, multiplier 1, shift 4, round half to even, zero points A = -3, W = 2, output = 0 |
 | Outputs | int8 C and int32 accumulators, both stored to DRAM |
 
 Tile cycles are $\lceil M_t N_t K / 4 \rceil + 2$. Requantization is defined in
-[numerics.md](numerics.md).
+[numerics](numerics.md).
 
 ### 1.13 Interface and report
 
@@ -346,7 +346,7 @@ Tile cycles are $\lceil M_t N_t K / 4 \rceil + 2$. Requantization is defined in
 | `jobs[].elapsed_cycles` | 70, 72 | Section 1.9 |
 | `jobs[].output_hash` | | FNV-1a 64 over the accumulators, then the outputs |
 
-## 2 Multicore QoS and DVFS platform
+## 2 Multi-core QoS and DVFS platform
 
 `npu-mobile-demo` runs a stream of independent INT8 GEMM jobs on several NPU cores. It models
 priority dispatch, a shared DRAM channel, per-core weight residency, per-core operating points,
@@ -695,8 +695,9 @@ B_w &= \min\!\left(d \max(d, f)\, b,\ B_{\mathrm{SRAM}} - B_{\mathrm{act}} - B_{
 \end{aligned}
 $$
 
-A configuration is admitted when $B_{\mathrm{act}} + B_{\mathrm{score}} + B_{\mathrm{kv}} + \max(d, f)\,b \le B_{\mathrm{SRAM}}$,
-so the weight buffer holds at least one column. `reserved_sram_bytes` reports the sum of the four
+A configuration is admitted when
+$B_{\mathrm{act}} + B_{\mathrm{score}} + B_{\mathrm{kv}} + \max(d, f)\,b \le B_{\mathrm{SRAM}}$, so
+the weight buffer holds at least one column. `reserved_sram_bytes` reports the sum of the four
 buffers; the defaults reserve 576 + 1024 + 1024 + 1024 = 3648 bytes.
 
 ### 3.6 Timing
@@ -742,7 +743,7 @@ Weight traffic is the same in every row: nine requests, each streaming 3,803,136
 per prompt token falls by a factor of 4.5 as the prompt grows and the weight stream amortizes;
 TPOT grows with the KV cache that each decode token loads.
 
-One decoder layer at the dimensions of Llama 3.2 1B ($d = 2048$, $H = 32$, $H_{kv} = 8$,
+One decoder layer at the dimensions of Llama-3.2-1B ($d = 2048$, $H = 32$, $H_{kv} = 8$,
 $f = 8192$, from `workloads/llama3.2_1b_decode_kv129.json`), 16-token prompt, 8 decode tokens,
 8 MiB SRAM, default rates:
 
@@ -756,10 +757,10 @@ build/release/npu-transformer-demo --dim 2048 --heads 32 --kv-heads 8 --ff-dim 8
 | Prefill, $S = 16$ (TTFT) | 3,806,518 | 15,213,056 | 80,004 | 19,099,578 |
 | Decode, mean of 8 (TPOT) | 3,802,970 | 951,584 | 5,146 | 4,759,700 |
 
-Prefill is tensor-bound (80 % of TTFT) and decode is DMA-bound (80 % of TPOT): both requests stream
-the same 121,643,008 weight bytes, and prefill spends 16 times the projection MACs. TPOT rises by 140 cycles
-per token, from 4,759,210 to 4,760,190: each step loads 2048 more KV bytes (64 DMA cycles) and
-attends over one more key (64 tensor and 12 vector cycles).
+Prefill is tensor-bound (80% of TTFT) and decode is DMA-bound (80% of TPOT): both requests stream
+the same 121,643,008 weight bytes, and prefill spends 16 times the projection MACs. TPOT rises by
+140 cycles per token, from 4,759,210 to 4,760,190: each step loads 2048 more KV bytes (64 DMA
+cycles) and attends over one more key (64 tensor and 12 vector cycles).
 
 Storage precision, same command with `--precision`:
 
@@ -793,7 +794,7 @@ rows are stored in fp32, fp16 or bf16 (`--precision`, default fp16). Dot product
 binary32 with separate multiply and add operations (no FMA contraction). RMSNorm and softmax
 intermediates stay in binary32. Conversions round to nearest, ties to even, in software.
 `--round-f32-bits WORDS` applies the storage rounding to a list of binary32 bit patterns and
-exits. [numerics.md](numerics.md) defines the floating-point path.
+exits. [Numerics](numerics.md) section 5 defines the floating-point path.
 
 Every run replays the workload one row at a time without timing and requires bit-identical
 outputs (`partition_match`); a mismatch exits 2. `tests/transformer_tests.py` checks every output
@@ -819,7 +820,7 @@ against an independent Python oracle that computes full Q, K and V tensors with 
 Two host limits apply. Weights are held in binary32, and $4 L W_\ell$ must not exceed 256 MiB.
 The arithmetic runs twice (three times with `--verify-lifecycle`), and that multiple of
 $L\,(T W_\ell + d\,T(T+1))$ with $T$ = prefill + decode must not exceed $4 \times 10^9$ MACs. At
-Llama 3.2 1B layer dimensions ($W_\ell$ = 60,817,408) these admit one layer and up to 32 tokens.
+Llama-3.2-1B layer dimensions ($W_\ell$ = 60,817,408) these admit one layer and up to 32 tokens.
 
 ### 3.11 Outputs
 
@@ -865,13 +866,14 @@ source counts, the coefficients, and the `scope` lists of `npuperf/energy.py`: i
 ### 4.2 Coefficient provenance
 
 The repository ships no energy coefficients. Every coefficient is an input of the run, every
-report echoes the values it used, and the multicore report sets `silicon_calibrated` to false.
-Both tools follow the action-count method: a count of each event multiplied by a per-event cost,
+report echoes the values it used, and the multi-core platform's report sets
+`silicon_calibrated` to false. Both tools follow the action-count method: a count of each event
+multiplied by a per-event cost,
 as in [Accelergy energy reference tables](https://timeloop.csail.mit.edu/v4/parsing_and_intermediate_files/energy-and-area-reference-tables).
 
 | Coefficient | Flag | Unit | Multiplies | Default | Calibrated from |
 |---|---|---|---|---|---|
-| $e_{\mathrm{MAC}}$ | `--mac-pj` | pJ per MAC at $V_{\mathrm{ref}}$ | Executed MACs | required (energy tool); 0 (multicore) | Gate-level power of the MAC datapath at $V_{\mathrm{ref}}$, divided by MAC count |
+| $e_{\mathrm{MAC}}$ | `--mac-pj` | pJ per MAC at $V_{\mathrm{ref}}$ | Executed MACs | required (energy tool); 0 (multi-core platform) | Gate-level power of the MAC datapath at $V_{\mathrm{ref}}$, divided by MAC count |
 | $e_{\mathrm{byte}}$ | `--dram-byte-pj` | pJ per byte | DRAM bytes read and written | required; 0 | DRAM device and PHY energy per byte of the target memory |
 | $P_{\mathrm{static}}$ | `--static-mw` (energy tool) | mW | Modeled latency | 0 | Leakage of the NPU domain at the run's voltage and temperature |
 | $P_{\mathrm{leak}}$ | `--leakage-mw` | mW | Active ns | 0 | Leakage of a powered core |

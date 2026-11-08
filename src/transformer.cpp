@@ -24,7 +24,7 @@ using Sequence = std::vector<Vector>;
 using U64 = std::uint64_t;
 using namespace sc_core;
 static_assert(sizeof(float) == 4 && std::numeric_limits<float>::is_iec559,
-              "the storage contract requires IEEE-754 binary32");
+              "fp32 storage requires IEEE-754 binary32");
 
 void diagnostic_report(const sc_report& report, const sc_actions& actions) {
     if (actions & SC_DISPLAY) std::cerr << report.what() << '\n';
@@ -47,7 +47,8 @@ float from_bits(std::uint32_t value) {
     return result;
 }
 
-// Integer conversion is independent of the host floating-point rounding mode.
+// Round-half-to-even right shift in integer arithmetic, independent of the
+// host floating-point rounding mode.
 std::uint32_t round_shift(std::uint32_t value, unsigned shift) {
     const auto truncated = value >> shift;
     const auto remainder = value & ((std::uint32_t{1} << shift) - 1U);
@@ -63,7 +64,7 @@ std::uint16_t to_half(float value) {
     const auto fraction = raw & 0x7fffffU;
     if (exponent == 0xffU) {
         return static_cast<std::uint16_t>(sign | 0x7c00U |
-            (fraction ? ((fraction >> 13U) | 0x200U) : 0U));
+                                          (fraction ? ((fraction >> 13U) | 0x200U) : 0U));
     }
     if (exponent == 0) return sign;  // Every binary32 subnormal underflows in binary16.
     const int power = static_cast<int>(exponent) - 127;
@@ -83,14 +84,16 @@ float from_half(std::uint16_t value) {
     const auto sign = static_cast<std::uint32_t>(value & 0x8000U) << 16U;
     const auto exponent = (value >> 10U) & 0x1fU;
     std::uint32_t fraction = value & 0x3ffU;
-    if (exponent == 0x1fU)
-        return from_bits(sign | 0x7f800000U | (fraction << 13U));
+    if (exponent == 0x1fU) return from_bits(sign | 0x7f800000U | (fraction << 13U));
     if (exponent != 0)
         return from_bits(sign | ((static_cast<std::uint32_t>(exponent) + 112U) << 23U) |
                          (fraction << 13U));
     if (fraction == 0) return from_bits(sign);
     int power = -14;
-    while ((fraction & 0x400U) == 0) { fraction <<= 1U; --power; }
+    while ((fraction & 0x400U) == 0) {
+        fraction <<= 1U;
+        --power;
+    }
     return from_bits(sign | (static_cast<std::uint32_t>(power + 127) << 23U) |
                      ((fraction & 0x3ffU) << 13U));
 }
@@ -111,10 +114,20 @@ float store(float value, Precision precision) {
     return value;
 }
 
-// volatile: force separate binary32 mul/add (no FMA contraction) to match the oracle.
-float add(float lhs, float rhs) { volatile float result = lhs + rhs; return result; }
-float mul(float lhs, float rhs) { volatile float result = lhs * rhs; return result; }
-float div32(float lhs, float rhs) { volatile float result = lhs / rhs; return result; }
+// volatile keeps every binary32 multiply and add separate (no FMA contraction),
+// as the Python oracle evaluates them.
+float add(float lhs, float rhs) {
+    volatile float result = lhs + rhs;
+    return result;
+}
+float mul(float lhs, float rhs) {
+    volatile float result = lhs * rhs;
+    return result;
+}
+float div32(float lhs, float rhs) {
+    volatile float result = lhs / rhs;
+    return result;
+}
 
 struct Config {
     unsigned dim = 16, heads = 4, kv_heads = 2, ff_dim = 32, context = 32, layers = 1;
@@ -145,11 +158,12 @@ struct Config {
         return U64{layers} * (tokens * layer_weight_count() + U64{dim} * tokens * (tokens + 1));
     }
     // Live per-row tensors at storage precision, at the peak of each half of a
-    // layer: x, Q, K, V and the normalised input or the attention output during
-    // attention (3d + 2kv); the residual, normalised input, gate and up during
+    // layer: x, Q, K, V and the normalized input or the attention output during
+    // attention (3d + 2kv); the residual, normalized input, gate and up during
     // the FFN (2d + 2ff).
     U64 activation_buffer_bytes() const {
-        const U64 attention = U64{3} * dim + U64{2} * kv_dim(), ffn = U64{2} * dim + U64{2} * ff_dim;
+        const U64 attention = U64{3} * dim + U64{2} * kv_dim(),
+                  ffn = U64{2} * dim + U64{2} * ff_dim;
         return U64{batch_rows()} * storage_bytes() * std::max(attention, ffn);
     }
     // FP32 scores and probabilities of every head for one query row.
@@ -185,17 +199,18 @@ using Stage = std::function<void(Kind, U64, bool)>;
 Vector fixture_input(const Config& c, unsigned position) {
     Vector out(c.dim);
     for (unsigned col = 0; col < c.dim; ++col) {
-        const auto integer = static_cast<int>((U64{position} * 19U + U64{col} * 7U +
-                                               c.seed % 97U) % 37U) - 18;
+        const auto integer =
+            static_cast<int>((U64{position} * 19U + U64{col} * 7U + c.seed % 97U) % 37U) - 18;
         out[col] = store(static_cast<float>(integer) / 16.0F, c.precision);
     }
     return out;
 }
 
 // Fixture weights are integers in -15..15 over 8 * 2^e, where 4^e <= rows < 4^(e+1)
-// and e >= 3: 64 up to 255 rows, then twice as small per factor of four in the
-// reduction depth, so dot products over 2048 or 8192 rows keep fp16 activations
-// finite. Power-of-two divisors keep every weight exact in fp16 and bf16.
+// and e >= 3: the divisor is 64 below 256 rows and doubles per factor of four in
+// the reduction depth, so dot products over 2048 or 8192 rows keep fp16
+// activations finite. Power-of-two divisors keep every weight exact in fp16 and
+// bf16.
 float weight_divisor(unsigned rows) {
     unsigned exponent = 3;
     while ((U64{4} << (2U * exponent)) <= rows) ++exponent;
@@ -207,8 +222,10 @@ Vector weight(const Config& c, unsigned rows, unsigned columns, unsigned matrix)
     const float divisor = weight_divisor(rows);
     for (unsigned row = 0; row < rows; ++row)
         for (unsigned col = 0; col < columns; ++col) {
-            const auto integer = static_cast<int>((U64{row} * 17U + U64{col} * 13U +
-                                                   c.seed % 101U + U64{matrix} * 7U) % 31U) - 15;
+            const auto integer =
+                static_cast<int>(
+                    (U64{row} * 17U + U64{col} * 13U + c.seed % 101U + U64{matrix} * 7U) % 31U) -
+                15;
             out[static_cast<std::size_t>(row) * columns + col] =
                 store(static_cast<float>(integer) / divisor, c.precision);
         }
@@ -232,13 +249,11 @@ public:
     explicit Model(const Config& config) : c(config) {
         for (unsigned l = 0; l < c.layers; ++l) {
             const unsigned base = 7 * l;
-            layers_.push_back({l, weight(c, c.dim, c.dim, base + 1),
-                               weight(c, c.dim, c.kv_dim(), base + 2),
-                               weight(c, c.dim, c.kv_dim(), base + 3),
-                               weight(c, c.dim, c.dim, base + 4),
-                               weight(c, c.dim, c.ff_dim, base + 5),
-                               weight(c, c.dim, c.ff_dim, base + 6),
-                               weight(c, c.ff_dim, c.dim, base + 7)});
+            layers_.push_back(
+                {l, weight(c, c.dim, c.dim, base + 1), weight(c, c.dim, c.kv_dim(), base + 2),
+                 weight(c, c.dim, c.kv_dim(), base + 3), weight(c, c.dim, c.dim, base + 4),
+                 weight(c, c.dim, c.ff_dim, base + 5), weight(c, c.dim, c.ff_dim, base + 6),
+                 weight(c, c.ff_dim, c.dim, base + 7)});
         }
     }
 
@@ -249,7 +264,8 @@ public:
         Sequence x = inputs;
         for (const auto& layer : layers_) x = block(layer, x, cache[layer.index], stage, stats);
         for (const auto& row : x)
-            for (float element : row) require(std::isfinite(element), "non-finite transformer output");
+            for (float element : row)
+                require(std::isfinite(element), "non-finite transformer output");
         return x;
     }
 
@@ -261,8 +277,8 @@ private:
     // weight buffer holds; each panel's DMA precedes its tensor stage. Row-major
     // weights: the output accumulators of one input row advance together over
     // the reduction, each in the order 0..rows-1, whatever the panel split.
-    Sequence dense(const Sequence& inputs, const Vector& weights, unsigned columns, const Stage& stage,
-                   Counters* stats) const {
+    Sequence dense(const Sequence& inputs, const Vector& weights, unsigned columns,
+                   const Stage& stage, Counters* stats) const {
         const auto depth = inputs.front().size();
         const auto column_bytes = static_cast<U64>(depth) * c.storage_bytes();
         const auto panel = std::min<U64>(columns, c.weight_buffer_bytes() / column_bytes);
@@ -284,7 +300,8 @@ private:
                     sums[col] = add(sums[col], mul(input[row], line[col]));
             }
             Vector result(columns);
-            for (unsigned col = 0; col < columns; ++col) result[col] = store(sums[col], c.precision);
+            for (unsigned col = 0; col < columns; ++col)
+                result[col] = store(sums[col], c.precision);
             out.push_back(std::move(result));
         }
         return out;
@@ -297,7 +314,8 @@ private:
         stage(Kind::vector, static_cast<U64>(inputs.size()) * (U64{5} * c.dim + 2U), false);
         Vector gamma(c.dim);
         for (unsigned col = 0; col < c.dim; ++col) {
-            const auto integer = static_cast<int>((U64{col} * 3U + c.seed % 101U + U64{norm} * 11U) % 9U) - 4;
+            const auto integer =
+                static_cast<int>((U64{col} * 3U + c.seed % 101U + U64{norm} * 11U) % 9U) - 4;
             gamma[col] = store(1.0F + static_cast<float>(integer) / 32.0F, c.precision);
         }
         Sequence out;
@@ -322,7 +340,8 @@ private:
             const auto position = start + static_cast<unsigned>(r);
             for (unsigned head = 0; head < heads; ++head)
                 for (unsigned pair = 0; pair < c.head_dim(); pair += 2) {
-                    const double angle = static_cast<double>(position) /
+                    const double angle =
+                        static_cast<double>(position) /
                         std::pow(10000.0, static_cast<double>(pair) / c.head_dim());
                     const float cosine = static_cast<float>(std::cos(angle));
                     const float sine = static_cast<float>(std::sin(angle));
@@ -364,7 +383,8 @@ private:
     }
 
     // Causal: the query at position p reads keys and values 0..p only.
-    Sequence attend(const Sequence& query, const KvCache& cache, unsigned start, const Stage& stage) const {
+    Sequence attend(const Sequence& query, const KvCache& cache, unsigned start,
+                    const Stage& stage) const {
         U64 macs = 0, ops = 0;
         for (std::size_t r = 0; r < query.size(); ++r) {
             const U64 visible = start + r + 1;
@@ -373,7 +393,8 @@ private:
         }
         stage(Kind::tensor, macs, false);
         stage(Kind::vector, ops, false);
-        const float scale = div32(1.0F, static_cast<float>(std::sqrt(static_cast<float>(c.head_dim()))));
+        const float scale =
+            div32(1.0F, static_cast<float>(std::sqrt(static_cast<float>(c.head_dim()))));
         Sequence out;
         out.reserve(query.size());
         for (std::size_t r = 0; r < query.size(); ++r) {
@@ -399,8 +420,9 @@ private:
                 for (unsigned d = 0; d < c.head_dim(); ++d) {
                     float accumulated = 0;
                     for (std::size_t past = 0; past < visible; ++past)
-                        accumulated = add(accumulated,
-                                          mul(scores[past], cache.values[past][kv_head * c.head_dim() + d]));
+                        accumulated =
+                            add(accumulated,
+                                mul(scores[past], cache.values[past][kv_head * c.head_dim() + d]));
                     attention[head * c.head_dim() + d] = store(accumulated, c.precision);
                 }
             }
@@ -427,7 +449,8 @@ private:
         stage(Kind::vector, static_cast<U64>(x.size()) * 5U * c.ff_dim, false);
         for (std::size_t r = 0; r < gated.size(); ++r)
             for (unsigned i = 0; i < c.ff_dim; ++i) {
-                const float exponential = static_cast<float>(std::exp(-static_cast<double>(gated[r][i])));
+                const float exponential =
+                    static_cast<float>(std::exp(-static_cast<double>(gated[r][i])));
                 const float silu = div32(gated[r][i], add(1.0F, exponential));
                 gated[r][i] = store(mul(silu, upper[r][i]), c.precision);
             }
@@ -445,7 +468,8 @@ struct Request {
 class Engine final : public sc_module {
 public:
     sc_fifo<Request*> commands{1};
-    sc_signal<unsigned> stage_trace{"stage"}, token_trace{"tokens_completed"}, kv_trace{"kv_tokens"};
+    sc_signal<unsigned> stage_trace{"stage"}, token_trace{"tokens_completed"},
+        kv_trace{"kv_tokens"};
     sc_signal<unsigned> executed_trace{"tokens_executed"};
     sc_signal<bool> busy_trace{"busy"};
     Counters stats;
@@ -467,13 +491,16 @@ private:
     void emit(const char* event, Kind kind) {
         if (!progress_) return;
         *progress_ << "{\"event\":\"" << event << "\",\"stage\":" << static_cast<unsigned>(kind)
-            << ",\"cycles\":" << static_cast<U64>(sc_time_stamp() / sc_time(1, SC_NS))
-            << ",\"tokens_completed\":" << stats.tokens << ",\"tokens_executed\":" << stats.executed_tokens
-            << ",\"kv_tokens\":" << kv_trace.read()
-            << ",\"tensor_macs\":" << stats.tensor_macs << ",\"vector_ops\":" << stats.vector_ops
-            << ",\"dma_read_bytes\":" << stats.dma_read_bytes
-            << ",\"dma_write_bytes\":" << stats.dma_write_bytes << "}\n" << std::flush;
-        if (!*progress_) throw std::runtime_error("could not write progress stream");
+                   << ",\"cycles\":" << static_cast<U64>(sc_time_stamp() / sc_time(1, SC_NS))
+                   << ",\"tokens_completed\":" << stats.tokens
+                   << ",\"tokens_executed\":" << stats.executed_tokens
+                   << ",\"kv_tokens\":" << kv_trace.read()
+                   << ",\"tensor_macs\":" << stats.tensor_macs
+                   << ",\"vector_ops\":" << stats.vector_ops
+                   << ",\"dma_read_bytes\":" << stats.dma_read_bytes
+                   << ",\"dma_write_bytes\":" << stats.dma_write_bytes << "}\n"
+                   << std::flush;
+        if (!*progress_) throw std::runtime_error("cannot write progress stream");
     }
 
     // DMA, tensor and vector stages run back to back; 1 cycle = 1 ns.
@@ -503,7 +530,8 @@ private:
         // Validate the whole request before any timing or cache change.
         require(!request.inputs.empty(), "empty inference request");
         require(request.inputs.size() <= c.context - cached_tokens(), "KV cache capacity exceeded");
-        require(request.inputs.size() <= c.batch_rows(), "request exceeds the SRAM batch reservation");
+        require(request.inputs.size() <= c.batch_rows(),
+                "request exceeds the SRAM batch reservation");
         for (const auto& input : request.inputs) {
             require(input.size() == c.dim, "input width mismatch");
             for (float value : input) require(std::isfinite(value), "non-finite input");
@@ -513,7 +541,9 @@ private:
         busy_trace.write(true);
         try {
             stage(Kind::dma, rows * c.dim * c.storage_bytes(), false);
-            const Stage timed = [this](Kind kind, U64 amount, bool write) { stage(kind, amount, write); };
+            const Stage timed = [this](Kind kind, U64 amount, bool write) {
+                stage(kind, amount, write);
+            };
             Sequence outputs = model_.forward(request.inputs, cache, timed, &stats);
             stats.executed_tokens += rows;
             executed_trace.write(static_cast<unsigned>(stats.executed_tokens));
@@ -522,8 +552,8 @@ private:
             stage(Kind::dma, rows * c.dim * c.storage_bytes(), true);
             request.outputs = std::move(outputs);
         } catch (...) {
-            // The sequence position does not advance: K/V rows written past it
-            // are dead and the next request overwrites them.
+            // The sequence position does not advance: the K/V rows this request
+            // wrote are dropped, and the next request writes those positions.
             for (auto& layer : cache) {
                 layer.keys.resize(committed);
                 layer.values.resize(committed);
@@ -544,22 +574,28 @@ private:
             request->okay = false;
             request->outputs.clear();
             if (request->reset) {
-                for (auto& layer : cache) { layer.keys.clear(); layer.values.clear(); }
-                kv_trace.write(0); ++resets;
+                for (auto& layer : cache) {
+                    layer.keys.clear();
+                    layer.values.clear();
+                }
+                kv_trace.write(0);
+                ++resets;
                 request->okay = true;
             } else {
                 try {
                     execute(*request);
                     request->okay = true;
                 } catch (const std::exception& error) {
-                    request->error = error.what(); ++rejections;
+                    request->error = error.what();
+                    ++rejections;
                 }
                 if (request->okay) {
                     wait(SC_ZERO_TIME);
                     emit("request_commit", Kind::idle);
                 }
             }
-            stage_trace.write(0); busy_trace.write(false);
+            stage_trace.write(0);
+            busy_trace.write(false);
             request->done.notify(SC_ZERO_TIME);
         }
     }
@@ -574,17 +610,23 @@ public:
     bool completed = false, partition_match = false, lifecycle_verified = false;
     std::string failure;
     Driver(sc_module_name name, Engine& engine, const Config& config)
-        : sc_module(name), e(engine), c(config) { SC_THREAD(run); }
+        : sc_module(name), e(engine), c(config) {
+        SC_THREAD(run);
+    }
 
 private:
     Engine& e;
     const Config& c;
-    void submit(Request& request) { e.commands.write(&request); wait(request.done); }
+    void submit(Request& request) {
+        e.commands.write(&request);
+        wait(request.done);
+    }
     U64 now() const { return static_cast<U64>(sc_time_stamp() / sc_time(1, SC_NS)); }
 
     bool cache_equals(const std::vector<KvCache>& other) const {
         for (std::size_t l = 0; l < other.size(); ++l)
-            if (e.cache[l].keys != other[l].keys || e.cache[l].values != other[l].values) return false;
+            if (e.cache[l].keys != other[l].keys || e.cache[l].values != other[l].values)
+                return false;
         return true;
     }
 
@@ -595,16 +637,23 @@ private:
         overflow.inputs.resize(c.context - e.cached_tokens() + 1U, Vector(c.dim, 0));
         submit(overflow);
         require(!overflow.okay && overflow.outputs.empty(), "overflow request was accepted");
-        Request empty; submit(empty);
+        Request empty;
+        submit(empty);
         require(!empty.okay, "empty request was accepted");
-        require(cache_equals(saved) && now() == saved_time, "rejected request changed the cache or time");
-        Request reset; reset.reset = true; submit(reset);
+        require(cache_equals(saved) && now() == saved_time,
+                "rejected request changed the cache or time");
+        Request reset;
+        reset.reset = true;
+        submit(reset);
         require(reset.okay && e.cached_tokens() == 0, "cache reset failed");
         // Width and NaN checks run on an empty cache so the capacity check
         // cannot mask them.
-        Request malformed; malformed.inputs.push_back(Vector(c.dim + 1U, 0)); submit(malformed);
+        Request malformed;
+        malformed.inputs.push_back(Vector(c.dim + 1U, 0));
+        submit(malformed);
         require(!malformed.okay && e.cached_tokens() == 0, "malformed width accepted");
-        Request invalid; invalid.inputs.push_back(Vector(c.dim, std::numeric_limits<float>::quiet_NaN()));
+        Request invalid;
+        invalid.inputs.push_back(Vector(c.dim, std::numeric_limits<float>::quiet_NaN()));
         submit(invalid);
         require(!invalid.okay && e.cached_tokens() == 0, "non-finite input accepted");
         // A finite input that overflows mid-layer fails after doing work: the
@@ -618,11 +667,12 @@ private:
         require(!mixed.okay && mixed.outputs.empty() && e.cached_tokens() == 0,
                 "failed request published output or advanced the cache");
         require(e.stats.tokens == before.tokens && e.stats.requests == before.requests &&
-                e.stats.executed_tokens == before.executed_tokens &&
-                e.token_trace.read() == before.tokens && e.kv_trace.read() == 0,
+                    e.stats.executed_tokens == before.executed_tokens &&
+                    e.token_trace.read() == before.tokens && e.kv_trace.read() == 0,
                 "failed request counted as completed");
-        require(e.stats.dma_read_bytes > before.dma_read_bytes && e.stats.vector_ops > before.vector_ops &&
-                now() > work_start, "failed request lost its work accounting");
+        require(e.stats.dma_read_bytes > before.dma_read_bytes &&
+                    e.stats.vector_ops > before.vector_ops && now() > work_start,
+                "failed request lost its work accounting");
         rejected_work_cycles = now() - work_start;
         // The workload's own partition, rerun on the reset cache, must
         // reproduce the outputs and every layer's cache.
@@ -645,7 +695,9 @@ private:
         Sequence result = std::move(prefill.outputs);
         for (unsigned pos = c.prefill; pos < c.prefill + c.decode; ++pos) {
             begin = now();
-            Request decode; decode.inputs.push_back(fixture_input(c, pos)); submit(decode);
+            Request decode;
+            decode.inputs.push_back(fixture_input(c, pos));
+            submit(decode);
             if (!decode.okay) throw std::runtime_error("decode failed: " + decode.error);
             result.push_back(decode.outputs.front());
             if (latencies) latencies->push_back(now() - begin);
@@ -659,7 +711,8 @@ private:
             outputs = requests(&latencies);
             prefill_cycles = latencies.front();
             decode_token_cycles.assign(latencies.begin() + 1, latencies.end());
-            workload_cycles = now(); decode_cycles = workload_cycles - prefill_cycles;
+            workload_cycles = now();
+            decode_cycles = workload_cycles - prefill_cycles;
             workload = e.stats;
             if (c.lifecycle) lifecycle();
             if (c.inject_fault) {
@@ -679,7 +732,9 @@ private:
                     reference.forward({fixture_input(c, pos)}, cache, untimed, nullptr).front());
             partition_match = expected == outputs;
             completed = true;
-        } catch (const std::exception& error) { failure = error.what(); }
+        } catch (const std::exception& error) {
+            failure = error.what();
+        }
         wait(SC_ZERO_TIME);
         sc_stop();
     }
@@ -689,11 +744,13 @@ U64 parse_unsigned(const std::string& flag, const std::string& text) {
     U64 result = 0;
     const auto parsed = std::from_chars(text.data(), text.data() + text.size(), result);
     if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size())
-        throw std::invalid_argument(flag + ": expected an unsigned decimal integer, got '" + text + "'");
+        throw std::invalid_argument(flag + ": expected an unsigned decimal integer, got '" + text +
+                                    "'");
     return result;
 }
 
-unsigned bounded(const std::string& flag, const std::string& text, unsigned minimum, unsigned maximum) {
+unsigned in_range(const std::string& flag, const std::string& text, unsigned minimum,
+                  unsigned maximum) {
     const auto value = parse_unsigned(flag, text);
     if (value < minimum || value > maximum)
         throw std::invalid_argument(flag + ": must be " + std::to_string(minimum) + ".." +
@@ -723,7 +780,8 @@ void rounding_probe(std::string text, Precision precision) {
     const auto last = text.find_last_not_of(" \t\r\n");
     text = first == std::string::npos ? std::string() : text.substr(first, last - first + 1);
     if (text.empty() || text.size() > probe_words * 11U)
-        throw std::invalid_argument("--round-f32-bits: expected 1..65536 comma-separated binary32 words");
+        throw std::invalid_argument(
+            "--round-f32-bits: expected 1..65536 comma-separated binary32 words");
     std::vector<std::uint32_t> words;
     std::size_t start = 0;
     do {
@@ -746,13 +804,15 @@ void rounding_probe(std::string text, Precision precision) {
     std::cout << "]}\n";
 }
 
-constexpr unsigned max_dim = 2048, max_ff = 8192, max_heads = 64, max_layers = 16, max_tokens = 4096;
-constexpr U64 max_weight_bytes = U64{256} << 20U;   // host binary32 copy of every weight
-constexpr U64 max_host_macs = 4000000000ULL;        // functional MACs, all passes
+constexpr unsigned max_dim = 2048, max_ff = 8192, max_heads = 64, max_layers = 16,
+                   max_tokens = 4096;
+constexpr U64 max_weight_bytes = U64{256} << 20U;  // host binary32 copy of every weight
+constexpr U64 max_host_macs = 4000000000ULL;       // functional MACs, all passes
 
 constexpr const char* usage =
     "Usage: npu-transformer-demo [--dim 2..2048] [--heads 1..64] [--kv-heads 1..64]\n"
-    " [--ff-dim 1..8192] [--layers 1..16] [--context 1..4096] [--prefill 1..4096] [--decode 0..4096]\n"
+    " [--ff-dim 1..8192] [--layers 1..16] [--context 1..4096] [--prefill 1..4096] [--decode "
+    "0..4096]\n"
     " [--precision fp32|fp16|bf16] [--seed UINT32] [--dump-output] [--verify-lifecycle]\n"
     " [--tensor-macs-per-cycle 1..4096] [--vector-ops-per-cycle 1..4096]\n"
     " [--dma-bytes-per-cycle 1..4096] [--dma-startup 0..1000] [--sram-bytes 1..67108864]\n"
@@ -768,43 +828,70 @@ constexpr const char* usage =
 int sc_main(int argc, char* argv[]) {
     try {
         for (int i = 1; i < argc; ++i)
-            if (std::string(argv[i]) == "--help") { std::cout << usage; return 0; }
+            if (std::string(argv[i]) == "--help") {
+                std::cout << usage;
+                return 0;
+            }
         Config c;
         std::string probe;
         bool probing = false;
         for (int i = 1; i < argc; ++i) {
             const std::string flag(argv[i]);
-            if (flag == "--dump-output") { c.dump = true; continue; }
-            if (flag == "--verify-lifecycle") { c.lifecycle = true; continue; }
-            static const char* const valued[] = {
-                "--dim", "--heads", "--kv-heads", "--ff-dim", "--layers", "--context", "--prefill",
-                "--decode", "--seed", "--tensor-macs-per-cycle", "--vector-ops-per-cycle",
-                "--dma-bytes-per-cycle", "--dma-startup", "--sram-bytes", "--vcd", "--progress-jsonl",
-                "--round-f32-bits", "--precision", "--inject-output-fault"};
+            if (flag == "--dump-output") {
+                c.dump = true;
+                continue;
+            }
+            if (flag == "--verify-lifecycle") {
+                c.lifecycle = true;
+                continue;
+            }
+            static const char* const valued[] = {"--dim",
+                                                 "--heads",
+                                                 "--kv-heads",
+                                                 "--ff-dim",
+                                                 "--layers",
+                                                 "--context",
+                                                 "--prefill",
+                                                 "--decode",
+                                                 "--seed",
+                                                 "--tensor-macs-per-cycle",
+                                                 "--vector-ops-per-cycle",
+                                                 "--dma-bytes-per-cycle",
+                                                 "--dma-startup",
+                                                 "--sram-bytes",
+                                                 "--vcd",
+                                                 "--progress-jsonl",
+                                                 "--round-f32-bits",
+                                                 "--precision",
+                                                 "--inject-output-fault"};
             if (std::find(std::begin(valued), std::end(valued), flag) == std::end(valued))
                 throw std::invalid_argument("unknown argument: " + flag);
             if (i + 1 == argc) throw std::invalid_argument(flag + ": missing value");
             const std::string value(argv[++i]);
-            if (flag == "--dim") c.dim = bounded(flag, value, 2, max_dim);
-            else if (flag == "--heads") c.heads = bounded(flag, value, 1, max_heads);
-            else if (flag == "--kv-heads") c.kv_heads = bounded(flag, value, 1, max_heads);
-            else if (flag == "--ff-dim") c.ff_dim = bounded(flag, value, 1, max_ff);
-            else if (flag == "--layers") c.layers = bounded(flag, value, 1, max_layers);
-            else if (flag == "--context") c.context = bounded(flag, value, 1, max_tokens);
-            else if (flag == "--prefill") c.prefill = bounded(flag, value, 1, max_tokens);
-            else if (flag == "--decode") c.decode = bounded(flag, value, 0, max_tokens);
-            else if (flag == "--seed") c.seed = bounded(flag, value, 0, std::numeric_limits<unsigned>::max());
-            else if (flag == "--tensor-macs-per-cycle") c.tensor_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--vector-ops-per-cycle") c.vector_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--dma-bytes-per-cycle") c.dma_rate = bounded(flag, value, 1, 4096);
-            else if (flag == "--dma-startup") c.dma_startup = bounded(flag, value, 0, 1000);
-            else if (flag == "--sram-bytes") c.sram_bytes = bounded(flag, value, 1, 67108864);
+            if (flag == "--dim") c.dim = in_range(flag, value, 2, max_dim);
+            else if (flag == "--heads") c.heads = in_range(flag, value, 1, max_heads);
+            else if (flag == "--kv-heads") c.kv_heads = in_range(flag, value, 1, max_heads);
+            else if (flag == "--ff-dim") c.ff_dim = in_range(flag, value, 1, max_ff);
+            else if (flag == "--layers") c.layers = in_range(flag, value, 1, max_layers);
+            else if (flag == "--context") c.context = in_range(flag, value, 1, max_tokens);
+            else if (flag == "--prefill") c.prefill = in_range(flag, value, 1, max_tokens);
+            else if (flag == "--decode") c.decode = in_range(flag, value, 0, max_tokens);
+            else if (flag == "--seed")
+                c.seed = in_range(flag, value, 0, std::numeric_limits<unsigned>::max());
+            else if (flag == "--tensor-macs-per-cycle")
+                c.tensor_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--vector-ops-per-cycle")
+                c.vector_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--dma-bytes-per-cycle") c.dma_rate = in_range(flag, value, 1, 4096);
+            else if (flag == "--dma-startup") c.dma_startup = in_range(flag, value, 0, 1000);
+            else if (flag == "--sram-bytes") c.sram_bytes = in_range(flag, value, 1, 67108864);
             else if (flag == "--inject-output-fault") {
-                c.fault_row = bounded(flag, value, 0, max_tokens);
+                c.fault_row = in_range(flag, value, 0, max_tokens);
                 c.inject_fault = true;
-            }
-            else if (flag == "--vcd") { require(!value.empty(), "--vcd: empty basename"); c.vcd = value; }
-            else if (flag == "--progress-jsonl") {
+            } else if (flag == "--vcd") {
+                require(!value.empty(), "--vcd: empty basename");
+                c.vcd = value;
+            } else if (flag == "--progress-jsonl") {
                 require(!value.empty(), "--progress-jsonl: empty path");
                 c.progress = value;
             } else if (flag == "--round-f32-bits") {
@@ -816,7 +903,9 @@ int sc_main(int argc, char* argv[]) {
                 if (value == "fp32") c.precision = Precision::fp32;
                 else if (value == "fp16") c.precision = Precision::fp16;
                 else if (value == "bf16") c.precision = Precision::bf16;
-                else throw std::invalid_argument("--precision: must be fp32, fp16 or bf16, got " + value);
+                else
+                    throw std::invalid_argument("--precision: must be fp32, fp16 or bf16, got " +
+                                                value);
             }
         }
         if (probing) {
@@ -836,13 +925,15 @@ int sc_main(int argc, char* argv[]) {
         require(U64{4} * c.layers * c.layer_weight_count() <= max_weight_bytes,
                 "weights exceed the 256 MiB host limit (--layers, --dim, --ff-dim)");
         require((c.lifecycle ? 3U : 2U) * c.workload_macs() <= max_host_macs,
-                "functional work exceeds 4e9 host MACs (--layers, --dim, --ff-dim, --prefill, --decode)");
+                "functional work exceeds 4e9 host MACs (--layers, --dim, --ff-dim, --prefill, "
+                "--decode)");
         require(c.fixed_sram_bytes() + c.weight_column_bytes() <= c.sram_bytes,
                 "--sram-bytes cannot hold the batch activations, attention scores, one layer's K/V "
                 "and one weight column");
         // SystemC appends .vcd: strip a user suffix, and refuse a VCD path that
         // aliases the progress file (including through links).
-        if (!c.vcd.empty() && c.vcd.size() > 4U && c.vcd.compare(c.vcd.size() - 4U, 4U, ".vcd") == 0)
+        if (!c.vcd.empty() && c.vcd.size() > 4U &&
+            c.vcd.compare(c.vcd.size() - 4U, 4U, ".vcd") == 0)
             c.vcd.resize(c.vcd.size() - 4U);
         if (!c.vcd.empty() && !c.progress.empty())
             require(!npu::same_file_path(c.vcd + ".vcd", c.progress),
@@ -875,49 +966,58 @@ int sc_main(int argc, char* argv[]) {
         sc_start();
         if (trace) sc_close_vcd_trace_file(trace);
         if (!driver.failure.empty()) throw std::runtime_error(driver.failure);
-        require(driver.completed, "simulation watchdog expired");
+        require(driver.completed, "simulation stopped before the driver completed");
         const auto& s = driver.workload;
-        const U64 live_bytes = U64{2} * c.layers * (c.prefill + c.decode) * c.kv_dim() * c.storage_bytes();
+        const U64 live_bytes =
+            U64{2} * c.layers * (c.prefill + c.decode) * c.kv_dim() * c.storage_bytes();
         const auto decoded = driver.decode_token_cycles.size();
-        const auto tpot_mean = decoded == 0 ? 0.0
-            : static_cast<double>(driver.decode_cycles) / static_cast<double>(decoded);
+        const auto tpot_mean =
+            decoded == 0 ? 0.0 :
+                           static_cast<double>(driver.decode_cycles) / static_cast<double>(decoded);
         std::cout << std::setprecision(std::numeric_limits<float>::max_digits10)
-            << "{\"schema_version\":1,\"model\":\"systemc-mobile-transformer-block\",\"precision\":\""
-            << c.precision_name << "\",\"seed\":" << c.seed << ",\"dim\":" << c.dim
-            << ",\"heads\":" << c.heads << ",\"kv_heads\":" << c.kv_heads << ",\"ff_dim\":" << c.ff_dim
-            << ",\"layers\":" << c.layers << ",\"context_capacity\":" << c.context
-            << ",\"prefill_tokens\":" << c.prefill
-            << ",\"decode_tokens\":" << c.decode << ",\"tokens_completed\":" << s.tokens
-            << ",\"tokens_executed\":" << s.executed_tokens
-            << ",\"requests_completed\":" << s.requests
-            << ",\"partition_match\":" << (driver.partition_match ? "true" : "false")
-            << ",\"lifecycle_verified\":" << (driver.lifecycle_verified ? "true" : "false")
-            << ",\"rejected_work_cycles\":" << driver.rejected_work_cycles
-            << ",\"cache_resets\":" << engine.resets << ",\"rejected_requests\":" << engine.rejections
-            << ",\"workload_cycles\":" << driver.workload_cycles
-            << ",\"prefill_cycles\":" << driver.prefill_cycles
-            << ",\"decode_cycles\":" << driver.decode_cycles
-            << ",\"ttft_cycles\":" << driver.prefill_cycles << ",\"tpot_cycles\":[";
+                  << "{\"schema_version\":1,\"model\":\"systemc-mobile-transformer-block\","
+                     "\"precision\":\""
+                  << c.precision_name << "\",\"seed\":" << c.seed << ",\"dim\":" << c.dim
+                  << ",\"heads\":" << c.heads << ",\"kv_heads\":" << c.kv_heads
+                  << ",\"ff_dim\":" << c.ff_dim << ",\"layers\":" << c.layers
+                  << ",\"context_capacity\":" << c.context << ",\"prefill_tokens\":" << c.prefill
+                  << ",\"decode_tokens\":" << c.decode << ",\"tokens_completed\":" << s.tokens
+                  << ",\"tokens_executed\":" << s.executed_tokens
+                  << ",\"requests_completed\":" << s.requests
+                  << ",\"partition_match\":" << (driver.partition_match ? "true" : "false")
+                  << ",\"lifecycle_verified\":" << (driver.lifecycle_verified ? "true" : "false")
+                  << ",\"rejected_work_cycles\":" << driver.rejected_work_cycles
+                  << ",\"cache_resets\":" << engine.resets
+                  << ",\"rejected_requests\":" << engine.rejections
+                  << ",\"workload_cycles\":" << driver.workload_cycles
+                  << ",\"prefill_cycles\":" << driver.prefill_cycles
+                  << ",\"decode_cycles\":" << driver.decode_cycles
+                  << ",\"ttft_cycles\":" << driver.prefill_cycles << ",\"tpot_cycles\":[";
         for (std::size_t i = 0; i < driver.decode_token_cycles.size(); ++i)
             std::cout << (i ? "," : "") << driver.decode_token_cycles[i];
-        std::cout << "],\"tpot_mean_cycles\":" << tpot_mean
-            << ",\"simulation_cycles\":" << static_cast<U64>(sc_time_stamp() / sc_time(1, SC_NS))
-            << ",\"tensor_macs\":" << s.tensor_macs << ",\"tensor_cycles\":" << s.tensor_cycles
-            << ",\"vector_ops\":" << s.vector_ops << ",\"vector_cycles\":" << s.vector_cycles
-            << ",\"dma_cycles\":" << s.dma_cycles << ",\"dma_transactions\":" << s.dma_transactions
-            << ",\"dma_read_bytes\":" << s.dma_read_bytes << ",\"dma_write_bytes\":" << s.dma_write_bytes
-            << ",\"weight_read_bytes\":" << s.weight_read_bytes
-            << ",\"kv_dram_read_bytes\":" << s.kv_dram_read_bytes
-            << ",\"kv_dram_write_bytes\":" << s.kv_dram_write_bytes
-            << ",\"kv_live_bytes\":" << live_bytes
-            << ",\"kv_dram_capacity_bytes\":" << c.kv_dram_capacity_bytes()
-            << ",\"activation_buffer_bytes\":" << c.activation_buffer_bytes()
-            << ",\"score_buffer_bytes\":" << c.score_buffer_bytes()
-            << ",\"kv_buffer_bytes\":" << c.kv_buffer_bytes()
-            << ",\"weight_buffer_bytes\":" << c.weight_buffer_bytes()
-            << ",\"reserved_sram_bytes\":" << c.required_sram()
-            << ",\"sram_budget_bytes\":" << c.sram_bytes;
-        if (c.dump) { std::cout << ",\"outputs\":"; print_sequence(driver.outputs); }
+        std::cout << "],\"tpot_mean_cycles\":" << tpot_mean << ",\"simulation_cycles\":"
+                  << static_cast<U64>(sc_time_stamp() / sc_time(1, SC_NS))
+                  << ",\"tensor_macs\":" << s.tensor_macs
+                  << ",\"tensor_cycles\":" << s.tensor_cycles << ",\"vector_ops\":" << s.vector_ops
+                  << ",\"vector_cycles\":" << s.vector_cycles << ",\"dma_cycles\":" << s.dma_cycles
+                  << ",\"dma_transactions\":" << s.dma_transactions
+                  << ",\"dma_read_bytes\":" << s.dma_read_bytes
+                  << ",\"dma_write_bytes\":" << s.dma_write_bytes
+                  << ",\"weight_read_bytes\":" << s.weight_read_bytes
+                  << ",\"kv_dram_read_bytes\":" << s.kv_dram_read_bytes
+                  << ",\"kv_dram_write_bytes\":" << s.kv_dram_write_bytes
+                  << ",\"kv_live_bytes\":" << live_bytes
+                  << ",\"kv_dram_capacity_bytes\":" << c.kv_dram_capacity_bytes()
+                  << ",\"activation_buffer_bytes\":" << c.activation_buffer_bytes()
+                  << ",\"score_buffer_bytes\":" << c.score_buffer_bytes()
+                  << ",\"kv_buffer_bytes\":" << c.kv_buffer_bytes()
+                  << ",\"weight_buffer_bytes\":" << c.weight_buffer_bytes()
+                  << ",\"reserved_sram_bytes\":" << c.required_sram()
+                  << ",\"sram_budget_bytes\":" << c.sram_bytes;
+        if (c.dump) {
+            std::cout << ",\"outputs\":";
+            print_sequence(driver.outputs);
+        }
         std::cout << "}\n";
         require(driver.partition_match, "batched and one-row execution disagree");
         return 0;

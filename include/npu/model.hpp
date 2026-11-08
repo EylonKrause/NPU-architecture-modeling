@@ -2,11 +2,11 @@
 
 #include "npu/core.hpp"
 #include "npu/memory.hpp"
-#include <systemc>
 #include <array>
 #include <memory>
 #include <ostream>
 #include <string>
+#include <systemc>
 #include <vector>
 
 namespace npu {
@@ -59,8 +59,8 @@ struct PipelineView {
 // The cluster, then each core. Cluster counters add the cores' and its memory
 // combines their ports; cycles is the makespan once every core completes;
 // peak_inflight_tiles and the peak cached weight and activation bytes are the
-// largest core's, as slots and caches are per core; resource identifiers come from the
-// lowest-numbered busy core, else core 0. Tile ids are global.
+// largest core's, as slots and caches are per core; resource identifiers come
+// from the lowest-numbered busy core, else core 0. Tile ids are global.
 struct LiveSnapshot : PipelineView {
     std::vector<PipelineView> cores;
 };
@@ -75,8 +75,7 @@ class Core;
 // transfer is in flight releases it with the module.
 class Accelerator final : public sc_core::sc_module {
 public:
-    Accelerator(sc_core::sc_module_name name, const Config& config,
-                const Problem& problem);
+    Accelerator(sc_core::sc_module_name name, const Config& config, const Problem& problem);
     ~Accelerator() override;
     const Output& output() const { return output_; }
     const ClusterPlan& plan() const { return plan_; }

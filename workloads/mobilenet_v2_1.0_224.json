@@ -14,7 +14,7 @@
   "https://github.com/keras-team/keras/blob/master/keras/src/applications/mobilenet_v2.py",
   "https://docs.pytorch.org/vision/main/models/generated/torchvision.models.mobilenet_v2.html"
  ],
- "notes": "alpha=1.0, 224x224x3, batch 1. Table 2 (t,c,n,s): (1,16,1,1) (6,24,2,2) (6,32,3,2) (6,64,4,2) (6,96,3,1) (6,160,3,2) (6,320,1,1). The first block (t=1) has no expansion conv. Stride applies to the first block of each sequence, in the 3x3 depthwise. Expansion t multiplies the block INPUT channels. BN folded into bias; ReLU6 after expand and depthwise, linear after project. Residual add when stride 1 and in_c == out_c (10 adds).",
+ "notes": "alpha=1.0, 224x224x3, batch 1. Table 2 (t,c,n,s): (1,16,1,1) (6,24,2,2) (6,32,3,2) (6,64,4,2) (6,96,3,1) (6,160,3,2) (6,320,1,1). The first block (t=1) has no expansion conv. Stride applies to the first block of each sequence, in the 3x3 depthwise. Expansion t multiplies the block input channels. BN folded into bias; ReLU6 after expand and depthwise, linear after project. Residual add when stride 1 and in_c == out_c (10 adds).",
  "layers": [
   {
    "name": "Conv1",

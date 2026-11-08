@@ -1,20 +1,20 @@
 #!/usr/bin/env python3
-"""Black-box checks of real SystemC signal traces and passive instrumentation.
+"""npu-sim --vcd: signal set and widths, final counters equal to the untraced run's result,
+monotonic counters, and occupancy within the slot and panel-buffer limits.
 
-The VCD reader uses only the standard library. Expected final counters come
-from a separate untraced simulator invocation; arithmetic/timing oracles are
-covered by the existing integration and architecture-contract suites.
+The VCD reader uses only the standard library. Arithmetic and timing oracles live in
+integration.py and architecture_tests.py.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import subprocess
 import tempfile
 import unittest
+from pathlib import Path
 
 BINARY: Path
 
@@ -27,7 +27,9 @@ def read_vcd(path: Path) -> tuple[dict[str, list[tuple[int, int]]], dict[str, in
     timestamp = 0
     for line in path.read_text().splitlines():
         line = line.strip()
-        declaration = re.fullmatch(r"\$var\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)(?:\s+\[.*\])?\s+\$end", line)
+        declaration = re.fullmatch(
+            r"\$var\s+\S+\s+(\d+)\s+(\S+)\s+(\S+)(?:\s+\[.*\])?\s+\$end", line
+        )
         if declaration:
             width, identifier, name = declaration.groups()
             if name in values:
@@ -60,12 +62,13 @@ def states(changes: dict[str, list[tuple[int, int]]], names: set[str]):
 
 class SystemCObservability(unittest.TestCase):
     def run_simulator(self, arguments: list[str]) -> dict:
-        process = subprocess.run([str(BINARY), *arguments], capture_output=True,
-                                 text=True, timeout=30)
+        process = subprocess.run(
+            [str(BINARY), *arguments], capture_output=True, text=True, timeout=30
+        )
         self.assertEqual(process.returncode, 0, process.stderr)
         self.assertNotIn("NPU/invariant", process.stderr)
         self.assertNotIn("multiple drivers", process.stderr)
-        # Waveform setup messages must not corrupt the single result object.
+        # VCD setup messages must leave stdout as one JSON object.
         result = json.loads(process.stdout)
         self.assertTrue(result["numerical_match"])
         return result
@@ -78,25 +81,55 @@ class SystemCObservability(unittest.TestCase):
         self.assertIn("$timescale", text)
         changes, widths = read_vcd(path)
         required = {
-            "done", "dma_busy", "compute_busy", "dma_read", "cycles",
-            "inflight_tiles", "loaded_tiles", "computed_tiles",
-            "read_queue_depth", "write_queue_depth", "read_bytes", "write_bytes",
-            "macs", "dma_tile_id", "dma_block_id", "compute_tile_id",
-            "compute_block_id", "dma_busy_cycles", "compute_busy_cycles",
-            "dma_requests", "dma_bursts",
-            "executed_macs", "skipped_macs", "weight_decode_cycles",
+            "done",
+            "dma_busy",
+            "compute_busy",
+            "dma_read",
+            "cycles",
+            "inflight_tiles",
+            "loaded_tiles",
+            "computed_tiles",
+            "read_queue_depth",
+            "write_queue_depth",
+            "read_bytes",
+            "write_bytes",
+            "macs",
+            "dma_tile_id",
+            "dma_block_id",
+            "compute_tile_id",
+            "compute_block_id",
+            "dma_busy_cycles",
+            "compute_busy_cycles",
+            "dma_requests",
+            "dma_bursts",
+            "executed_macs",
+            "skipped_macs",
+            "weight_decode_cycles",
         }
         self.assertTrue(required <= changes.keys(), required - changes.keys())
         for name in required:
             self.assertTrue(changes[name], name)
             expected_width = 1 if name in {"done", "dma_busy", "compute_busy", "dma_read"} else 64
             self.assertEqual(widths[name], expected_width, name)
-        for name in {"cycles", "read_bytes", "write_bytes", "macs",
-                     "dma_busy_cycles", "compute_busy_cycles", "dma_requests", "dma_bursts",
-                     "executed_macs", "skipped_macs", "weight_decode_cycles"}:
+        for name in {
+            "cycles",
+            "read_bytes",
+            "write_bytes",
+            "macs",
+            "dma_busy_cycles",
+            "compute_busy_cycles",
+            "dma_requests",
+            "dma_bursts",
+            "executed_macs",
+            "skipped_macs",
+            "weight_decode_cycles",
+        }:
             self.assertEqual(changes[name][-1][1], result[name], name)
-            self.assertEqual([value for _, value in changes[name]],
-                             sorted(value for _, value in changes[name]), name)
+            self.assertEqual(
+                [value for _, value in changes[name]],
+                sorted(value for _, value in changes[name]),
+                name,
+            )
         self.assertEqual(changes["done"][-1][1], 1)
         self.assertEqual(changes["inflight_tiles"][-1][1], 0)
         for name in {"dma_busy", "compute_busy"}:
@@ -106,17 +139,36 @@ class SystemCObservability(unittest.TestCase):
         for name in {"inflight_tiles", "computed_tiles"}:
             self.assertTrue(all(0 <= value <= slots for _, value in changes[name]), name)
         # Loaded panels waiting for compute each hold a panel buffer.
-        self.assertTrue(all(0 <= value <= slots * panel_buffers
-                            for _, value in changes["loaded_tiles"]))
-        self.assertEqual(max(value for _, value in changes["inflight_tiles"]),
-                         result["peak_inflight_tiles"])
+        self.assertTrue(
+            all(0 <= value <= slots * panel_buffers for _, value in changes["loaded_tiles"])
+        )
+        self.assertEqual(
+            max(value for _, value in changes["inflight_tiles"]), result["peak_inflight_tiles"]
+        )
         return changes
 
-    def test_event_waveform_is_passive_and_contains_real_activity(self):
-        arguments = ["--m", "4", "--n", "5", "--k", "7", "--tile-m", "2",
-                     "--tile-n", "3", "--tile-k", "3", "--buffer-slots", "2",
-                     "--dma-burst-bytes", "5", "--weight-cache-bytes", "256",
-                     "--dump-output"]
+    def test_event_waveform_leaves_the_result_unchanged_and_records_activity(self):
+        arguments = [
+            "--m",
+            "4",
+            "--n",
+            "5",
+            "--k",
+            "7",
+            "--tile-m",
+            "2",
+            "--tile-n",
+            "3",
+            "--tile-k",
+            "3",
+            "--buffer-slots",
+            "2",
+            "--dma-burst-bytes",
+            "5",
+            "--weight-cache-bytes",
+            "256",
+            "--dump-output",
+        ]
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "accelerator.vcd"
             baseline = self.run_simulator(arguments)
@@ -130,10 +182,29 @@ class SystemCObservability(unittest.TestCase):
             self.assertEqual(max(value for _, value in changes["compute_block_id"]), 2)
 
     def test_cycle_and_event_waveforms_have_same_architecture_result(self):
-        arguments = ["--m", "3", "--n", "5", "--k", "5", "--tile-m", "1",
-                     "--tile-n", "3", "--tile-k", "2", "--buffer-slots", "1",
-                     "--array-rows", "2", "--array-cols", "2", "--weight-bits", "4",
-                     "--dump-output"]
+        arguments = [
+            "--m",
+            "3",
+            "--n",
+            "5",
+            "--k",
+            "5",
+            "--tile-m",
+            "1",
+            "--tile-n",
+            "3",
+            "--tile-k",
+            "2",
+            "--buffer-slots",
+            "1",
+            "--array-rows",
+            "2",
+            "--array-cols",
+            "2",
+            "--weight-bits",
+            "4",
+            "--dump-output",
+        ]
         results = []
         with tempfile.TemporaryDirectory() as directory:
             for timing in ("event", "cycle"):
@@ -145,18 +216,39 @@ class SystemCObservability(unittest.TestCase):
             if key not in {"simulation_wall_seconds", "config"}:
                 self.assertEqual(results[0][key], results[1][key], key)
 
-    def test_compressed_waveforms_match_real_decoder_and_skipped_work(self):
+    def test_compressed_waveforms_record_decoder_and_skipped_work(self):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "weights.npu"
-            source.write_text("NPU1 2 3 4\n1 2 3 4 5 6 7 8\n"
-                              "0 0 0 1 0 0 0 0 0 1 -1 0\n0 0 0\n", encoding="ascii")
+            source.write_text(
+                "NPU1 2 3 4\n1 2 3 4 5 6 7 8\n0 0 0 1 0 0 0 0 0 1 -1 0\n0 0 0\n", encoding="ascii"
+            )
             for codec in ("palette", "sparse"):
                 with self.subTest(codec=codec):
                     path = Path(directory) / (codec + ".vcd")
-                    result = self.run_simulator(["--input", str(source), "--tile-m", "1",
-                        "--tile-n", "2", "--tile-k", "2", "--input-zero", "0",
-                        "--weight-zero", "0", "--weight-encoding", codec, "--palette-bits", "2",
-                        "--sparse-block", "2", "--vcd", str(path)])
+                    result = self.run_simulator(
+                        [
+                            "--input",
+                            str(source),
+                            "--tile-m",
+                            "1",
+                            "--tile-n",
+                            "2",
+                            "--tile-k",
+                            "2",
+                            "--input-zero",
+                            "0",
+                            "--weight-zero",
+                            "0",
+                            "--weight-encoding",
+                            codec,
+                            "--palette-bits",
+                            "2",
+                            "--sparse-block",
+                            "2",
+                            "--vcd",
+                            str(path),
+                        ]
+                    )
                     self.verify_waveform(path, result, 2, 2)
                     self.assertGreater(result["weight_decode_cycles"], 0)
                     self.assertEqual(result["executed_macs"] + result["skipped_macs"], 24)
@@ -166,20 +258,48 @@ class SystemCObservability(unittest.TestCase):
     def test_waveform_shows_panel_prefetch_under_compute(self):
         # One slot: any load during a compute belongs to the same tile, so it
         # can only be the next panel going into the second panel buffer.
-        arguments = ["--m", "4", "--n", "4", "--k", "12", "--tile-m", "4", "--tile-n", "4",
-                     "--tile-k", "3", "--buffer-slots", "1", "--macs-per-cycle", "4",
-                     "--memory-latency", "1"]
-        names = {"dma_busy", "dma_read", "compute_busy", "dma_tile_id", "compute_tile_id",
-                 "dma_block_id", "compute_block_id"}
+        arguments = [
+            "--m",
+            "4",
+            "--n",
+            "4",
+            "--k",
+            "12",
+            "--tile-m",
+            "4",
+            "--tile-n",
+            "4",
+            "--tile-k",
+            "3",
+            "--buffer-slots",
+            "1",
+            "--macs-per-cycle",
+            "4",
+            "--memory-latency",
+            "1",
+        ]
+        names = {
+            "dma_busy",
+            "dma_read",
+            "compute_busy",
+            "dma_tile_id",
+            "compute_tile_id",
+            "dma_block_id",
+            "compute_block_id",
+        }
         with tempfile.TemporaryDirectory() as directory:
             for buffers in (1, 2):
                 with self.subTest(panel_buffers=buffers):
                     path = Path(directory) / f"panels{buffers}.vcd"
-                    result = self.run_simulator([*arguments, "--panel-buffers", str(buffers),
-                                                 "--vcd", str(path)])
+                    result = self.run_simulator(
+                        [*arguments, "--panel-buffers", str(buffers), "--vcd", str(path)]
+                    )
                     changes = self.verify_waveform(path, result, 1, buffers)
-                    overlap = [state for _, state in states(changes, names)
-                               if state["dma_busy"] and state["dma_read"] and state["compute_busy"]]
+                    overlap = [
+                        state
+                        for _, state in states(changes, names)
+                        if state["dma_busy"] and state["dma_read"] and state["compute_busy"]
+                    ]
                     if buffers == 1:
                         self.assertEqual(overlap, [])
                         continue
@@ -188,11 +308,12 @@ class SystemCObservability(unittest.TestCase):
                         self.assertEqual(state["dma_tile_id"], state["compute_tile_id"])
                         self.assertEqual(state["dma_block_id"], state["compute_block_id"] + 1)
 
-    def test_vcd_in_unwritable_directory_fails_without_false_success(self):
+    def test_vcd_in_missing_directory_fails_and_writes_nothing(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "does-not-exist" / "accelerator.vcd"
-            process = subprocess.run([str(BINARY), "--vcd", str(path)],
-                                     capture_output=True, text=True, timeout=30)
+            process = subprocess.run(
+                [str(BINARY), "--vcd", str(path)], capture_output=True, text=True, timeout=30
+            )
             self.assertNotEqual(process.returncode, 0)
             self.assertFalse(path.exists())
 

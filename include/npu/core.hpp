@@ -76,7 +76,7 @@ std::vector<std::int8_t> im2col(const Config& config, const std::vector<std::int
 
 // Compressed panels are shared by all output-row tiles of a group. Each buffer
 // holds its four-byte codec header, LUT or bitmap, and the packed payload.
-// The expanded Problem::weights remain exclusively the independent reference.
+// With an encoded format, the expanded Problem::weights feed the reference only.
 struct EncodedWeightPanel {
     std::uint64_t group = 0, col = 0, cols = 0, k_start = 0, k = 0;
     std::vector<std::uint8_t> buffer;
@@ -85,11 +85,13 @@ struct EncodedWeightPanel {
 
 std::vector<EncodedWeightPanel> encode_weights(const Config& config, const Problem& problem);
 const EncodedWeightPanel& weight_panel(const Config& config,
-    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, std::uint64_t block);
+                                       const std::vector<EncodedWeightPanel>& panels,
+                                       const Tile& tile, std::uint64_t block);
 void compute_tile_encoded(const Problem& problem, const Config& config,
-    const std::vector<EncodedWeightPanel>& panels, const Tile& tile, Output& output);
+                          const std::vector<EncodedWeightPanel>& panels, const Tile& tile,
+                          Output& output);
 std::uint64_t encoded_panel_compute_cycles(const Config& config, const Tile& tile,
-    std::uint64_t block, const EncodedWeightPanel& panel);
+                                           std::uint64_t block, const EncodedWeightPanel& panel);
 
 // Shape and work limits. A bit-exact run materializes tensors and the
 // reference under max_host_bytes; --timing-only skips both.
@@ -106,7 +108,7 @@ void validate(const Config& config);
 std::uint64_t total_macs(const ShapeConfig& shape);
 // G * ceil(M / tile_m) * ceil(N / tile_n).
 std::uint64_t tile_count(const Config& config);
-// SRAM reserved for the slots and the weight cache.
+// SRAM reserved for the slots, the weight cache and the activation cache.
 std::uint64_t scratchpad_bytes(const Config& config);
 // Panel buffers in use per slot: mapping.panel_buffers, at most one per
 // reduction panel.
@@ -114,12 +116,11 @@ std::uint64_t slot_panel_buffers(const Config& config);
 Problem make_problem(const Config& config);
 std::vector<Tile> make_tiles(const Config& config);
 Output reference(const Problem& problem, const Requant& quant);
-void compute_tile(const Problem& problem, const Requant& quant,
-                  const Tile& tile, Output& output);
+void compute_tile(const Problem& problem, const Requant& quant, const Tile& tile, Output& output);
 // A depthwise-datapath tile: output channels col..col + cols - 1, each its own
 // group's single column.
-void compute_channel_tile(const Problem& problem, const Requant& quant,
-                          const Tile& tile, Output& output);
+void compute_channel_tile(const Problem& problem, const Requant& quant, const Tile& tile,
+                          Output& output);
 // TOSA 1.0.2 apply_scale_32 (pseudocode/library/scale_helpers.tosac): returns
 // (value * multiplier + round) >> shift, an arithmetic shift, with
 // round = 2^(shift-1) moved 2^30 away from zero for double_round when
@@ -130,8 +131,7 @@ std::int32_t apply_scale_32(std::int32_t value, std::int32_t multiplier, std::in
                             bool double_round);
 // Channel indexes the G*N output channels.
 std::int8_t requantize(std::int32_t accumulator, const Requant& quant);
-std::int8_t requantize(std::int32_t accumulator, const Requant& quant,
-                      std::uint64_t channel);
+std::int8_t requantize(std::int32_t accumulator, const Requant& quant, std::uint64_t channel);
 std::uint64_t reduction_blocks(const Config& config);
 std::uint64_t panel_k(const Config& config, std::uint64_t block);
 std::uint64_t panel_read_bytes(const Config& config, const Tile& tile, std::uint64_t block);
@@ -162,7 +162,8 @@ std::uint64_t peak_memory_bytes_per_cycle(const Config& config);
 // first U % P cores, and runs its tiles in the single-core order: group, row,
 // column.
 enum class ClusterSplit : std::uint8_t { Groups, Rows, Columns };
-template <> struct EnumNames<ClusterSplit> {
+template <>
+struct EnumNames<ClusterSplit> {
     static constexpr std::array<std::string_view, 3> names{"groups", "rows", "columns"};
 };
 
@@ -240,10 +241,10 @@ Partition auto_partition(const ClusterEstimate& m, const ClusterEstimate& n);
 // cover all of K. With shape.conv the activation window holds the NHWC input
 // instead, and the runs are the panel's input rows (conv_input_spans): one run
 // per row over its column hull when the panel's channels are all of C, else
-// one run per pixel of its channel range. Addresses are
-// 64-bit and hold no data; they place burst splits. A --timing-only tensor
-// larger than its 256 MiB window runs past it, and since every base is 4 KiB
-// aligned its bursts split as they would in a disjoint window.
+// one run per pixel of its channel range. Addresses are 64-bit and hold no
+// data; they place burst splits. A --timing-only tensor larger than its
+// 256 MiB window runs past it, and since every base is 4 KiB aligned its
+// bursts split as they would in a disjoint window.
 constexpr std::uint64_t activation_base = 0x80000000;
 constexpr std::uint64_t weight_base = 0x90000000;
 constexpr std::uint64_t param_base = 0xA0000000;

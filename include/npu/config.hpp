@@ -22,26 +22,34 @@ enum class Dataflow : std::uint8_t { OutputStationary, WeightStationary };
 enum class MemoryModel : std::uint8_t { Serial, Axi };
 enum class Partition : std::uint8_t { M, N, Auto };
 
-template <class E> struct EnumNames;
-template <> struct EnumNames<Rounding> {
+template <class E>
+struct EnumNames;
+template <>
+struct EnumNames<Rounding> {
     static constexpr std::array<std::string_view, 2> names{"away", "even"};
 };
-template <> struct EnumNames<RescaleMode> {
+template <>
+struct EnumNames<RescaleMode> {
     static constexpr std::array<std::string_view, 3> names{"native", "tosa-single", "tosa-double"};
 };
-template <> struct EnumNames<WeightEncoding> {
+template <>
+struct EnumNames<WeightEncoding> {
     static constexpr std::array<std::string_view, 3> names{"dense", "palette", "sparse"};
 };
-template <> struct EnumNames<TimingMode> {
+template <>
+struct EnumNames<TimingMode> {
     static constexpr std::array<std::string_view, 2> names{"event", "cycle"};
 };
-template <> struct EnumNames<Dataflow> {
+template <>
+struct EnumNames<Dataflow> {
     static constexpr std::array<std::string_view, 2> names{"os", "ws"};
 };
-template <> struct EnumNames<MemoryModel> {
+template <>
+struct EnumNames<MemoryModel> {
     static constexpr std::array<std::string_view, 2> names{"serial", "axi"};
 };
-template <> struct EnumNames<Partition> {
+template <>
+struct EnumNames<Partition> {
     static constexpr std::array<std::string_view, 3> names{"m", "n", "auto"};
 };
 

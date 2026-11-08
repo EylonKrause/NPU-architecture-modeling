@@ -15,13 +15,15 @@
 namespace npu {
 namespace {
 
-template <class> constexpr bool always_false = false;
+template <class>
+constexpr bool always_false = false;
 
-template <class T> constexpr bool is_enum_field = std::is_enum_v<T>;
+template <class T>
+constexpr bool is_enum_field = std::is_enum_v<T>;
 
-#define NPU_FIELD(member)                                       \
-    [](Config& c) -> FieldRef { return &c.member; },            \
-    [](const Config& c) -> ConstFieldRef { return &c.member; }
+#define NPU_FIELD(member)                            \
+    [](Config& c) -> FieldRef { return &c.member; }, \
+        [](const Config& c) -> ConstFieldRef { return &c.member; }
 
 // Grouped by path prefix: the JSON writer opens each group once, in this order.
 const std::vector<ConfigOption> option_table = {
@@ -44,8 +46,7 @@ const std::vector<ConfigOption> option_table = {
     {"--conv-input-w", "shape.conv.input_w", "", "implicit convolution: input width",
      NPU_FIELD(shape.conv.input_w)},
     {"--conv-input-c", "shape.conv.input_c", "",
-     "implicit convolution: input channels, a multiple of --groups",
-     NPU_FIELD(shape.conv.input_c)},
+     "implicit convolution: input channels, a multiple of --groups", NPU_FIELD(shape.conv.input_c)},
     {"--conv-kernel-h", "shape.conv.kernel_h", "", "implicit convolution: kernel height",
      NPU_FIELD(shape.conv.kernel_h)},
     {"--conv-kernel-w", "shape.conv.kernel_w", "", "implicit convolution: kernel width",
@@ -54,15 +55,14 @@ const std::vector<ConfigOption> option_table = {
      NPU_FIELD(shape.conv.stride_h)},
     {"--conv-stride-w", "shape.conv.stride_w", "", "implicit convolution: horizontal stride",
      NPU_FIELD(shape.conv.stride_w)},
-    {"--conv-dilation-h", "shape.conv.dilation_h", "",
-     "implicit convolution: vertical dilation", NPU_FIELD(shape.conv.dilation_h)},
-    {"--conv-dilation-w", "shape.conv.dilation_w", "",
-     "implicit convolution: horizontal dilation", NPU_FIELD(shape.conv.dilation_w)},
+    {"--conv-dilation-h", "shape.conv.dilation_h", "", "implicit convolution: vertical dilation",
+     NPU_FIELD(shape.conv.dilation_h)},
+    {"--conv-dilation-w", "shape.conv.dilation_w", "", "implicit convolution: horizontal dilation",
+     NPU_FIELD(shape.conv.dilation_w)},
     {"--conv-pad-top", "shape.conv.pad_top", "",
      "implicit convolution: zero-point rows above the input", NPU_FIELD(shape.conv.pad_top)},
     {"--conv-pad-left", "shape.conv.pad_left", "",
-     "implicit convolution: zero-point columns left of the input",
-     NPU_FIELD(shape.conv.pad_left)},
+     "implicit convolution: zero-point columns left of the input", NPU_FIELD(shape.conv.pad_left)},
     {"--conv-pad-bottom", "shape.conv.pad_bottom", "",
      "implicit convolution: zero-point rows below the input", NPU_FIELD(shape.conv.pad_bottom)},
     {"--conv-pad-right", "shape.conv.pad_right", "",
@@ -88,9 +88,9 @@ const std::vector<ConfigOption> option_table = {
      "compressed-weight decoder throughput in values per cycle",
      NPU_FIELD(arch.compute.weight_decode_values_per_cycle)},
     {"--depthwise-macs-per-cycle", "arch.compute.depthwise_macs_per_cycle", "",
-     "channel-wise datapath for depthwise problems (groups > 1, N 1): tiles span tile_n "
-     "consecutive groups and a panel takes ceil(M_t*C_t*K_p / rate) + pipeline cycles; 0 runs "
-     "them as grouped GEMMs on the MAC datapath",
+     "depthwise-datapath MACs per cycle for depthwise problems (groups > 1, N 1): tiles span "
+     "tile_n consecutive groups and a panel takes ceil(M_t*C_t*K_p / rate) + pipeline cycles; 0 "
+     "runs them as grouped GEMMs on the MAC datapath",
      NPU_FIELD(arch.compute.depthwise_macs_per_cycle)},
 
     {"--memory-model", "arch.memory.model", "",
@@ -133,8 +133,8 @@ const std::vector<ConfigOption> option_table = {
      "LRU activation-panel cache capacity, keyed by group or channel tile, row tile and "
      "reduction panel, so column tiles of a row tile reuse its panels; 0 disables it",
      NPU_FIELD(arch.activation_cache_bytes)},
-    {"--frequency-mhz", "arch.frequency_mhz", "X",
-     "clock used to convert cycles to modeled time", NPU_FIELD(arch.frequency_mhz)},
+    {"--frequency-mhz", "arch.frequency_mhz", "X", "clock used to convert cycles to modeled time",
+     NPU_FIELD(arch.frequency_mhz)},
     {"--cores", "arch.cores", "",
      "core pipelines, 1..64, each with its own slots, SRAM, weight cache and AXI port; all "
      "share one DRAM timeline, so more than one needs --memory-model axi",
@@ -144,11 +144,12 @@ const std::vector<ConfigOption> option_table = {
     {"--tile-n", "mapping.tile_n", "", "output tile columns", NPU_FIELD(mapping.tile_n)},
     {"--tile-k", "mapping.tile_k", "", "reduction panel depth; 0 uses one panel of depth K",
      NPU_FIELD(mapping.tile_k)},
-    {"--buffer-slots", "mapping.buffer_slots", "",
-     "tiles in flight across load, compute and store", NPU_FIELD(mapping.buffer_slots)},
+    {"--buffer-slots", "mapping.buffer_slots", "", "tiles in flight across load, compute and store",
+     NPU_FIELD(mapping.buffer_slots)},
     {"--panel-buffers", "mapping.panel_buffers", "1|2",
      "reduction-panel buffers per slot; with 2 the DMA loads panel b+1 while compute reads "
-     "panel b", NPU_FIELD(mapping.panel_buffers)},
+     "panel b",
+     NPU_FIELD(mapping.panel_buffers)},
     {"--partition", "mapping.partition", "",
      "cluster work split: m gives each core a band of output-row tiles and n a band of "
      "output-column tiles; whole groups go to cores when groups >= cores; auto takes the "
@@ -180,8 +181,8 @@ const std::vector<ConfigOption> option_table = {
      "tosa-double are TOSA 1.0.2 RESCALE apply_scale_32 (TFLite single rounding and "
      "gemmlowp double rounding with tosa shift = 31 - TFLite shift)",
      NPU_FIELD(quant.rescale)},
-    {"--rounding", "quant.rounding", "",
-     "native rescale tie rounding: away from zero or to even", NPU_FIELD(quant.rounding)},
+    {"--rounding", "quant.rounding", "", "native rescale tie rounding: away from zero or to even",
+     NPU_FIELD(quant.rounding)},
     {"", "quant.weight_zero_points", "",
      "per-channel weight zero points, one per output channel (G*N); --quantization-file "
      "sets all three per-channel vectors",
@@ -205,10 +206,10 @@ const std::vector<ConfigOption> option_table = {
 
 std::string quoted(std::string_view text) { return "'" + std::string(text) + "'"; }
 
-// The decimal forms strtod reads, as the flag always took them: a sign,
-// digits with an optional point on either side, an optional exponent. Hex,
-// inf, nan, whitespace and trailing text are rejected. Config files keep the
-// JSON number grammar of their parser.
+// The decimal forms strtod reads: a sign, digits with an optional point on
+// either side, an optional exponent. Hex, inf, nan, whitespace and trailing
+// text are rejected. Config files use the JSON number grammar of their
+// parser.
 bool decimal_grammar(std::string_view text) {
     std::size_t i = 0;
     const auto digits = [&]() {
@@ -242,14 +243,17 @@ std::optional<T> integer_value(std::string_view text) {
 
 std::string describe(const JsonValue& value) {
     switch (value.type) {
-    case JsonValue::Type::Number: return value.text;
-    case JsonValue::Type::String: {
-        std::ostringstream text;
-        write_json_string(text, value.text);
-        return text.str();
-    }
-    case JsonValue::Type::Boolean: return value.boolean ? "true" : "false";
-    default: return std::string(json_type_name(value.type));
+        case JsonValue::Type::Number:
+            return value.text;
+        case JsonValue::Type::String: {
+            std::ostringstream text;
+            write_json_string(text, value.text);
+            return text.str();
+        }
+        case JsonValue::Type::Boolean:
+            return value.boolean ? "true" : "false";
+        default:
+            return std::string(json_type_name(value.type));
     }
 }
 
@@ -267,87 +271,95 @@ T json_integer(const JsonValue& value, std::string_view origin, std::string_view
         if (parsed && *parsed >= std::numeric_limits<T>::min() &&
             *parsed <= std::numeric_limits<T>::max())
             return static_cast<T>(*parsed);
-        json_error(origin, value, std::string(path) + " expects a signed " +
-                                      std::to_string(sizeof(T) * 8) + "-bit integer, got " +
-                                      describe(value));
+        json_error(origin, value,
+                   std::string(path) + " expects a signed " + std::to_string(sizeof(T) * 8) +
+                       "-bit integer, got " + describe(value));
     } else {
         const auto parsed = value.as_uint64();
         if (parsed && *parsed <= std::numeric_limits<T>::max()) return static_cast<T>(*parsed);
-        json_error(origin, value, std::string(path) + " expects an unsigned " +
-                                      std::to_string(sizeof(T) * 8) + "-bit integer, got " +
-                                      describe(value));
+        json_error(origin, value,
+                   std::string(path) + " expects an unsigned " + std::to_string(sizeof(T) * 8) +
+                       "-bit integer, got " + describe(value));
     }
 }
 
 void assign_json(const ConfigOption& option, Config& config, const JsonValue& value,
                  std::string_view origin) {
     const auto path = option.path;
-    std::visit([&](auto* field) {
-        using T = std::remove_pointer_t<decltype(field)>;
-        if constexpr (std::is_same_v<T, std::uint64_t> || std::is_same_v<T, std::uint32_t> ||
-                      std::is_same_v<T, std::int32_t>) {
-            *field = json_integer<T>(value, origin, path);
-        } else if constexpr (std::is_same_v<T, double>) {
-            const auto parsed = value.as_double();
-            if (!parsed)
-                json_error(origin, value, std::string(path) + " expects a finite number, got " +
-                                              describe(value));
-            *field = *parsed;
-        } else if constexpr (std::is_same_v<T, bool>) {
-            if (value.type != JsonValue::Type::Boolean)
-                json_error(origin, value, std::string(path) + " expects true or false, got " +
-                                              describe(value));
-            *field = value.boolean;
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            if (value.type != JsonValue::Type::String)
-                json_error(origin, value, std::string(path) + " expects a string, got " +
-                                              describe(value));
-            *field = value.text;
-        } else if constexpr (is_enum_field<T>) {
-            const auto parsed = value.type == JsonValue::Type::String ?
-                from_string<T>(value.text) : std::nullopt;
-            if (!parsed)
-                json_error(origin, value, std::string(path) + " expects one of " +
-                                              enum_choices<T>() + ", got " + describe(value));
-            *field = *parsed;
-        } else if constexpr (std::is_same_v<T, std::vector<std::int32_t>>) {
-            if (value.type != JsonValue::Type::Array)
-                json_error(origin, value, std::string(path) + " expects an array, got " +
-                                              describe(value));
-            T result;
-            result.reserve(value.items.size());
-            for (const auto& item : value.items)
-                result.push_back(json_integer<typename T::value_type>(item, origin, path));
-            *field = std::move(result);
-        } else {
-            static_assert(always_false<T>, "unhandled option field type");
-        }
-    }, option.field(config));
+    std::visit(
+        [&](auto* field) {
+            using T = std::remove_pointer_t<decltype(field)>;
+            if constexpr (std::is_same_v<T, std::uint64_t> || std::is_same_v<T, std::uint32_t> ||
+                          std::is_same_v<T, std::int32_t>) {
+                *field = json_integer<T>(value, origin, path);
+            } else if constexpr (std::is_same_v<T, double>) {
+                const auto parsed = value.as_double();
+                if (!parsed)
+                    json_error(
+                        origin, value,
+                        std::string(path) + " expects a finite number, got " + describe(value));
+                *field = *parsed;
+            } else if constexpr (std::is_same_v<T, bool>) {
+                if (value.type != JsonValue::Type::Boolean)
+                    json_error(
+                        origin, value,
+                        std::string(path) + " expects true or false, got " + describe(value));
+                *field = value.boolean;
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                if (value.type != JsonValue::Type::String)
+                    json_error(origin, value,
+                               std::string(path) + " expects a string, got " + describe(value));
+                *field = value.text;
+            } else if constexpr (is_enum_field<T>) {
+                const auto parsed = value.type == JsonValue::Type::String ?
+                                        from_string<T>(value.text) :
+                                        std::nullopt;
+                if (!parsed)
+                    json_error(origin, value,
+                               std::string(path) + " expects one of " + enum_choices<T>() +
+                                   ", got " + describe(value));
+                *field = *parsed;
+            } else if constexpr (std::is_same_v<T, std::vector<std::int32_t>>) {
+                if (value.type != JsonValue::Type::Array)
+                    json_error(origin, value,
+                               std::string(path) + " expects an array, got " + describe(value));
+                T result;
+                result.reserve(value.items.size());
+                for (const auto& item : value.items)
+                    result.push_back(json_integer<typename T::value_type>(item, origin, path));
+                *field = std::move(result);
+            } else {
+                static_assert(always_false<T>, "unhandled option field type");
+            }
+        },
+        option.field(config));
 }
 
 void write_value(std::ostream& stream, const ConstFieldRef& view) {
-    std::visit([&](const auto* field) {
-        using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
-        if constexpr (std::is_same_v<T, std::uint64_t> || std::is_same_v<T, std::uint32_t> ||
-                      std::is_same_v<T, std::int32_t>) {
-            stream << *field;
-        } else if constexpr (std::is_same_v<T, double>) {
-            write_json_number(stream, *field);
-        } else if constexpr (std::is_same_v<T, bool>) {
-            stream << (*field ? "true" : "false");
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            write_json_string(stream, *field);
-        } else if constexpr (is_enum_field<T>) {
-            write_json_string(stream, to_string(*field));
-        } else {
-            stream << '[';
-            for (std::size_t i = 0; i < field->size(); ++i) {
-                if (i) stream << ',';
-                stream << (*field)[i];
+    std::visit(
+        [&](const auto* field) {
+            using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
+            if constexpr (std::is_same_v<T, std::uint64_t> || std::is_same_v<T, std::uint32_t> ||
+                          std::is_same_v<T, std::int32_t>) {
+                stream << *field;
+            } else if constexpr (std::is_same_v<T, double>) {
+                write_json_number(stream, *field);
+            } else if constexpr (std::is_same_v<T, bool>) {
+                stream << (*field ? "true" : "false");
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                write_json_string(stream, *field);
+            } else if constexpr (is_enum_field<T>) {
+                write_json_string(stream, to_string(*field));
+            } else {
+                stream << '[';
+                for (std::size_t i = 0; i < field->size(); ++i) {
+                    if (i) stream << ',';
+                    stream << (*field)[i];
+                }
+                stream << ']';
             }
-            stream << ']';
-        }
-    }, view);
+        },
+        view);
 }
 
 std::vector<std::string_view> split_path(std::string_view path) {
@@ -371,26 +383,30 @@ bool is_group(std::string_view path) {
 
 std::string metavar(const ConfigOption& option) {
     if (!option.metavar.empty()) return std::string(option.metavar);
-    return std::visit([](const auto* field) -> std::string {
-        using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
-        if constexpr (is_enum_field<T>) return enum_choices<T>();
-        else if constexpr (std::is_same_v<T, bool>) return "";
-        else if constexpr (std::is_same_v<T, double>) return "X";
-        else if constexpr (std::is_same_v<T, std::string>) return "TEXT";
-        else return "N";
-    }, option.view(Config{}));
+    return std::visit(
+        [](const auto* field) -> std::string {
+            using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
+            if constexpr (is_enum_field<T>) return enum_choices<T>();
+            else if constexpr (std::is_same_v<T, bool>) return "";
+            else if constexpr (std::is_same_v<T, double>) return "X";
+            else if constexpr (std::is_same_v<T, std::string>) return "TEXT";
+            else return "N";
+        },
+        option.view(Config{}));
 }
 
 std::string default_text(const ConfigOption& option) {
     const Config defaults;
     const auto view = option.view(defaults);
-    const bool empty = std::visit([](const auto* field) {
-        using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
-        if constexpr (std::is_same_v<T, std::string> ||
-                      std::is_same_v<T, std::vector<std::int32_t>>)
-            return field->empty();
-        else return false;
-    }, view);
+    const bool empty = std::visit(
+        [](const auto* field) {
+            using T = std::remove_cv_t<std::remove_pointer_t<decltype(field)>>;
+            if constexpr (std::is_same_v<T, std::string> ||
+                          std::is_same_v<T, std::vector<std::int32_t>>)
+                return field->empty();
+            else return false;
+        },
+        view);
     if (empty) return "";
     std::ostringstream text;
     write_value(text, view);
@@ -435,30 +451,32 @@ void ConfigBuilder::mark(const ConfigOption& option, OptionSource source) {
 
 void ConfigBuilder::set(const ConfigOption& option, std::string_view text) {
     const auto flag = option.flag;
-    std::visit([&](auto* field) {
-        using T = std::remove_pointer_t<decltype(field)>;
-        if constexpr (std::is_same_v<T, std::uint64_t>) {
-            *field = parse_uint64(text, flag);
-        } else if constexpr (std::is_same_v<T, std::uint32_t>) {
-            *field = parse_uint32(text, flag);
-        } else if constexpr (std::is_same_v<T, std::int32_t>) {
-            *field = parse_int32(text, flag);
-        } else if constexpr (std::is_same_v<T, double>) {
-            *field = parse_decimal(text, flag);
-        } else if constexpr (std::is_same_v<T, std::string>) {
-            if (text.empty())
-                throw std::invalid_argument(std::string(flag) + ": expected a nonempty path");
-            *field = std::string(text);
-        } else if constexpr (is_enum_field<T>) {
-            const auto parsed = from_string<T>(text);
-            if (!parsed)
-                throw std::invalid_argument(std::string(flag) + ": expected " + enum_choices<T>() +
-                                            ", got " + quoted(text));
-            *field = *parsed;
-        } else {
-            throw std::logic_error(std::string(option.path) + " takes no command-line value");
-        }
-    }, option.field(config));
+    std::visit(
+        [&](auto* field) {
+            using T = std::remove_pointer_t<decltype(field)>;
+            if constexpr (std::is_same_v<T, std::uint64_t>) {
+                *field = parse_uint64(text, flag);
+            } else if constexpr (std::is_same_v<T, std::uint32_t>) {
+                *field = parse_uint32(text, flag);
+            } else if constexpr (std::is_same_v<T, std::int32_t>) {
+                *field = parse_int32(text, flag);
+            } else if constexpr (std::is_same_v<T, double>) {
+                *field = parse_decimal(text, flag);
+            } else if constexpr (std::is_same_v<T, std::string>) {
+                if (text.empty())
+                    throw std::invalid_argument(std::string(flag) + ": expected a nonempty path");
+                *field = std::string(text);
+            } else if constexpr (is_enum_field<T>) {
+                const auto parsed = from_string<T>(text);
+                if (!parsed)
+                    throw std::invalid_argument(std::string(flag) + ": expected " +
+                                                enum_choices<T>() + ", got " + quoted(text));
+                *field = *parsed;
+            } else {
+                throw std::logic_error(std::string(option.path) + " takes no command-line value");
+            }
+        },
+        option.field(config));
     mark(option, OptionSource::CommandLine);
 }
 
@@ -480,8 +498,9 @@ void ConfigBuilder::load_object(const JsonValue& object, const std::string& pref
         if (object.keys[i].find('.') != std::string::npos) {
             std::ostringstream key;
             write_json_string(key, object.keys[i]);
-            json_error(origin, value, "config key " + key.str() +
-                                          " contains '.'; nest one object per path segment");
+            json_error(
+                origin, value,
+                "config key " + key.str() + " contains '.'; nest one object per path segment");
         }
         const auto path = prefix.empty() ? object.keys[i] : prefix + '.' + object.keys[i];
         if (const auto* option = find_option_by_path(path)) {
@@ -501,8 +520,8 @@ void ConfigBuilder::load_object(const JsonValue& object, const std::string& pref
 
 void ConfigBuilder::load(const JsonValue& document, std::string_view origin) {
     if (document.type != JsonValue::Type::Object)
-        json_error(origin, document, "a config file holds one JSON object, got " +
-                                         describe(document));
+        json_error(origin, document,
+                   "a config file holds one JSON object, got " + describe(document));
     load_object(document, "", origin);
 }
 
@@ -582,8 +601,8 @@ void write_config_help(std::ostream& stream) {
         std::string help(option.help);
         const auto fallback = default_text(option);
         if (!fallback.empty()) help += " (default " + fallback + ")";
-        write_help_row(stream, option.flag, option.flag.empty() ? "" : metavar(option),
-                       option.path, help);
+        write_help_row(stream, option.flag, option.flag.empty() ? "" : metavar(option), option.path,
+                       help);
     }
 }
 

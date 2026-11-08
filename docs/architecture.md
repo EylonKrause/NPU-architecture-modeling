@@ -13,6 +13,7 @@ result schema in [usage](usage.md).
 | Configuration structure, enumerations | `include/npu/config.hpp` |
 | Option table: flags, JSON paths, defaults | `src/options.cpp` |
 | Validation, panel timing, traffic, address map, AXI bursts, DRAM timeline, cluster plan | `src/core.cpp`, `include/npu/core.hpp` |
+| Convolution geometry, input footprints, im2col view | `src/conv.cpp` |
 | Serial DMA and AXI memory models | `src/memory.cpp`, `include/npu/memory.hpp` |
 | Core pipeline, weight cache, cluster, observer | `src/model.cpp`, `include/npu/model.hpp` |
 | Result, snapshot and live protocol | `src/main.cpp` |
@@ -28,8 +29,8 @@ context: `npu-sim` receives one job, a grouped GEMM, and runs it to completion.*
 
 An NPU cluster holds $N_c$ identical cores. Each core holds a tile sequencer, a DMA engine with
 one memory port (serial DMA, or AXI read and write channels), an SRAM partitioned into tile
-slots and panel caches, a weight decoder, a MAC datapath and a requantization unit. All cores
-share one DRAM through the system interconnect.
+slots and panel caches, a weight decoder, a MAC datapath with a depthwise datapath, and a
+requantization unit. All cores share one DRAM through the system interconnect.
 
 ### 1.2 Unit of work
 
@@ -42,7 +43,9 @@ Activations are stored as one $M \times GK$ matrix, weights as $G$ blocks of $K 
 outputs as one $M \times GN$ matrix (`ShapeConfig`, `include/npu/config.hpp`). A dense layer
 is $G = 1$. A grouped convolution lowered to GEMM has $M = H_{\mathrm{out}} W_{\mathrm{out}}$,
 $K = k_h k_w C_{\mathrm{in}}/G$ and $N = C_{\mathrm{out}}/G$; depthwise convolution is $G = C$,
-$N = 1$, $K = k_h k_w$.
+$N = 1$, $K = k_h k_w$. With `shape.conv` set, the activation matrix is the im2col view of an
+NHWC input tensor held in DRAM, and panel loads read the input footprint of each tile
+(section 4.4).
 
 The output is cut into tiles of $T_m \times T_n$ elements within one group, and the reduction
 dimension into panels of depth $K_\pi$. A core moves each tile through three stages: load (one
@@ -57,10 +60,13 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 | $M, N, K, G$ | Output rows; output channels and reduction depth per group; groups | `shape.m`, `shape.n`, `shape.k`, `shape.groups` |
 | $T_m, T_n$ | Tile rows and columns | `mapping.tile_m`, `mapping.tile_n` |
 | $M_t, N_t$ | Extents of one tile, clipped at the matrix edge | |
+| $C_t$ | Channels of a depthwise-datapath tile, clipped at the last channel | `mapping.tile_n` |
+| $H, W, C$ | Height, width and channels of the NHWC input of a convolution | `shape.conv.input_h`, `input_w`, `input_c` |
+| $k_h, k_w$; $C_g$ | Kernel extents; input channels per group, $C / G$ | `shape.conv.kernel_h`, `kernel_w` |
 | $K_\pi$ | Panel depth: `mapping.tile_k`, or $K$ when it is 0 | `mapping.tile_k` |
 | $n_k$ | Reduction panels per tile, $\lceil K / K_\pi \rceil$ | |
 | $K_p$ | Depth of panel $p$: $K_\pi$, or the remainder for the last panel | |
-| $S$ | Tile slots per core | `mapping.buffer_slots` |
+| $N_s$ | Tile slots per core | `mapping.buffer_slots` |
 | $P_b$ | Panel buffers per slot: `mapping.panel_buffers`, at most $n_k$ | `mapping.panel_buffers` |
 | $P$ | Vector-datapath MACs per cycle | `arch.compute.macs_per_cycle` |
 | $A_r, A_c$ | Systolic array rows and columns | `arch.compute.array_rows`, `array_cols` |
@@ -70,8 +76,10 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 | $b_w$ | Weight bits | `weights.bits` |
 | $b_p$ | Palette index bits | `weights.palette_bits` |
 | $B_s$ | Sparse bitmap block length | `weights.sparse_block` |
+| $\mu_c, S_c$ | Requantization multiplier and right shift of output channel $c$ | `quant.multiplier`, `shift`, `multipliers`, `shifts` |
+| $z_a, z_{w,c}, z_o$ | Activation, weight and output zero points | `quant.input_zero`, `weight_zero`, `weight_zero_points`, `output_zero` |
 | $Q$ | Per-channel parameter vectors present, 0 to 3 | `quant.weight_zero_points`, `multipliers`, `shifts` |
-| $W, L, \Lambda$ | Serial DMA bytes per cycle, latency per burst, burst bytes | `arch.memory.bytes_per_cycle`, `latency`, `burst_bytes` |
+| $R_{\mathrm{dma}}, L, \Lambda$ | Serial DMA bytes per cycle, latency per burst, burst bytes | `arch.memory.bytes_per_cycle`, `latency`, `burst_bytes` |
 | $D$ | AXI bytes per beat | `arch.memory.axi.data_bytes` |
 | $b_{\max}$ | Longest AXI burst in beats | `arch.memory.axi.max_burst_beats` |
 | $N_r, N_w$ | AXI read and write bursts in flight | `arch.memory.axi.read_outstanding`, `write_outstanding` |
@@ -86,9 +94,10 @@ panels and tiles overlap. A cluster splits the tiles among its cores.
 
 The option table in `src/options.cpp` is the single list of configuration fields. It drives the
 command line, `--help`, `--config` files and the `config` object echoed in every result. The
-architectural rows follow; shape (`shape.*`) is described in section 4.1, quantization
-(`quant.*`) in [numerics](numerics.md) section 2, and simulation options (`sim.*`) in section 7.4.
-Ranges are the checks of `validate` in `src/core.cpp`.
+architectural rows follow; shape (`shape.*`) is described in section 4.1, the convolution
+geometry (`shape.conv.*`) in section 4.4, quantization (`quant.*`) in [numerics](numerics.md)
+section 2, and simulation options (`sim.*`) in section 7.4. Ranges are the checks of
+`validate` in `src/core.cpp`.
 
 | Parameter | Flag | Unit | Range | Default | Meaning |
 |---|---|---|---|---:|---|
@@ -98,9 +107,9 @@ Ranges are the checks of `validate` in `src/core.cpp`.
 | `arch.compute.dataflow` | `--dataflow` | enumeration | `os`, `ws` | `os` | Array dataflow, section 3.3 and 3.4 |
 | `arch.compute.pipeline_cycles` | `--pipeline-cycles` | cycles | 0 to $10^9$ | 4 | $C_{\mathrm{pipe}}$, charged once per reduction panel |
 | `arch.compute.weight_decode_values_per_cycle` | `--weight-decode-values-per-cycle` | values/cycle | 1 to $10^9$ | 16 | Decoder throughput $V$ |
-| `arch.compute.depthwise_macs_per_cycle` | `--depthwise-macs-per-cycle` | MAC/cycle | see `--help` | see `--help` | Depthwise datapath throughput $P_{\mathrm{dw}}$, section 3.5 |
+| `arch.compute.depthwise_macs_per_cycle` | `--depthwise-macs-per-cycle` | MAC/cycle | 0 to $10^9$ | 0 | Depthwise datapath throughput $P_{\mathrm{dw}}$, section 3.5; 0 runs depthwise problems as grouped GEMMs |
 | `arch.memory.model` | `--memory-model` | enumeration | `serial`, `axi` | `serial` | Memory model, sections 5.3 and 5.4 |
-| `arch.memory.bytes_per_cycle` | `--memory-bytes-per-cycle` | B/cycle | 1 to $10^9$ | 16 | Serial DMA rate $W$ |
+| `arch.memory.bytes_per_cycle` | `--memory-bytes-per-cycle` | B/cycle | 1 to $10^9$ | 16 | Serial DMA rate $R_{\mathrm{dma}}$ |
 | `arch.memory.latency` | `--memory-latency` | cycles | 0 to $10^9$ | 12 | Serial DMA latency $L$, charged per burst |
 | `arch.memory.burst_bytes` | `--dma-burst-bytes` | bytes | 0 to $10^9$ | 0 | Serial burst size $\Lambda$; 0 moves each request as one burst |
 | `arch.memory.dram_bytes_per_cycle` | `--dram-bytes-per-cycle` | B/cycle | 0 to $10^9$ | 0 | DRAM rate $R$ shared by all AXI channels; 0 is unlimited |
@@ -110,25 +119,21 @@ Ranges are the checks of `validate` in `src/core.cpp`.
 | `arch.memory.axi.write_outstanding` | `--axi-write-outstanding` | bursts | 1 to 64 | 4 | Write bursts in flight $N_w$ |
 | `arch.memory.axi.read_latency` | `--axi-read-latency` | cycles | 0 to $10^9$ | 12 | $L_r$, AR issue to first R beat |
 | `arch.memory.axi.write_latency` | `--axi-write-latency` | cycles | 0 to $10^9$ | 12 | $L_w$, last W beat to B response |
-| `arch.sram_bytes` | `--sram-bytes` | bytes | at least the budget of section 4.5 | 262,144 | SRAM per core |
-| `arch.weight_cache_bytes` | `--weight-cache-bytes` | bytes | 0 to $10^9$ | 0 | Weight-panel cache $C_w$ per core; 0 disables it |
-| `arch.activation_cache_bytes` | `--activation-cache-bytes` | bytes | 0 to $10^9$ | 0 | Activation-panel cache $C_a$ per core; 0 disables it |
+| `arch.sram_bytes` | `--sram-bytes` | bytes | at least the budget of section 4.6 | 262,144 | SRAM per core |
+| `arch.weight_cache_bytes` | `--weight-cache-bytes` | bytes | 0 to $10^9$ | 0 | Weight-panel cache $C_w$ per core, section 4.7; 0 disables it |
+| `arch.activation_cache_bytes` | `--activation-cache-bytes` | bytes | 0 to $10^9$ | 0 | Activation-panel cache $C_a$ per core, section 4.8; 0 disables it |
 | `arch.frequency_mhz` | `--frequency-mhz` | MHz | $10^{-6}$ to $10^9$ | 200 | Converts cycles to time in reports |
 | `arch.cores` | `--cores` | cores | 1 to 64 | 1 | Cores $N_c$ |
 | `mapping.tile_m` | `--tile-m` | rows | 1 to 1,048,576 | 8 | Tile rows $T_m$ |
 | `mapping.tile_n` | `--tile-n` | columns | 1 to 1,048,576 | 8 | Tile columns $T_n$ |
 | `mapping.tile_k` | `--tile-k` | elements | 0, or 1 to 1,048,576 | 0 | Panel depth $K_\pi$; 0 is one panel of depth $K$ |
-| `mapping.buffer_slots` | `--buffer-slots` | tiles | 1 to 64 | 2 | Tile slots $S$ |
+| `mapping.buffer_slots` | `--buffer-slots` | tiles | 1 to 64 | 2 | Tile slots $N_s$ |
 | `mapping.panel_buffers` | `--panel-buffers` | buffers per slot | 1, 2 | 2 | Reduction-panel buffers per slot |
 | `mapping.partition` | `--partition` | enumeration | `m`, `n`, `auto` | `auto` | Cluster work split, section 6.2 |
 | `weights.bits` | `--weight-bits` | bits | 4, 8 | 8 | Signed weight precision $b_w$ |
 | `weights.encoding` | `--weight-encoding` | enumeration | `dense`, `palette`, `sparse` | `dense` | Weight storage format, section 3.7 |
 | `weights.palette_bits` | `--palette-bits` | bits | 1, 2, 4, 8 | 4 | Palette index width $b_p$ |
 | `weights.sparse_block` | `--sparse-block` | values | 1 to 4096 | 8 | Zero-skipping bitmap block length $B_s$ |
-
-<!-- Reconcile with src/options.cpp when the convolution change lands: flag spelling, range and
-default of arch.compute.depthwise_macs_per_cycle and arch.activation_cache_bytes, and the
-shape.conv keys. -->
 
 ### 2.2 Cross-parameter rules
 
@@ -138,9 +143,12 @@ shape.conv keys. -->
 | `dataflow ws` requires an array | `validate_mapping` |
 | `--macs-per-cycle` with `--array-rows` or `--array-cols`, and `--dataflow` without an array, are rejected on the command line | `parse`, `src/main.cpp` |
 | `weights.encoding sparse` requires the vector datapath | `validate_mapping` |
+| A problem on the depthwise datapath requires dense weights | `validate_mapping` |
+| `shape.conv` sets all three input extents; $C$ is a multiple of $G$; $M = H_o W_o$ and $K = k_h k_w C_g$ (section 4.4); the kernel reach fits the padded input | `conv_geometry`, `src/conv.cpp` |
+| With `shape.conv`, `mapping.tile_k` is 0 or a multiple of $k_w C_g$ | `validate_mapping` |
 | `arch.cores` above 1 requires `arch.memory.model axi` | `validate` |
 | Serial-only flags are rejected under `axi` and AXI flags under `serial`; config files may carry both groups | `parse` |
-| `arch.sram_bytes` is at least the SRAM budget of section 4.5 | `validate` |
+| `arch.sram_bytes` is at least the SRAM budget of section 4.6 | `validate` |
 | INT4 weight zero points lie in $-8$ to $7$ | `validate` |
 | $M, N, K, G$ lie in 1 to 1,048,576, and so do $GN$ and $GK$ | `validate_shape` |
 | $GMNK \le 4 \cdot 10^9$ for a bit-exact run, $\le 10^{13}$ with `--timing-only` | `validate_shape` |
@@ -157,7 +165,7 @@ The MAC datapath is one of three engines, selected per job (`mac_cycles`, `src/c
 |---|---|---|
 | Vector datapath | `array_rows` = `array_cols` = 0 | $P$ |
 | Systolic array, output-stationary or weight-stationary | `array_rows`, `array_cols` in 1 to 256 | $A_r A_c$ |
-| Depthwise datapath | $G > 1$ and $N = 1$ | $P_{\mathrm{dw}}$ |
+| Depthwise datapath | $P_{\mathrm{dw}} > 0$, $G > 1$ and $N = 1$ (`channel_wise`) | $P_{\mathrm{dw}}$ |
 
 The engine computes one reduction panel at a time: an $M_t \times K_p$ activation panel against a
 $K_p \times N_t$ weight panel, accumulating into the tile's INT32 partial sums. Every panel costs
@@ -198,7 +206,8 @@ $$C_{\mathrm{MAC}}^{\mathrm{WS}} = A_r + (F - 1)\max(M_t, A_r) + M_t + (A_r + A_
 Output-stationary pays $K_p$ cycles per wave and idles PEs when $M_t$ or $N_t$ is not a multiple
 of the array. Weight-stationary pays $\max(M_t, A_r)$ cycles per fold, idles PEs when $K_p$ or
 $N_t$ is not a multiple of the array, and idles cycles when $M_t < A_r$. Study S5 in
-[results](results.md) compares the two on every MobileNetV2 and ResNet-50 layer.
+[results](results.md) compares the two on every MobileNetV2 and ResNet-50 layer that runs on
+the array.
 
 | Panel, $M_t = N_t = 32$, $K_p = 64$, $C_{\mathrm{pipe}} = 4$ | Equation | $C_p$ | `compute_busy_cycles` from `npu-sim` |
 |---|---|---:|---:|
@@ -211,38 +220,59 @@ The rows come from `npu-sim --m 32 --n 32 --k 64 --tile-m 32 --tile-n 32` with
 
 ### 3.5 Depthwise datapath
 
-A depthwise layer as a grouped GEMM has $N = 1$ and $K = k_h k_w$: every group is a matrix-vector
-product, and a tile confined to one group uses one column of an array; study S5 in
-[results](results.md) reports the array utilization of the depthwise layers under that mapping.
-With $G > 1$ and $N = 1$ the core runs the depthwise datapath instead. Its tiles span
-$C_t$ channels (groups), and a reduction panel takes
+A depthwise layer as a grouped GEMM has $N = 1$ and $K = k_h k_w$: every group is a
+matrix-vector product, and a tile confined to one group is one column wide, so an array runs
+it on one of its $A_c$ columns and each tile pays a request of its own. With
+$P_{\mathrm{dw}} > 0$, $G > 1$ and $N = 1$ (`channel_wise`, `src/core.cpp`) the core runs the
+problem on the depthwise datapath instead; $P_{\mathrm{dw}} = 0$, the default, keeps the
+grouped GEMM on the configured engine.
+
+| Property | Depthwise datapath |
+|---|---|
+| Tile grid | One group of $G$ columns: a tile is $T_m$ rows by $T_n$ consecutive channels, $C_t = \min(T_n, G - jT_n)$ (`grid_groups`, `grid_columns`) |
+| Panel work | $M_t C_t K_p$ MACs; each channel reduces its own $K_p$ activations against its own weights |
+| Panel loads | Activations of the $C_t$ channels, one weight panel of $K_p C_t$ values, on the first panel $C_t$ parameter records (section 5.1) |
+| Weights | Dense only; palette and sparse encodings are rejected |
+| Peak | $P_{\mathrm{dw}}$ per core; `effective_macs_per_cycle` is $N_c P_{\mathrm{dw}}$ |
+| Statistics | `depthwise_macs`, `depthwise_peak_macs_per_cycle` ($N_c P_{\mathrm{dw}}$), `depthwise_mac_utilization` |
+
+A reduction panel takes
 
 $$C_p^{\mathrm{dw}} = \left\lceil \frac{M_t C_t K_p}{P_{\mathrm{dw}}} \right\rceil + C_{\mathrm{pipe}} \tag{3.5}$$
 
-<!-- Reconcile with src/core.cpp: how C_t is chosen (mapping key), whether a zero
-depthwise_macs_per_cycle disables the path, and the address runs of a channel-spanning tile. -->
+The rows below come from `npu-sim --m 16 --n 1 --k 9 --groups 32 --tile-m 8 --tile-n 8`, a
+3x3 depthwise layer of 32 channels on the default vector datapath and serial DMA:
+
+| `--depthwise-macs-per-cycle` | Tiles | Panel $C_p$ | `compute_busy_cycles` | `dma_requests` | `read_bytes` | `cycles` |
+|---:|---:|---|---:|---:|---:|---:|
+| 0, grouped GEMM | 64 of $8 \times 1$ | $\lceil 72/64 \rceil + 4 = 6$ | 384 | 128 | 5,440 | 1,984 |
+| 16 | 8 of $8 \times 8$ channels | $\lceil 576/16 \rceil + 4 = 40$ | 320 | 16 | 5,440 | 592 |
+
+Both mappings move the same bytes. The channel tiles move them in 16 requests where the
+one-column tiles issue 128, and the serial DMA charges its latency once per request
+(section 5.3).
 
 ### 3.6 Pipeline overhead
 
 $C_{\mathrm{pipe}}$ is a fixed charge per reduction panel, added to the MAC and decode time of every
-engine. A tile of $n_k$ panels pays it $n_k$ times, so a small $K_\pi$ trades SRAM (section 4.5)
+engine. A tile of $n_k$ panels pays it $n_k$ times, so a small $K_\pi$ trades SRAM (section 4.6)
 against $n_k C_{\mathrm{pipe}}$ cycles per tile.
 
 ### 3.7 Weight decoder
 
 Weights are stored in one of three formats (`weights.encoding`); the format sets the bytes a
 panel load moves and the decoder work per panel. [Numerics](numerics.md) section 4 specifies
-the byte formats.
+the byte formats and their encoded sizes $B_W(E)$ for a panel of $E = K_p N_t$ elements.
 
-| Format | Panel bytes for $E = K_p N_t$ elements | Decoder cycles $C_{\mathrm{dec}}$ | MAC cycles |
-|---|---|---|---|
-| `dense` | $\lceil E b_w / 8 \rceil$ | 0, the decoder is bypassed | Equations 3.2 to 3.4 |
-| `palette` | $4 + n_{\mathrm{LUT}} + \lceil E b_p / 8 \rceil$, $n_{\mathrm{LUT}} \le 2^{b_p}$ LUT entries | $\lceil E / V \rceil$ | Equations 3.2 to 3.4 |
-| `sparse` | $4 + \lceil \beta / 8 \rceil + \lceil R_s b_w / 8 \rceil$ | $\lceil \beta / V \rceil + \lceil R_s / V \rceil$ | $\lceil M_t \nu / P \rceil$, vector datapath only |
+| Format | Decoder cycles $C_{\mathrm{dec}}$ | MAC cycles |
+|---|---|---|
+| `dense` | 0, the decoder is bypassed | Equations 3.2 to 3.4 |
+| `palette` | $\lceil E / V \rceil$ | Equations 3.2 to 3.4 |
+| `sparse` | $\lceil \beta / V \rceil + \lceil E_r / V \rceil$ | $\lceil M_t \nu / P \rceil$, vector datapath only |
 
-Here $\beta = \lceil E / B_s \rceil$ is the number of bitmap blocks, $R_s$ the elements of
+Here $\beta = \lceil E / B_s \rceil$ is the number of bitmap blocks, $E_r$ the elements of
 retained blocks, and $\nu$ the elements that differ from their channel's weight zero point. The
-decoder runs ahead of the MAC array and streams decoded values into it, so equation 3.1 takes
+decoder runs ahead of the MAC datapath and streams decoded values into it, so equation 3.1 takes
 the larger of the two terms (`encoded_panel_compute_cycles`,
 `src/core.cpp`). Decode work repeats for every output-row tile that uses a panel, including tiles
 whose panel hits the weight cache. `executed_macs` counts $M_t \nu$ per sparse panel and the full
@@ -255,21 +285,21 @@ an odd element count carries one padding nibble.
 
 The datapath accumulates
 
-$$a_{r,c} = b_c + \sum_{k=0}^{K-1} (x_{r,k} - z_x)(w_{k,c} - z_{w,c}) \tag{3.6}$$
+$$a_{r,c} = b_c + \sum_{k=0}^{K-1} (x_{r,k} - z_a)(w_{k,c} - z_{w,c}) \tag{3.6}$$
 
 exactly and requires the final value to fit INT32. Partial sums stay in the slot's INT32
 accumulator across the tile's $n_k$ panels; the bias enters once. The requantization unit runs on
 the final panel only and maps each accumulator to INT8:
 
-$$q_{r,c} = \operatorname{clamp}_{[-128,\,127]}\big(\max(z_y + \operatorname{scale}(a_{r,c}, M_c, s_c),\; \zeta)\big), \qquad \zeta = \begin{cases} z_y & \text{ReLU} \\ -\infty & \text{otherwise} \end{cases} \tag{3.7}$$
+$$q_{r,c} = \operatorname{clamp}_{[-128,\,127]}\big(\max(z_o + \rho(a_{r,c}; \mu_c, S_c),\; \zeta)\big), \qquad \zeta = \begin{cases} z_o & \text{ReLU} \\ -\infty & \text{otherwise} \end{cases} \tag{3.7}$$
 
-| `quant.rescale` | $\operatorname{scale}(a, M, s)$ | Shift range |
+| `quant.rescale` | Rescale $\rho(a; \mu, S)$ | Shift range |
 |---|---|---|
-| `native` | $\operatorname{sgn}(aM)\,\operatorname{round}_\rho\left(\lvert aM \rvert / 2^s\right)$, ties away from zero or to even (`quant.rounding`) | 0 to 31 |
-| `tosa-single` | $\lfloor (aM + 2^{s-1}) / 2^s \rfloor$, TOSA 1.0.2 `apply_scale_32` without double rounding; $a$ outside $[-2^{s-1}, 2^{s-1})$ is rejected | 2 to 62 |
-| `tosa-double` | As `tosa-single`, with the rounding term moved $2^{30}$ away from zero when $s > 31$ | 2 to 62 |
+| `native` | $\operatorname{sgn}(a\mu)\,\operatorname{round}_t\left(\lvert a\mu \rvert / 2^S\right)$, ties away from zero or to even (`quant.rounding`) | 0 to 31 |
+| `tosa-single` | $\lfloor (a\mu + 2^{S-1}) / 2^S \rfloor$, TOSA 1.0.2 `apply_scale_32` without double rounding; $a$ outside $[-2^{S-1}, 2^{S-1})$ is rejected | 2 to 62 |
+| `tosa-double` | As `tosa-single`, with the rounding term moved $2^{30}$ away from zero when $S > 31$ | 2 to 62 |
 
-$M_c$, $s_c$ and $z_{w,c}$ are per-channel when the vectors are present ($Q > 0$). The
+$\mu_c$, $S_c$ and $z_{w,c}$ are per-channel when the vectors are present ($Q > 0$). The
 requantization unit has no timing term of its own: the final panel's duration is $C_p$.
 [Numerics](numerics.md) sections 1 and 2 give the complete arithmetic, the equivalences of the
 TOSA modes with TFLite, gemmlowp and CMSIS-NN, and the golden vectors.
@@ -285,6 +315,10 @@ two groups. Tile identifiers (`tile_id` in traces) run group-major, then row, th
 (`for_each_tile`, `src/core.cpp`):
 
 $$\operatorname{id}(g, i, j) = \left(g \left\lceil \frac{M}{T_m} \right\rceil + i\right) \left\lceil \frac{N}{T_n} \right\rceil + j$$
+
+On the depthwise datapath (section 3.5) the grid is one group of $G$ columns, one per channel:
+tile $(i, j)$ covers rows $iT_m$ to $iT_m + M_t - 1$ and channels $jT_n$ to $jT_n + C_t - 1$,
+and its identifier is $i \lceil G / T_n \rceil + j$.
 
 Every tile has the same $n_k$ reduction panels; panel $p$ covers reduction indexes $pK_\pi$ to
 $pK_\pi + K_p - 1$, with $K_p = \min(K_\pi, K - pK_\pi)$.
@@ -302,7 +336,8 @@ for g in groups of this core:                      # group-major
       acquire a tile slot                           # blocks when S tiles are in flight
       for p in 0 .. n_k-1:                          # reduction panels of depth K_pi
         wait for panel buffer p mod P_b             # freed when panel p-P_b is computed
-        load  A[g, rows i, panel p]                 # M_t runs of K_p bytes
+        load  A[g, rows i, panel p]                 # M_t runs of K_p bytes, skipped on an
+                                                    # activation-cache hit
               W[g, panel p, columns j]              # skipped on a weight-cache hit
               params[g, columns j]   if p == 0      # bias and per-channel vectors
         compute C_p cycles; accumulate INT32
@@ -318,10 +353,13 @@ same column $j$ recur once per row tile, $\lceil N / T_n \rceil n_k$ panel loads
 
 A load of panel $p$ of a tile moves
 
-$$B_{\mathrm{load}}(p) = \underbrace{M_t K_p}_{\text{activations}} + \underbrace{B_W(K_p N_t)}_{\text{weights, unless cached}} + \underbrace{[p = 0]\; 4 N_t (1 + Q)}_{\text{bias and per-channel records}} \tag{4.1}$$
+$$B_{\mathrm{load}}(p) = \underbrace{B_A(p)}_{\text{activations, unless cached}} + \underbrace{B_W(K_p N_t)}_{\text{weights, unless cached}} + \underbrace{[p = 0]\; 4 N_t (1 + Q)}_{\text{bias and per-channel records}} \tag{4.1}$$
 
-where $B_W(E)$ is the panel bytes of section 3.7. A tile store moves $M_t N_t$ bytes of INT8
-outputs. INT32 accumulators never leave the core. Without caches, the job's DRAM traffic is
+where $B_W(E)$ is the encoded size of section 3.7 and $B_A(p)$ the activation bytes: $M_t K_p$
+for a GEMM tile, $M_t C_t K_p$ for a depthwise-datapath tile, and the input footprint of
+section 4.4 under `shape.conv`. A depthwise-datapath tile has $N_t = C_t$ in the weight and
+record terms. A tile store moves $M_t N_t$ bytes of INT8 outputs. INT32 accumulators never
+leave the core. Without caches and without `shape.conv`, the job's DRAM traffic is
 
 | Operand | Bytes per job | Use of each loaded element |
 |---|---|---|
@@ -330,63 +368,125 @@ outputs. INT32 accumulators never leave the core. Without caches, the job's DRAM
 | Bias and per-channel records | $G \lceil M / T_m \rceil \cdot 4 N (1 + Q)$ | $M_t$ outputs |
 | Outputs | $G M N$ | |
 
-$T_n$ sets activation reuse and $T_m$ weight reuse; the weight cache (section 4.6) removes the
-$\lceil M / T_m \rceil$ factor on the weights when a group's column panels fit it. The panel
-depth $K_\pi$ leaves the activation and INT8 weight bytes unchanged and sets the SRAM per panel
-buffer. The default run, $M = N = 16$ and $K = 32$ in four $8 \times 8$ tiles of one panel, reads
+$T_n$ sets activation reuse and $T_m$ weight reuse. The weight cache (section 4.7) removes the
+$\lceil M / T_m \rceil$ factor on the weights when a group's column panels fit it, and the
+activation cache (section 4.8) removes the $\lceil N / T_n \rceil$ factor on the activations
+when a row tile's panels fit it. On the depthwise datapath each activation byte is read once,
+$GMK$ bytes in all, and the weights once per row tile. The panel depth $K_\pi$ leaves the
+activation and INT8 weight bytes of a GEMM unchanged and sets the SRAM per panel buffer. The
+default run, $M = N = 16$ and $K = 32$ in four $8 \times 8$ tiles of one panel, reads
 $4 \cdot (8 \cdot 32 + 32 \cdot 8 + 4 \cdot 8) = 2176$ bytes, the `read_bytes` it reports.
 
-With `shape.conv` set, the activation operand of a convolution is read in place from its NHWC
-tensor (implicit convolution). The activation runs of a panel cover the tile's input footprint:
-the input rows and columns its output pixels touch, halo included, over the panel's kernel
-rows. Padding positions are not read. `mapping.tile_k` is then 0 or a multiple of
-$k_w C_{\mathrm{in}} / G$, so every panel covers whole kernel rows, and the activation term of
-equation 4.1 becomes the footprint bytes.
+### 4.4 Implicit convolution
 
-<!-- Reconcile with src/core.cpp: shape.conv key names and the footprint run construction. -->
+With `shape.conv` set (`ConvConfig`, `include/npu/config.hpp`), the activation operand of a
+convolution stays in DRAM as its NHWC input tensor of $H \times W \times C$ INT8 values, and
+each panel load reads the part of it that the tile's output pixels touch. Setting `input_h`,
+`input_w` and `input_c` enables the mode; the other keys default to a 1x1 kernel, unit stride
+and dilation, and no padding.
 
-### 4.4 Groups
+| Config key | Symbol | Meaning |
+|---|---|---|
+| `shape.conv.input_h`, `input_w`, `input_c` | $H, W, C$ | Input extents; $C$ is a multiple of $G$, $C_g = C / G$ |
+| `shape.conv.kernel_h`, `kernel_w` | $k_h, k_w$ | Kernel extents |
+| `shape.conv.stride_h`, `stride_w` | $s_h, s_w$ | Strides |
+| `shape.conv.dilation_h`, `dilation_w` | $d_h, d_w$ | Dilations |
+| `shape.conv.pad_top`, `pad_left`, `pad_bottom`, `pad_right` | $p_t, p_l, p_b, p_r$ | Rows and columns of activation zero point around the input |
+
+The geometry fixes the GEMM shape (`conv_geometry`, `src/conv.cpp`):
+
+$$H_o = \left\lfloor \frac{H + p_t + p_b - d_h(k_h - 1) - 1}{s_h} \right\rfloor + 1, \qquad W_o = \left\lfloor \frac{W + p_l + p_r - d_w(k_w - 1) - 1}{s_w} \right\rfloor + 1 \tag{4.2}$$
+
+with $M = H_o W_o$ and $K = k_h k_w C_g$. GEMM row $m$ is output pixel
+$(o_y, o_x) = (\lfloor m / W_o \rfloor, m \bmod W_o)$, and reduction index
+$(k_y k_w + k_x) C_g + c$ of group $g$ is input channel $g C_g + c$ at input row
+$o_y s_h + k_y d_h - p_t$ and column $o_x s_w + k_x d_w - p_l$. A position outside the input
+reads the activation zero point, which contributes nothing to equation 3.6, so the arithmetic is
+that of the GEMM on the im2col matrix (`im2col`, `src/conv.cpp`). A kernel row is $k_w C_g$
+consecutive reduction indexes; `mapping.tile_k` is 0 or a multiple of $k_w C_g$, so every
+panel covers whole kernel rows.
+
+The footprint of a panel is a list of input-row spans (`conv_input_spans`, `src/conv.cpp`):
+
+1. The input rows are those that the tile's output rows reach through the panel's kernel rows,
+   clipped to $[0, H)$.
+2. Per input row, the span runs from the leftmost to the rightmost input column that any of the
+   tile's output pixels needs from that row, clipped to $[0, W)$. A stride wider than the
+   kernel's reach leaves skipped columns inside the span, and they are read.
+3. Padding positions are not read.
+
+The panel's activation bytes are the summed span widths times the panel's channels: $C_g$ for
+a GEMM tile, $C_t C_g$ for a depthwise-datapath tile. A panel over every input channel
+($G = 1$, or a depthwise-datapath tile over all $G$ channels) reads one address run per input
+row; any other panel reads one run of its channels per pixel of each span (section 5.1). An
+input pixel is read once per panel whose kernel rows touch it; the im2col matrix holds it once
+per kernel tap.
+
+The table runs a 3x3 convolution with unit stride and one pixel of padding on an
+$8 \times 8 \times 16$ input, $N = 16$, in tiles of two output rows: `npu-sim --m 64 --n 16
+--k 144 --tile-m 16 --tile-n 16 --memory-model axi`, with `--conv-input-h 8 --conv-input-w 8
+--conv-input-c 16 --conv-kernel-h 3 --conv-kernel-w 3` and 1 for each `--conv-pad-*` flag in
+the footprint rows.
+
+| Operand | `tile_k` | `activation_read_bytes` | `read_bytes` | Read bursts | `scratchpad_bytes` |
+|---|---:|---:|---:|---:|---:|
+| im2col matrix, $M = 64$, $K = 144$ | 0 | 9,216 | 18,688 | 106 | 11,904 |
+| Input footprint, `shape.conv` | 0 | 1,792 | 11,264 | 54 | 8,320 |
+| Input footprint, `shape.conv` | 48, one kernel row | 2,816 | 12,288 | 62 | 6,784 |
+
+With one panel per tile the four row tiles read 3, 4, 4 and 3 input rows of 128 bytes. With one
+kernel row per panel they read 22 input rows: a row that three kernel rows touch is read three
+times.
+
+### 4.5 Groups
 
 Groups are independent: a group's tiles read only its $K$ activation columns, its $K \times N$
-weights and its $N$ parameter records, and write its $N$ output columns. Per-channel vectors hold
-$GN$ entries indexed by the global output channel $gN + n$. Grouped layers raise the tile count by
-$G$ and shrink every tile's reduction to $K$; depthwise layers ($N = 1$) produce one-column tiles
-on the GEMM engines, which motivates the depthwise datapath of section 3.5.
+weights and its $N$ parameter records, and write its $N$ output columns. Per-channel vectors
+hold $GN$ entries indexed by the global output channel $gN + n$. Grouped layers raise the tile
+count by $G$ and shrink every tile's reduction to $K$. Depthwise layers ($N = 1$) produce
+one-column tiles on the GEMM engines; the depthwise datapath of section 3.5 tiles them by
+channel, and each channel still reduces only its own group.
 
-### 4.5 SRAM budget
+### 4.6 SRAM budget
 
 Each slot reserves, for its whole lifetime, its tile's parameter records, $P_b$ panel buffers
-sized for the deepest panel, and the INT32 accumulators plus INT8 outputs of a full tile. With
-$\hat M = \min(T_m, M)$, $\hat N = \min(T_n, N)$ and $\hat K = \min(K_\pi, K)$
-(`scratchpad_bytes`, `src/core.cpp`):
+sized for the largest panel, and the INT32 accumulators plus INT8 outputs of a full tile. With
+$\hat M = \min(T_m, M)$, $\hat N = \min(T_n, N)$ ($\min(T_n, G)$ on the depthwise datapath) and
+$\hat K = \min(K_\pi, K)$ (`scratchpad_bytes`, `src/core.cpp`):
 
-$$B_{\mathrm{SRAM}} = S\Big(4\hat N(1 + Q) + P_b\big(\hat M \hat K + \bar B_W(\hat K \hat N)\big) + 5 \hat M \hat N\Big) + C_w + C_a \tag{4.2}$$
+$$B_{\mathrm{SRAM}} = N_s\Big(4\hat N(1 + Q) + P_b\big(\hat B_A + \bar B_W(\hat K \hat N)\big) + 5 \hat M \hat N\Big) + C_w + C_a \tag{4.3}$$
 
-$\bar B_W(E)$ is the worst-case panel size of the weight format: $\lceil E b_w / 8 \rceil$ dense,
-$4 + \min(E, 2^{b_p}) + \lceil E b_p / 8 \rceil$ palette, and
-$4 + \lceil \lceil E / B_s \rceil / 8 \rceil + \lceil E b_w / 8 \rceil$ sparse. The factor 5 is
+| Operand | Activation panel bound $\hat B_A$ |
+|---|---|
+| GEMM | $\hat M \hat K$ |
+| Depthwise datapath | $\hat M \hat N \hat K$ |
+| `shape.conv` | The largest span-width sum of any panel of any row tile, times $C_g$, or $\hat N C_g$ on the depthwise datapath |
+
+$\bar B_W(E)$ is the worst-case panel size of the weight format ([numerics](numerics.md)
+section 4.6); for dense weights it equals $B_W(E) = \lceil E b_w / 8 \rceil$. The factor 5 is
 four accumulator bytes and one output byte per element. $B_{\mathrm{SRAM}}$ must not exceed
 `arch.sram_bytes`; a configuration that exceeds it is rejected, and the model has no spill path.
 The result reports $B_{\mathrm{SRAM}}$ per core as `scratchpad_bytes`.
 
 For the `client-16c` design point, sized from public data in [design points](design-points.md)
-($T_m = T_n = 64$, $K_\pi = 128$, $S = P_b = 2$, $Q = 0$,
-dense INT8, $C_w = 29{,}696$):
+($T_m = T_n = 64$, $K_\pi = 256$, $N_s = P_b = 2$, $Q = 0$, dense INT8, $C_w = 89{,}600$,
+$C_a = 0$):
 
-$$2\big(256 + 2(8192 + 8192) + 20{,}480\big) + 29{,}696 = 136{,}704$$
+$$2\big(256 + 2(16{,}384 + 16{,}384) + 20{,}480\big) + 89{,}600 = 262{,}144$$
 
 which is its `arch.sram_bytes`; `npu-sim --config configs/client-16c.json` reports
-`scratchpad_bytes` 136,704 for any $K \ge 128$. The design points derive their tile and cache
+`scratchpad_bytes` 262,144 for $M, N \ge 64$ and $K > 256$. At $K = 256$ a tile has one panel,
+$P_b = 1$, and the reservation is 196,608 bytes. The design points derive their tile and cache
 sizes from this equation.
 
-### 4.6 Weight cache
+### 4.7 Weight cache
 
-Each core owns an LRU cache of weight panels, $C_w$ bytes, fully associative (`weight_cached`,
-`src/model.cpp`).
+Each core owns an LRU cache of weight panels, $C_w$ bytes, fully associative (`PanelCache` and
+`Core::transfer`, `src/model.cpp`).
 
 | Property | Behavior |
 |---|---|
-| Line | One weight panel: group $g$, column panel $j$, reduction panel $p$, at its encoded byte length |
+| Line | One weight panel: group $g$, column panel $j$ (a channel tile on the depthwise datapath), reduction panel $p$, at its encoded byte length |
 | Lookup | Every panel load when $C_w > 0$ |
 | Hit | The load omits the weight run; the line moves to most recently used; `weight_bytes_saved` grows by the panel bytes |
 | Miss | The weight run is loaded; the panel is inserted after evicting least recently used lines until it fits |
@@ -399,17 +499,26 @@ per row tile. Under LRU replacement the panels of that sequence that fit the cac
 either fit together and hit on every pass after the first, or exceed the capacity together and
 miss on every access. The cluster estimate of section 6.3 relies on this property.
 
-### 4.7 Activation cache
+### 4.8 Activation cache
 
-Each core also owns an LRU cache of activation panels, $C_a$ bytes, with the policy of the weight
-cache. A line is the activation panel of row tile $i$ and reduction panel $p$ of group $g$; a hit
-omits the panel's activation runs from the load. In the loop nest of section 4.2 the activation
-panels of one row tile recur for every column tile, $n_k$ panel loads apart, so a cache of
-$n_k$ activation panels removes the $\lceil N / T_n \rceil$ factor on the activations. $C_a$
-enters the SRAM budget of equation 4.2.
+Each core also owns an LRU cache of activation panels, $C_a$ bytes, with the lookup,
+replacement, oversize and timing rules of the weight cache (`PanelCache`, `src/model.cpp`;
+`activation_cache_key`, `src/core.cpp`).
 
-<!-- Reconcile with src/model.cpp: line key, statistics field names, interaction with
-implicit-convolution footprints. -->
+| Property | Behavior |
+|---|---|
+| Line | One activation panel: group $g$ (a channel tile on the depthwise datapath), row tile $i$, reduction panel $p$ |
+| Line bytes | $B_A(p)$ of equation 4.1: $M_t K_p$, or the input footprint under `shape.conv` |
+| Hit | The load omits the panel's activation runs; `activation_bytes_saved` grows by the line bytes |
+| Statistics | `activation_read_bytes` (activation bytes loaded after hits), `activation_cache_hits`, `activation_cache_misses`, `activation_bytes_saved`, `peak_cached_activation_bytes` |
+
+In the loop nest of section 4.2 the $n_k$ activation panels of one row tile recur for every
+column tile of the group, $n_k$ panel loads apart. When they fit $C_a$ together, every column
+tile after the first hits, and the activation bytes fall by the factor $\lceil N / T_n \rceil$.
+The convolution of section 4.4 with $N = 32$, two column tiles, reads 3,584 activation bytes;
+with $C_a = 512$ bytes, its largest footprint, it reads 1,792, with 4 hits and 4 misses. On the
+depthwise datapath a line belongs to one channel tile, which no other tile reads, so the cache
+records misses and no hits. $C_a$ enters the SRAM budget of equation 4.3.
 
 ## 5 Memory system
 
@@ -420,16 +529,23 @@ Addresses are 64-bit; they place burst boundaries and carry no data.
 
 | Region | Base | Content | Layout |
 |---|---|---|---|
-| Activations | `0x8000_0000` | INT8, $M \times GK$ | Row-major; row stride $GK$ bytes; group $g$ at column $gK$ |
+| Activations | `0x8000_0000` | INT8, $M \times GK$; with `shape.conv` the $H \times W \times C$ input | Row-major; row stride $GK$ bytes; group $g$ at column $gK$. With `shape.conv`, NHWC: channel $c$ of pixel $(y, x)$ at $(yW + x)C + c$ |
 | Weights | `0x9000_0000` | Packed or encoded weight panels | One contiguous panel per (group, column panel, reduction panel), packed back to back in the order the loader first reads them |
 | Parameters | `0xA000_0000` | One record per output channel | INT32 bias, then each present per-channel vector (weight zero point, multiplier, shift) as INT32: $4(1 + Q)$ bytes; channel $gN + n$ |
 | Outputs | `0xB000_0000` | INT8, $M \times GN$ | Row-major; row stride $GN$ bytes; group $g$ at column $gN$ |
 
-A request is a list of address runs (`panel_read_runs`, `tile_store_runs`, `src/core.cpp`):
+A request is a list of address runs (`panel_read_runs`, `activation_runs`, `tile_store_runs`,
+`src/core.cpp`). A load issues its activation runs, then the weight panel at
+`0x9000_0000` $+\,\omega$ unless the weight cache holds it, then on $p = 0$ the parameter run.
+A depthwise-datapath tile $(i, j)$ covers groups $g_0 = jT_n$ to $g_0 + C_t - 1$.
 
 | Request | Runs, in issue order |
 |---|---|
-| Load of panel $p$ of tile $(g, i, j)$ | For each tile row $r$: base `0x8000_0000` $+\, rGK + gK + pK_\pi$, length $K_p$. Then the weight panel at `0x9000_0000` $+\,\omega$, unless the cache holds it. On $p = 0$: base `0xA000_0000` $+\, 4(1+Q)(gN + jT_n)$, length $4(1+Q)N_t$ |
+| Activations of panel $p$, GEMM tile $(g, i, j)$ | For each tile row $r$: base `0x8000_0000` $+\, rGK + gK + pK_\pi$, length $K_p$ |
+| Activations of panel $p$, depthwise-datapath tile | For each tile row $r$: one run of $C_t K$ bytes at $rGK + g_0 K$ when $K_\pi = K$; otherwise one run of $K_p$ bytes per channel $g$, at $rGK + gK + pK_\pi$ |
+| Activations of panel $p$ under `shape.conv` | For each input-row span $(y, x_0, x_1)$ of section 4.4: one run of $(x_1 - x_0 + 1)C$ bytes at $(yW + x_0)C$ when the panel covers all $C$ channels; otherwise, per pixel $x$ of the span, one run of the panel's channels at $(yW + x)C + g_0 C_g$ |
+| Activations on an activation-cache hit | None |
+| Parameters, $p = 0$ | Base `0xA000_0000` $+\, 4(1+Q)(gN + jT_n)$, length $4(1+Q)N_t$; on the depthwise datapath channel $g_0$ onward, length $4(1+Q)C_t$ |
 | Store of tile $(g, i, j)$ | For each tile row $r$: base `0xB000_0000` $+\, rGN + gN + jT_n$, length $N_t$ |
 
 For dense weights the panel offset is closed-form (`dense_weight_offset`). With
@@ -438,7 +554,8 @@ bytes of one column panel of width $c$:
 
 $$\omega(g, j, p) = g\left(\left\lfloor \frac{N}{T_n} \right\rfloor \Omega(T_n) + \Omega(N \bmod T_n)\right) + j\,\Omega(T_n) + p\left\lceil \frac{K_\pi N_t b_w}{8} \right\rceil \tag{5.1}$$
 
-with $\Omega(0) = 0$. Encoded panels are packed back to back in the same order, each at its own
+with $\Omega(0) = 0$; on the depthwise datapath $g = 0$ and $G$ takes the place of $N$, the
+grid of section 4.1. Encoded panels are packed back to back in the same order, each at its own
 byte length. Every base is 4 KiB aligned, so a tensor larger than its 256 MiB window in a
 `--timing-only` run splits into bursts as it would in a disjoint window.
 
@@ -458,7 +575,7 @@ One non-preemptive DMA server moves reads and writes, one request at a time (`Se
 `src/memory.cpp`). A request of $x$ bytes splits into bursts of $\Lambda$ bytes and a remainder,
 or one burst when $\Lambda = 0$; each burst pays the latency and its data cycles:
 
-$$C_{\mathrm{DMA}}(x) = \sum_{\text{bursts } i} \left(L + \left\lceil \frac{x_i}{W} \right\rceil\right) \tag{5.2}$$
+$$C_{\mathrm{DMA}}(x) = \sum_{\text{bursts } i} \left(L + \left\lceil \frac{x_i}{R_{\mathrm{dma}}} \right\rceil\right) \tag{5.2}$$
 
 The request completes $C_{\mathrm{DMA}}(x)$ cycles after the server starts it. Address runs do
 not affect the serial model; it counts bytes.
@@ -566,20 +683,22 @@ order never decides a grant.
 ### 6.1 Organization
 
 `arch.cores` instantiates $N_c$ core pipelines (`Accelerator`, `src/model.cpp`). Each core owns
-its tile slots, panel buffers, weight and activation caches, SRAM budget (equation 4.2 applies
+its tile slots, panel buffers, weight and activation caches, SRAM budget (equation 4.3 applies
 per core) and AXI port with the configured outstanding limits. All ports share the DRAM timeline
 of section 5.4.3, so more than one core requires the AXI model. The cores write disjoint tiles of
 one output tensor, which the simulator verifies once against the scalar reference.
 
 ### 6.2 Partition
 
-The tiles are split in contiguous units (`cluster_plan`, `src/core.cpp`):
+The tiles are split in contiguous units of the tile grid of section 4.1 (`cluster_plan`,
+`src/core.cpp`). $G'$ is the grid's group count: $G$, or 1 on the depthwise datapath, whose
+column tiles are channel tiles.
 
 | Condition | Split | Unit | Units $U$ | Operand re-read by several cores |
 |---|---|---|---|---|
-| $G \ge N_c$ | `groups` | One group | $G$ | None |
-| $G < N_c$, partition `m` | `rows` | One row tile of a group | $G \lceil M / T_m \rceil$ | Weights of each group, by every core that holds its row tiles |
-| $G < N_c$, partition `n` | `columns` | One column tile of a group | $G \lceil N / T_n \rceil$ | Activations of each group, by every core that holds its column tiles |
+| $G' \ge N_c$ | `groups` | One group | $G'$ | None |
+| $G' < N_c$, partition `m` | `rows` | One row tile of a group | $G' \lceil M / T_m \rceil$ | Weights of each group, by every core that holds its row tiles |
+| $G' < N_c$, partition `n` | `columns` | One column tile of a group | $G \lceil N / T_n \rceil$, or $\lceil G / T_n \rceil$ on the depthwise datapath | Activations of each group, by every core that holds its column tiles; none on the depthwise datapath |
 
 Core $c$ takes the units
 
@@ -593,13 +712,13 @@ with the smaller makespan bound, then the one with fewer DRAM bytes, then `n`.
 
 `estimate_cluster` predicts each split in closed form. Per core it sums the compute cycles of its
 tiles (equation 3.1, so they equal the core's `compute_busy_cycles`) and its read and write
-bytes, applying the cyclic-LRU property of section 4.6 to the weight cache. The makespan bound is
+bytes, applying the cyclic-LRU property of section 4.7 to the weight cache. The makespan bound is
 
 $$C_{\mathrm{bound}} = \max\left(\max_c C^{\mathrm{comp}}_c,\; \max_c C^{\mathrm{port}}_c,\; \left\lceil \frac{\sum_c (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c)}{R} \right\rceil\right) \tag{6.2}$$
 
 with $C^{\mathrm{port}}_c = \max(\lceil B^{\mathrm{rd}}_c / D \rceil, \lceil B^{\mathrm{wr}}_c / D \rceil)$
-under AXI and $\lceil (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c) / W \rceil$ under the serial model;
-the DRAM term applies when $R > 0$. The result echoes both predictions under
+under AXI and $\lceil (B^{\mathrm{rd}}_c + B^{\mathrm{wr}}_c) / R_{\mathrm{dma}} \rceil$ under the
+serial model; the DRAM term applies when $R > 0$. The result echoes both predictions under
 `cluster.predicted`.
 
 ### 6.4 Aggregate semantics
@@ -611,11 +730,12 @@ The top level of a result describes the cluster; `cores` lists every core (`repo
 |---|---|
 | `cycles` | Makespan: the last core's completion |
 | Counters: MACs, bytes, busy cycles, wait cycles, requests, bursts, cache hits and misses, panels, tiles | Sum over cores |
-| `peak_inflight_tiles`, `peak_cached_weight_bytes` | Largest core, since slots and caches are per core |
+| `peak_inflight_tiles`, `peak_cached_weight_bytes`, `peak_cached_activation_bytes` | Largest core, since slots and caches are per core |
 | `compute_utilization`, `memory_utilization` | Busy cycles over $N_c \cdot$ `cycles`: the mean over cores |
-| `effective_macs_per_cycle` | $N_c$ times the per-core peak |
+| `effective_macs_per_cycle` | $N_c$ times the per-core peak of the engine the job runs on |
+| `depthwise_peak_macs_per_cycle` | $N_c P_{\mathrm{dw}}$ |
 | `mac_utilization` | `executed_macs` over `effective_macs_per_cycle` $\cdot$ `cycles` |
-| `peak_memory_bytes_per_cycle` | AXI: $\min(2 N_c D, R)$, or $2 N_c D$ when $R = 0$; serial: $W$ |
+| `peak_memory_bytes_per_cycle` | AXI: $\min(2 N_c D, R)$, or $2 N_c D$ when $R = 0$; serial: $R_{\mathrm{dma}}$ |
 | `resource_lower_bound_cycles` | Largest of the per-core compute busy cycles, the per-core memory busy cycles and, under AXI with $R > 0$, $\lceil$DRAM bytes$/R\rceil$ |
 | `memory` channel statistics | Counters add; maximum latency and peak outstanding take the largest port; mean latency is total latency over requests |
 | `scratchpad_bytes` | Per core |
@@ -643,9 +763,9 @@ compute and store threads, then the memory model's thread, then the observer.
 
 | Channel | Type | Depth | Token | Producer, consumer |
 |---|---|---|---|---|
-| `free_slots` | `sc_fifo` | $S$, initially full | Slot | `store`, `load` |
-| `loaded` | `sc_fifo` | $S P_b$ | Panel job $t\,n_k + p$ | `load`, `compute` |
-| `computed` | `sc_fifo` | $S$ | Tile | `compute`, `store` |
+| `free_slots` | `sc_fifo` | $N_s$, initially full | Slot | `store`, `load` |
+| `loaded` | `sc_fifo` | $N_s P_b$ | Panel job $t\,n_k + p$ | `load`, `compute` |
+| `computed` | `sc_fifo` | $N_s$ | Tile | `compute`, `store` |
 
 | Event | Notified by | Wakes |
 |---|---|---|
@@ -714,79 +834,55 @@ and the serial server waits two delta cycles before choosing between a read and 
 
 ## 8 Observability
 
-[Usage](usage.md) sections 5 to 7 give the complete result, trace and snapshot formats. This
-section defines what the architectural quantities measure.
+[Usage](usage.md) sections 5 to 7 define every field of the result, the stage trace, the
+waveforms and the live snapshots. This section maps the observed quantities to the mechanisms
+above and states when each is sampled.
 
 ### 8.1 Result statistics
 
-| Field | Definition |
+| Fields | Mechanism |
 |---|---|
-| `cycles` | Makespan in cycles |
-| `macs`, `executed_macs`, `skipped_macs` | $GMNK$; MACs performed; the difference (section 3.7) |
-| `read_bytes`, `write_bytes` | Payload bytes of all requests |
-| `weight_read_bytes` | Weight bytes loaded, after cache hits |
-| `encoded_weight_storage_bytes`, `dense_weight_storage_bytes` | Weight footprint in DRAM in the configured format and as packed dense |
-| `compute_busy_cycles` | Sum of $C_p$ over computed panels |
-| `dma_busy_cycles` | Serial: sum of request durations. AXI: cycles with a request in flight on either channel of a port |
-| `peak_inflight_tiles`, `slot_wait_cycles`, `panel_wait_cycles` | Slot occupancy and the waits of section 7.3 |
-| `dma_requests`, `dma_bursts` | Requests and bursts on both channels |
-| `weight_cache_hits`, `weight_cache_misses`, `weight_bytes_saved`, `peak_cached_weight_bytes` | Section 4.6 |
-| `weight_decode_cycles`, `decoded_weight_values` | Decoder occupancy and output values, summed over computed panels |
-| `reduction_blocks`, `scratchpad_bytes` | $n_k$; $B_{\mathrm{SRAM}}$ of equation 4.2 |
-| `effective_macs_per_cycle`, `peak_memory_bytes_per_cycle` | Cluster peaks (section 6.4) |
-| `compute_utilization`, `memory_utilization`, `mac_utilization` | Section 6.4 |
-| `dma_payload_utilization` | (`read_bytes` + `write_bytes`) over `peak_memory_bytes_per_cycle` $\cdot$ `cycles` |
-| `arithmetic_intensity_macs_per_byte` | `macs` over (`read_bytes` + `write_bytes`) |
-| `resource_lower_bound_cycles` | Section 6.4 |
-| `modeled_latency_ns` | `cycles` at `arch.frequency_mhz` |
-| `memory.read`, `memory.write` | Per channel: requests, bursts, beats, payload bytes, busy cycles (data-phase cycles), mean and maximum request latency (arrival to completion), burst efficiency, achieved bytes per cycle, peak outstanding bursts |
-| `memory.dram` | AXI: $R$, bytes moved ($D$ times beats), utilization |
-| `cluster`, `cores` | Section 6 |
-| `numerics`, `numerical_match`, `output_hash` | `bit-exact` runs compare every accumulator and output with the scalar reference before reporting |
+| `cycles`, `resource_lower_bound_cycles`, `cluster`, `cores` | Makespan and cluster aggregation, section 6.4 |
+| `macs`, `executed_macs`, `skipped_macs`, `compute_busy_cycles` | Panel compute, equation 3.1; sparse zero skipping, section 3.7 |
+| `weight_decode_cycles`, `decoded_weight_values`, `encoded_weight_storage_bytes`, `dense_weight_storage_bytes` | Weight decoder, section 3.7 |
+| `depthwise_macs`, `depthwise_peak_macs_per_cycle`, `depthwise_mac_utilization` | Depthwise datapath, section 3.5 |
+| `reduction_blocks`, `scratchpad_bytes` | $n_k$ of section 4.1; $B_{\mathrm{SRAM}}$ of equation 4.3 |
+| `read_bytes`, `write_bytes`, `weight_read_bytes`, `activation_read_bytes` | Traffic, equation 4.1, after cache hits |
+| `weight_cache_hits`, `weight_cache_misses`, `weight_bytes_saved`, `peak_cached_weight_bytes` | Weight cache, section 4.7 |
+| `activation_cache_hits`, `activation_cache_misses`, `activation_bytes_saved`, `peak_cached_activation_bytes` | Activation cache, section 4.8 |
+| `dma_busy_cycles`, `dma_requests`, `dma_bursts`, `memory.read`, `memory.write` | Serial DMA, section 5.3, or AXI channels, section 5.4 |
+| `memory.dram` | DRAM timeline, section 5.4.3: $D$ times all beats, against $R$ |
+| `peak_inflight_tiles`, `slot_wait_cycles`, `panel_wait_cycles` | Slot and panel-buffer protocol, section 7.3 |
+| `effective_macs_per_cycle`, `peak_memory_bytes_per_cycle`, utilizations | Peaks and means of section 6.4 |
+| `numerics`, `numerical_match`, `output_hash` | A `bit-exact` run compares every accumulator and output with the scalar reference before it reports ([numerics](numerics.md) section 6.1) |
 
 ### 8.2 Stage trace
 
-`--trace PATH` writes one CSV row per completed stage span: `stage` (`load`, `compute`,
-`store`), `tile_id`, `start_cycle`, `end_cycle`, `bytes` (request payload, 0 for compute),
-`block_id` (reduction panel; a store carries the final panel) and `core`. A load or store span
-runs from the cycle the serial server starts the request, or the cycle the AXI port receives it,
-to the request's completion. Figure 2(b) is drawn from two such traces.
+`--trace PATH` records one span per load, compute and store stage ([usage](usage.md) section
+6.1); a compute span is one reduction panel of $C_p$ cycles. Figure 2(b) is drawn from two such
+traces.
 
 ### 8.3 Waveforms
 
-`--vcd PATH.vcd` traces 25 `sc_signal` values per core: five flags (`done`, `dma_busy`,
-`compute_busy`, `dma_read`, `dma_write`) and 20 64-bit counters (`cycles`, occupancy of slots and
-FIFOs, queue depths, traffic, MACs, the tile and block each resource serves, busy cycles,
-requests, bursts, executed and skipped MACs, decode cycles). One core traces under the module
-name, a cluster under one scope per core. The VCD time unit is 1 ps and delta cycles are traced,
-so cycle $c$ appears at time $1000c$ and same-cycle updates at picosecond offsets. One passive
-`SC_METHOD`, sensitive to `state_changed`, writes every signal; the scheduling processes never
-write signals, so simultaneous updates in one cycle cannot conflict. Traffic and MAC counters
-commit when their operation completes; busy-cycle counters include the elapsed part of an
-operation in flight.
+`--vcd PATH.vcd` traces five flags and 20 counters per core ([usage](usage.md) section 6.2).
+One passive `SC_METHOD`, sensitive to `state_changed`, writes every signal; the scheduling
+processes never write signals, so simultaneous updates in one cycle cannot conflict. Traffic
+and MAC counters commit when their operation completes; busy-cycle counters include the elapsed
+part of an operation in flight.
 
 ### 8.4 Live snapshots
 
-`--live-stdio` pauses the kernel between commands (`advance N`, `snapshot`, `stop`) and answers
-each with a snapshot; `--progress-jsonl` writes the same snapshot after every `--slice-cycles`
-cycles of a batch run. A snapshot carries the full effective configuration and
-`memory.peak_bytes_per_cycle`, which place the run on a roofline, and the state at the current
-cycle:
-
-| Group | Fields |
-|---|---|
-| Resource state | `dma_busy`, `dma_read`, `dma_write`, `compute_busy`, `dma_tile_id`, `dma_block_id`, `compute_tile_id`, `compute_block_id`, `active_stages` |
-| Occupancy | `inflight_tiles`, `read_queue_depth`, `write_queue_depth`; per channel `active`, `outstanding`, `queued` |
-| Progress | `tiles_total`, `tiles_completed`, `panels_total`, `panels_completed`, `loaded_panels` |
-| Counters | As in a result, committed so far |
-| Cluster | `cluster` (`cores`, `partition`, `split`, `units`) and one `cores` entry per core |
-| Validation | `validated` turns true, and `numerical_match` and `output_hash` turn non-null, when a completed bit-exact output matches the reference |
-
-Cluster-level resource identifiers come from the lowest-numbered busy core.
+`--live-stdio` pauses the kernel between commands and answers each with a snapshot, and
+`--progress-jsonl` writes the same snapshot after every `--slice-cycles` cycles of a batch run
+([usage](usage.md) section 7). A snapshot carries the full effective configuration and
+`memory.peak_bytes_per_cycle`, which place the run on a roofline, and the resource state,
+occupancy and progress at the current cycle, with the commit rules of section 8.3. Cluster-level
+resource identifiers come from the lowest-numbered busy core.
 
 ### 8.5 Invariant monitor
 
 At every observation the monitor checks, per core, that in-flight tiles and computed tiles do not
-exceed $S$, loaded panels do not exceed $S P_b$, cached weight bytes do not exceed $C_w$, a busy
-resource has an in-flight tile, and a completed core has no tile in flight, no busy resource and
-no queued request. A violation stops the run with `SC_REPORT_FATAL("NPU/invariant", ...)`.
+exceed $N_s$, loaded panels do not exceed $N_s P_b$, cached weight and activation bytes do not
+exceed $C_w$ and $C_a$, a busy resource has an in-flight tile, and a completed core has no tile in
+flight, no busy resource and no queued request. A violation stops the run with
+`SC_REPORT_FATAL("NPU/invariant", ...)`.

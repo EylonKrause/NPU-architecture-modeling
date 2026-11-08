@@ -1,5 +1,5 @@
-"""Timing model of npu-sim, written from the architecture rules (SPEC sections 3 to 5 and
-the interface comments in include/npu), not from the C++.
+"""Timing model of npu-sim, derived from docs/architecture.md (sections 3 to 7) and the
+interface comments in include/npu, independently of the C++ implementation.
 
 Execution model. Each of G groups is an independent M x n x k GEMM. Its output is cut
 into tile_m x tile_n tiles (edge tiles are smaller); each tile walks the reduction in
@@ -56,6 +56,7 @@ cycle count and the counters npu-sim reports.
 "memory", "cluster" and "cores"), and ``observed_bound()`` classifies it as ``bound``
 classifies a model.
 """
+
 from __future__ import annotations
 
 import bisect
@@ -144,28 +145,30 @@ class Design:
         return name if name in _FIELDS else None
 
     @classmethod
-    def normalise(cls, flags: Mapping[str, Any]) -> dict[str, Any]:
+    def normalize(cls, flags: Mapping[str, Any]) -> dict[str, Any]:
         """``flags`` keyed by field name; any key that names no field is a ValueError."""
         values: dict[str, Any] = {}
         for key, value in flags.items():
             name = cls.field_name(key)
             if name is None:
-                close = difflib.get_close_matches(str(key).lstrip("-").replace("-", "_"),
-                                                  _FIELDS, n=1)
+                close = difflib.get_close_matches(
+                    str(key).lstrip("-").replace("-", "_"), _FIELDS, n=1
+                )
                 hint = f"; did you mean {close[0]!r}?" if close else ""
                 raise ValueError(f"unknown design parameter {key!r}{hint}")
             values[name] = value
         return values
 
     @classmethod
-    def from_flags(cls, flags: Mapping[str, Any] | None = None, strict: bool = False,
-                   **overrides: Any) -> "Design":
+    def from_flags(
+        cls, flags: Mapping[str, Any] | None = None, strict: bool = False, **overrides: Any
+    ) -> Design:
         """Design from npu-sim flags ({"tile_m": 8} or {"--tile-m": 8}). Keys that name no
         field are skipped (simulator-only flags such as --input), or rejected when
         ``strict``."""
         given = {**(flags or {}), **overrides}
         if strict:
-            given = cls.normalise(given)
+            given = cls.normalize(given)
         values: dict[str, Any] = {}
         for key, value in given.items():
             name = cls.field_name(key)
@@ -174,19 +177,28 @@ class Design:
         return cls(**values)
 
     @classmethod
-    def from_result(cls, result: Mapping[str, Any]) -> "Design":
+    def from_result(cls, result: Mapping[str, Any]) -> Design:
         """Design echoed in an npu-sim result, flat or option-table config.
 
-        Keys an older simulator does not report take the behaviour that simulator had (one
-        panel buffer per slot, one group, serial memory, one core; arrays without a
-        dataflow key are os-per-wave). Every other key the model reads must be present."""
+        A key the result does not report takes the value of the build that wrote it, which
+        lacks that option: one panel buffer per slot, one group, serial memory, one core, and
+        os-per-wave for an array without a dataflow key. Every other key the model reads must
+        be present."""
         config = result["config"]
-        legacy = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
-                  "partition": "auto", "dram_bytes_per_cycle": 0,
-                  "depthwise_macs_per_cycle": 0, "activation_cache_bytes": 0,
-                  **{name: _FIELDS[name].default for name in CONV_FIELDS}}
-        optional = {"dataflow", "per_channel_vectors"} | {name for name in _FIELDS
-                                                          if name.startswith("axi_")}
+        legacy = {
+            "panel_buffers": 1,
+            "groups": 1,
+            "memory_model": "serial",
+            "cores": 1,
+            "partition": "auto",
+            "dram_bytes_per_cycle": 0,
+            "depthwise_macs_per_cycle": 0,
+            "activation_cache_bytes": 0,
+            **{name: _FIELDS[name].default for name in CONV_FIELDS},
+        }
+        optional = {"dataflow", "per_channel_vectors"} | {
+            name for name in _FIELDS if name.startswith("axi_")
+        }
         values: dict[str, Any] = {}
         missing = []
         for name, field in _FIELDS.items():
@@ -203,11 +215,12 @@ class Design:
             array = values["array_rows"] > 0 and values["array_cols"] > 0
             values["dataflow"] = "os-per-wave" if array else "os"
         quant = config.get("quant", {}) if isinstance(config.get("quant"), Mapping) else {}
-        values["per_channel_vectors"] = sum(bool(quant.get(key)) for key in
-                                            ("weight_zero_points", "multipliers", "shifts"))
+        values["per_channel_vectors"] = sum(
+            bool(quant.get(key)) for key in ("weight_zero_points", "multipliers", "shifts")
+        )
         return cls(**values)
 
-    def replace(self, **changes: Any) -> "Design":
+    def replace(self, **changes: Any) -> Design:
         return dataclasses.replace(self, **changes)
 
     @property
@@ -265,8 +278,11 @@ class Design:
         if self.memory_model == "axi":
             channels = 2 * self.cores * (self.axi_data_bytes or 0)
             if self.dram_bytes_per_cycle:
-                return float(min(self.dram_bytes_per_cycle, channels) if channels
-                             else self.dram_bytes_per_cycle)
+                return float(
+                    min(self.dram_bytes_per_cycle, channels)
+                    if channels
+                    else self.dram_bytes_per_cycle
+                )
             return float(channels)
         return float(self.memory_bytes_per_cycle)
 
@@ -297,16 +313,16 @@ def _coerce(field: dataclasses.Field, value: Any) -> Any:
 # per input row it touches, the hull of the columns its output pixels need over the
 # panel's kernel rows, clipped to the image: padding reads nothing.
 
+
 @dataclass(frozen=True)
 class ConvGeometry:
     output_h: int
     output_w: int
-    group_channels: int     # C_g = input channels / G
-    kernel_row_k: int       # kernel_w * C_g
+    group_channels: int  # C_g = input channels / G
+    kernel_row_k: int  # kernel_w * C_g
 
 
-def _output_extent(size: int, kernel: int, stride: int, dilation: int, low: int,
-                   high: int) -> int:
+def _output_extent(size: int, kernel: int, stride: int, dilation: int, low: int, high: int) -> int:
     reach = dilation * (kernel - 1) + 1
     if reach > size + low + high:
         raise ValueError(f"conv kernel reach {reach} exceeds the padded input {size + low + high}")
@@ -319,17 +335,32 @@ def conv_geometry(design: Design) -> ConvGeometry:
         raise ValueError("the design has no conv geometry")
     d = design
     if d.conv_input_c % d.groups:
-        raise ValueError(f"conv input channels {d.conv_input_c} are not a multiple of "
-                         f"groups {d.groups}")
-    oh = _output_extent(d.conv_input_h, d.conv_kernel_h, d.conv_stride_h, d.conv_dilation_h,
-                        d.conv_pad_top, d.conv_pad_bottom)
-    ow = _output_extent(d.conv_input_w, d.conv_kernel_w, d.conv_stride_w, d.conv_dilation_w,
-                        d.conv_pad_left, d.conv_pad_right)
+        raise ValueError(
+            f"conv input channels {d.conv_input_c} are not a multiple of groups {d.groups}"
+        )
+    oh = _output_extent(
+        d.conv_input_h,
+        d.conv_kernel_h,
+        d.conv_stride_h,
+        d.conv_dilation_h,
+        d.conv_pad_top,
+        d.conv_pad_bottom,
+    )
+    ow = _output_extent(
+        d.conv_input_w,
+        d.conv_kernel_w,
+        d.conv_stride_w,
+        d.conv_dilation_w,
+        d.conv_pad_left,
+        d.conv_pad_right,
+    )
     channels = d.conv_input_c // d.groups
     row_k = d.conv_kernel_w * channels
     if d.m != oh * ow or d.k != d.conv_kernel_h * row_k:
-        raise ValueError(f"conv geometry gives M = {oh * ow} and K = {d.conv_kernel_h * row_k}, "
-                         f"the design has M = {d.m} and K = {d.k}")
+        raise ValueError(
+            f"conv geometry gives M = {oh * ow} and K = {d.conv_kernel_h * row_k}, "
+            f"the design has M = {d.m} and K = {d.k}"
+        )
     return ConvGeometry(oh, ow, channels, row_k)
 
 
@@ -359,8 +390,14 @@ def _column_hull(key: tuple[int, ...], first: int, last: int) -> tuple[int, int]
     return low, high
 
 
-def _spans(key: tuple[int, ...], output_w: int, first_output: int, outputs: int,
-           kernel_first: int, kernel_rows: int) -> tuple[tuple[int, int, int], ...]:
+def _spans(
+    key: tuple[int, ...],
+    output_w: int,
+    first_output: int,
+    outputs: int,
+    kernel_first: int,
+    kernel_rows: int,
+) -> tuple[tuple[int, int, int], ...]:
     height = key[0]
     stride_h, dilation_h, top = key[5], key[7], key[9]
     last_output = first_output + outputs - 1
@@ -383,15 +420,18 @@ def kernel_rows(design: Design, block: int) -> tuple[int, int]:
     """(first kernel row, kernel rows) of reduction panel ``block``."""
     geometry = conv_geometry(design)
     if design.tile_k % geometry.kernel_row_k:
-        raise ValueError(f"with conv geometry tile_k must be 0 or a multiple of "
-                         f"{geometry.kernel_row_k} (whole kernel rows)")
+        raise ValueError(
+            f"with conv geometry tile_k must be 0 or a multiple of "
+            f"{geometry.kernel_row_k} (whole kernel rows)"
+        )
     per_block = design.tile_k // geometry.kernel_row_k if design.tile_k else design.conv_kernel_h
     first = block * per_block
     return first, min(per_block, design.conv_kernel_h - first)
 
 
-def input_spans(design: Design, first_output: int, outputs: int,
-                block: int) -> tuple[tuple[int, int, int], ...]:
+def input_spans(
+    design: Design, first_output: int, outputs: int, block: int
+) -> tuple[tuple[int, int, int], ...]:
     """(input row, first column, last column) of every input row that output pixels
     first_output..first_output + outputs - 1 read over the kernel rows of ``block``."""
     geometry = conv_geometry(design)
@@ -413,10 +453,17 @@ class Footprint:
 
 
 @functools.lru_cache(maxsize=1024)
-def _footprint_table(key: tuple[int, ...], m: int, k: int, groups: int, tile_m: int,
-                     tile_k: int) -> tuple[ConvGeometry, tuple[tuple[Footprint, ...], ...]]:
-    design = Design(m=m, k=k, groups=groups, tile_m=tile_m, tile_k=tile_k,
-                    **dict(zip(CONV_FIELDS, key)))
+def _footprint_table(
+    key: tuple[int, ...], m: int, k: int, groups: int, tile_m: int, tile_k: int
+) -> tuple[ConvGeometry, tuple[tuple[Footprint, ...], ...]]:
+    design = Design(
+        m=m,
+        k=k,
+        groups=groups,
+        tile_m=tile_m,
+        tile_k=tile_k,
+        **dict(zip(CONV_FIELDS, key, strict=False)),
+    )
     geometry = conv_geometry(design)
     blocks = [kernel_rows(design, block) for block in range(design.reduction_blocks)]
     table = []
@@ -424,16 +471,20 @@ def _footprint_table(key: tuple[int, ...], m: int, k: int, groups: int, tile_m: 
         entry = []
         for first, count in blocks:
             spans = _spans(key, geometry.output_w, row, min(tile_m, m - row), first, count)
-            entry.append(Footprint(spans, footprint_pixels(spans),
-                                   tuple(high - low for _, low, high in spans)))
+            entry.append(
+                Footprint(
+                    spans, footprint_pixels(spans), tuple(high - low for _, low, high in spans)
+                )
+            )
         table.append(tuple(entry))
     return geometry, tuple(table)
 
 
 def footprints(design: Design) -> tuple[ConvGeometry, tuple[tuple[Footprint, ...], ...]]:
     """The conv geometry and, per row tile and reduction block, the panel footprint."""
-    return _footprint_table(_conv_key(design), design.m, design.k, design.groups,
-                            design.tile_m, design.tile_k)
+    return _footprint_table(
+        _conv_key(design), design.m, design.k, design.groups, design.tile_m, design.tile_k
+    )
 
 
 def tile_footprint(design: Design, row: int, rows: int, block: int) -> Footprint:
@@ -441,8 +492,7 @@ def tile_footprint(design: Design, row: int, rows: int, block: int) -> Footprint
     if row % design.tile_m == 0 and rows == min(design.tile_m, design.m - row):
         return footprints(design)[1][row // design.tile_m][block]
     spans = input_spans(design, row, rows, block)
-    return Footprint(spans, footprint_pixels(spans),
-                     tuple(high - low for _, low, high in spans))
+    return Footprint(spans, footprint_pixels(spans), tuple(high - low for _, low, high in spans))
 
 
 @dataclass(frozen=True)
@@ -484,8 +534,14 @@ def panel_classes(design: Design) -> Iterator[PanelClass]:
     for rows, row_count in _extent_classes(design.m, design.tile_m):
         for cols, col_count in _extent_classes(design.grid_columns, design.tile_n):
             for depth, count, first, last in _block_classes(design):
-                yield PanelClass(rows, cols, depth, first, last,
-                                 row_count * col_count * count * design.grid_groups)
+                yield PanelClass(
+                    rows,
+                    cols,
+                    depth,
+                    first,
+                    last,
+                    row_count * col_count * count * design.grid_groups,
+                )
 
 
 def tile_classes(design: Design) -> Iterator[tuple[int, int, int]]:
@@ -506,10 +562,12 @@ def weight_bytes(design: Design, depth: int, cols: int) -> int:
     if design.weight_encoding == "dense":
         return ceil_div(depth * cols * design.weight_bits, 8)
     if design.weight_encoding == "palette":
-        return (4 + lut_entries(design, depth, cols)
-                + ceil_div(depth * cols * design.palette_bits, 8))
-    raise ValueError("the analytic model covers dense and palette weights; sparse sizes "
-                     "depend on the data")
+        return (
+            4 + lut_entries(design, depth, cols) + ceil_div(depth * cols * design.palette_bits, 8)
+        )
+    raise ValueError(
+        "the analytic model covers dense and palette weights; sparse sizes depend on the data"
+    )
 
 
 def param_record_bytes(design: Design) -> int:
@@ -570,8 +628,10 @@ def decode_cycles(design: Design, depth: int, cols: int) -> int:
 def panel_compute_cycles(design: Design, rows: int, cols: int, depth: int) -> int:
     """MAC cycles, or the decoder's when it is slower (it runs ahead of the array), plus
     the per-panel pipeline charge."""
-    return (max(mac_cycles(design, rows, cols, depth), decode_cycles(design, depth, cols))
-            + design.pipeline_cycles)
+    return (
+        max(mac_cycles(design, rows, cols, depth), decode_cycles(design, depth, cols))
+        + design.pipeline_cycles
+    )
 
 
 def dma_cycles(design: Design, nbytes: int) -> int:
@@ -601,14 +661,17 @@ def scratchpad_bytes(design: Design, panel_buffers: int | None = None) -> int:
     buffers = design.panel_buffers if panel_buffers is None else panel_buffers
     buffers = min(buffers, design.reduction_blocks)
     rows, cols = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
-    panel = (largest_activation_bytes(design, cols)
-             + weight_bytes(design, design.panel_depth, cols))
+    panel = largest_activation_bytes(design, cols) + weight_bytes(design, design.panel_depth, cols)
     params = cols * param_record_bytes(design)
-    return (design.buffer_slots * (params + buffers * panel + 5 * rows * cols)
-            + design.weight_cache_bytes + design.activation_cache_bytes)
+    return (
+        design.buffer_slots * (params + buffers * panel + 5 * rows * cols)
+        + design.weight_cache_bytes
+        + design.activation_cache_bytes
+    )
 
 
 # ------------------------------------------------------------------- closed-form model --
+
 
 @dataclass(frozen=True)
 class CoreAnalysis:
@@ -624,19 +687,19 @@ class CoreAnalysis:
     weight_bytes: int
     weight_cache_hits: int
     requests: int
-    read_cycles: int        # serial: every request's DMA time; axi: read requests'
-    write_cycles: int       # axi: write requests'; serial: 0
+    read_cycles: int  # serial: every request's DMA time; axi: read requests'
+    write_cycles: int  # axi: write requests'; serial: 0
     read_beats: int
     write_beats: int
     bursts: int
     first_load: int
     last_compute: int
     last_store: int
-    later_loads: int        # loads of every panel but each tile's first
-    data_cycles: int        # serial: the DMA time without per-burst latency
-    one_slot_cycles: int    # the tiles back to back, each its own load-compute-store chain
+    later_loads: int  # loads of every panel but each tile's first
+    data_cycles: int  # serial: the DMA time without per-burst latency
+    one_slot_cycles: int  # the tiles back to back, each its own load-compute-store chain
     one_slot: bool
-    panel_chain: bool       # one panel buffer: each panel load waits for the previous compute
+    panel_chain: bool  # one panel buffer: each panel load waits for the previous compute
     activation_read_bytes: int = 0
     activation_cache_hits: int = 0
 
@@ -649,12 +712,16 @@ class CoreAnalysis:
             return 0
         if self.one_slot:
             return self.one_slot_cycles
-        rest = max(self.compute_cycles - self.last_compute, self.read_cycles - self.first_load,
-                   self.write_cycles - self.last_store)
+        rest = max(
+            self.compute_cycles - self.last_compute,
+            self.read_cycles - self.first_load,
+            self.write_cycles - self.last_store,
+        )
         estimate = self.first_load + rest + self.last_compute + self.last_store
         if self.panel_chain:
-            estimate = max(estimate, self.first_load + self.compute_cycles + self.later_loads
-                           + self.last_store)
+            estimate = max(
+                estimate, self.first_load + self.compute_cycles + self.later_loads + self.last_store
+            )
         return estimate
 
 
@@ -705,15 +772,20 @@ class Analysis:
     def bound(self) -> str:
         """What limits the schedule: compute, bandwidth (memory payload) or latency
         (per-request memory latency that the payload alone would not cost)."""
-        return classify(self.compute_cycles_per_core, self.memory_cycles,
-                        self.memory_data_cycles)
+        return classify(self.compute_cycles_per_core, self.memory_cycles, self.memory_data_cycles)
 
     def as_dict(self) -> dict[str, Any]:
-        out = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)
-               if f.name not in ("design", "cores")}
-        out.update(arithmetic_intensity=self.arithmetic_intensity, bound=self.bound,
-                   attainable_macs_per_cycle=self.attainable_macs_per_cycle,
-                   resource_bound_cycles=self.resource_bound_cycles)
+        out = {
+            f.name: getattr(self, f.name)
+            for f in dataclasses.fields(self)
+            if f.name not in ("design", "cores")
+        }
+        out.update(
+            arithmetic_intensity=self.arithmetic_intensity,
+            bound=self.bound,
+            attainable_macs_per_cycle=self.attainable_macs_per_cycle,
+            resource_bound_cycles=self.resource_bound_cycles,
+        )
         return out
 
 
@@ -730,8 +802,9 @@ def attainable(design: Design, intensity: float) -> float:
     return min(float(design.peak_macs_per_cycle), design.bandwidth * intensity)
 
 
-def _range_classes(first: int, end: int, count: int, tile: int,
-                   extent: int) -> list[tuple[int, int, int]]:
+def _range_classes(
+    first: int, end: int, count: int, tile: int, extent: int
+) -> list[tuple[int, int, int]]:
     """(size, number, first index) of the tiles with indexes first..end-1 along an axis of
     ``count`` tiles; only the last tile can be short."""
     if first >= end:
@@ -743,8 +816,9 @@ def _range_classes(first: int, end: int, count: int, tile: int,
     return [(min(tile, extent), end - first, first)]
 
 
-def _core_segments(design: Design, plan: ClusterPlan,
-                   core: int) -> list[tuple[int, int, int, int, int, int]]:
+def _core_segments(
+    design: Design, plan: ClusterPlan, core: int
+) -> list[tuple[int, int, int, int, int, int]]:
     """(groups, first group, row tiles first..end, column tiles first..end) of one core's
     tiles: whole groups, or the per-group pieces of a run of row or column tiles."""
     row_tiles = ceil_div(design.m, design.tile_m)
@@ -782,13 +856,19 @@ def _segment_shape(design: Design, plan: ClusterPlan, core: int) -> tuple:
     every row tile has its own footprint, so the row range itself."""
     row_tiles = ceil_div(design.m, design.tile_m)
     col_tiles = ceil_div(design.grid_columns, design.tile_n)
-    return tuple((groups, (row0, row1) if design.conv else row1 - row0, row1 == row_tiles,
-                  col1 - col0, col1 == col_tiles)
-                 for groups, _, row0, row1, col0, col1 in _core_segments(design, plan, core))
+    return tuple(
+        (
+            groups,
+            (row0, row1) if design.conv else row1 - row0,
+            row1 == row_tiles,
+            col1 - col0,
+            col1 == col_tiles,
+        )
+        for groups, _, row0, row1, col0, col1 in _core_segments(design, plan, core)
+    )
 
 
-def analyze_cores(design: Design, plan: ClusterPlan,
-                  timing: bool = True) -> list[CoreAnalysis]:
+def analyze_cores(design: Design, plan: ClusterPlan, timing: bool = True) -> list[CoreAnalysis]:
     """analyze_core for every core, once per distinct segment shape. Request times take
     the addresses of the first core with that shape; traffic and compute do not depend
     on addresses."""
@@ -802,8 +882,9 @@ def analyze_cores(design: Design, plan: ClusterPlan,
     return cores
 
 
-def _request_time(design: Design, direction: int,
-                  runs: Sequence[tuple[int, int]]) -> tuple[int, int, int]:
+def _request_time(
+    design: Design, direction: int, runs: Sequence[tuple[int, int]]
+) -> tuple[int, int, int]:
     """(cycles, bursts, beats) of one AXI request alone on the memory system: the channel
     recurrence of _AxiChannel with a private DRAM timeline. Alone, each burst reaches the
     DRAM after the previous one has left it, so the timeline only stretches a burst to its
@@ -866,8 +947,7 @@ def _row_classes(design: Design, row0: int, row1: int) -> list[tuple[int, int, i
     return [tuple(entry) for entry in classes.values()]
 
 
-def analyze_core(design: Design, plan: ClusterPlan, core: int,
-                 timing: bool = True) -> CoreAnalysis:
+def analyze_core(design: Design, plan: ClusterPlan, core: int, timing: bool = True) -> CoreAnalysis:
     """Closed form over the tile and panel classes of one core's tiles.
 
     Both caches are LRUs that see one cycle of panels repeated: the weight cache, per
@@ -908,12 +988,18 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
     for groups, group, row0, row1, col0, col1 in _core_segments(design, plan, core):
         rows = _row_classes(design, row0, row1)
         cols = _range_classes(col0, col1, col_tiles, design.tile_n, design.grid_columns)
-        sizes = {(c, depth): weight_bytes(design, depth, c)
-                 for c, _, _ in cols for depth, _, _, _ in blocks}
+        sizes = {
+            (c, depth): weight_bytes(design, depth, c)
+            for c, _, _ in cols
+            for depth, _, _, _ in blocks
+        }
         cacheable = {key: capacity > 0 and size <= capacity for key, size in sizes.items()}
-        resident = sum(n_c * n_b * sizes[(c, depth)]
-                       for c, n_c, _ in cols for depth, n_b, _, _ in blocks
-                       if cacheable[(c, depth)])
+        resident = sum(
+            n_c * n_b * sizes[(c, depth)]
+            for c, n_c, _ in cols
+            for depth, n_b, _, _ in blocks
+            if cacheable[(c, depth)]
+        )
         fits = capacity > 0 and resident <= capacity
         for a, n_a, row_index in rows:
             row = row_index * design.tile_m
@@ -927,10 +1013,8 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
             for c, n_c, col_index in cols:
                 tile = Tile(group, row, col_index * design.tile_n, a, c)
                 width = c if design.channel_wise else 1
-                act_passes = ([(1, False), (n_c - 1, True)] if col_index == col0
-                              else [(n_c, True)])
-                for (repeat, warm), (act_repeat, act_warm) in itertools.product(passes,
-                                                                                 act_passes):
+                act_passes = [(1, False), (n_c - 1, True)] if col_index == col0 else [(n_c, True)]
+                for (repeat, warm), (act_repeat, act_warm) in itertools.product(passes, act_passes):
                     if not repeat or not act_repeat:
                         continue
                     tiles = groups * repeat * act_repeat
@@ -948,13 +1032,27 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
                         for block in members:
                             act_hit = act_warm and act_fits and act[block] <= act_capacity
                             moved = 0 if act_hit else act[block] * width
-                            nbytes = moved + (0 if hit else size) + (c * record
-                                                                     if block_first else 0)
+                            nbytes = (
+                                moved + (0 if hit else size) + (c * record if block_first else 0)
+                            )
                             cycles, bursts, beats = time(
-                                READ, nbytes,
-                                lambda: panel_read_runs(design, tile, block, hit, act_hit),
-                                (READ, a, c, depth, block_first, block_last, hit, act_hit,
-                                 footprint(row, a, block)))
+                                READ,
+                                nbytes,
+                                lambda tile=tile, block=block, hit=hit, act_hit=act_hit: (
+                                    panel_read_runs(design, tile, block, hit, act_hit)
+                                ),
+                                (
+                                    READ,
+                                    a,
+                                    c,
+                                    depth,
+                                    block_first,
+                                    block_last,
+                                    hit,
+                                    act_hit,
+                                    footprint(row, a, block),
+                                ),
+                            )
                             count = tiles * per
                             totals["read_bytes"] += count * nbytes
                             totals["activation_bytes"] += count * moved
@@ -971,9 +1069,9 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
                             if first_load is None:
                                 first_load = cycles
                             last_compute = panel
-                    cycles, bursts, beats = time(WRITE, a * c,
-                                                 lambda: tile_store_runs(design, tile),
-                                                 (WRITE, a, c))
+                    cycles, bursts, beats = time(
+                        WRITE, a * c, lambda tile=tile: tile_store_runs(design, tile), (WRITE, a, c)
+                    )
                     totals["write_bytes"] += tiles * a * c
                     totals["macs"] += tiles * a * c * design.k
                     totals["tiles"] += tiles
@@ -988,24 +1086,39 @@ def analyze_core(design: Design, plan: ClusterPlan, core: int,
                     # One slot: tiles run one after another, each its load-compute chain
                     # (overlapped across panels by a second panel buffer) and its store.
                     first = loads - later
-                    chain = (first + max(compute - last_compute, later) + last_compute
-                             if overlap_panels else loads + compute)
+                    chain = (
+                        first + max(compute - last_compute, later) + last_compute
+                        if overlap_panels
+                        else loads + compute
+                    )
                     totals["one_slot"] += tiles * (chain + cycles)
                     last_store = cycles
     return CoreAnalysis(
-        core=core, tiles=totals["tiles"], macs=totals["macs"], compute_cycles=totals["compute"],
-        read_bytes=totals["read_bytes"], write_bytes=totals["write_bytes"],
-        weight_bytes=totals["weight_bytes"], weight_cache_hits=totals["hits"],
-        requests=totals["requests"], read_cycles=totals["read_cycles"],
-        write_cycles=totals["write_cycles"], read_beats=totals["read_beats"],
-        write_beats=totals["write_beats"], bursts=totals["bursts"],
-        first_load=first_load or 0, last_compute=last_compute or 0,
-        last_store=last_store or 0, later_loads=totals["later_loads"],
-        data_cycles=totals["data_cycles"], one_slot_cycles=totals["one_slot"],
+        core=core,
+        tiles=totals["tiles"],
+        macs=totals["macs"],
+        compute_cycles=totals["compute"],
+        read_bytes=totals["read_bytes"],
+        write_bytes=totals["write_bytes"],
+        weight_bytes=totals["weight_bytes"],
+        weight_cache_hits=totals["hits"],
+        requests=totals["requests"],
+        read_cycles=totals["read_cycles"],
+        write_cycles=totals["write_cycles"],
+        read_beats=totals["read_beats"],
+        write_beats=totals["write_beats"],
+        bursts=totals["bursts"],
+        first_load=first_load or 0,
+        last_compute=last_compute or 0,
+        last_store=last_store or 0,
+        later_loads=totals["later_loads"],
+        data_cycles=totals["data_cycles"],
+        one_slot_cycles=totals["one_slot"],
         one_slot=design.buffer_slots == 1,
         panel_chain=design.panel_buffers == 1 and len(blocks) > 1,
         activation_read_bytes=totals["activation_bytes"],
-        activation_cache_hits=totals["activation_hits"])
+        activation_cache_hits=totals["activation_hits"],
+    )
 
 
 def closed_form_plan(design: Design) -> ClusterPlan:
@@ -1019,8 +1132,9 @@ def analyze(design: Design) -> Analysis:
     """Closed-form model: exact traffic, requests and compute busy cycles; bounds and a
     pipelined estimate of the cycle count."""
     if design.weight_encoding not in ("dense", "palette"):
-        raise ValueError("the analytic model covers dense and palette weights; sparse sizes "
-                         "depend on the data")
+        raise ValueError(
+            "the analytic model covers dense and palette weights; sparse sizes depend on the data"
+        )
     if design.memory_model not in ("serial", "axi"):
         raise ValueError("memory model must be serial or axi")
     if design.cores != 1 and design.memory_model != "axi":
@@ -1030,17 +1144,22 @@ def analyze(design: Design) -> Analysis:
     busy = [core for core in cores if core.tiles]
     compute = sum(core.compute_cycles for core in cores)
     per_core = max(core.compute_cycles for core in cores)
-    common = dict(design=design, macs=design.macs,
-                  read_bytes=sum(core.read_bytes for core in cores),
-                  write_bytes=sum(core.write_bytes for core in cores),
-                  weight_bytes=sum(core.weight_bytes for core in cores),
-                  dma_requests=sum(core.requests for core in cores),
-                  compute_busy_cycles=compute, scratchpad_bytes=scratchpad_bytes(design),
-                  compute_cycles_per_core=per_core,
-                  weight_cache_hits=sum(core.weight_cache_hits for core in cores),
-                  activation_read_bytes=sum(core.activation_read_bytes for core in cores),
-                  activation_cache_hits=sum(core.activation_cache_hits for core in cores),
-                  partition=plan.partition, cores=cores)
+    common = dict(
+        design=design,
+        macs=design.macs,
+        read_bytes=sum(core.read_bytes for core in cores),
+        write_bytes=sum(core.write_bytes for core in cores),
+        weight_bytes=sum(core.weight_bytes for core in cores),
+        dma_requests=sum(core.requests for core in cores),
+        compute_busy_cycles=compute,
+        scratchpad_bytes=scratchpad_bytes(design),
+        compute_cycles_per_core=per_core,
+        weight_cache_hits=sum(core.weight_cache_hits for core in cores),
+        activation_read_bytes=sum(core.activation_read_bytes for core in cores),
+        activation_cache_hits=sum(core.activation_cache_hits for core in cores),
+        partition=plan.partition,
+        cores=cores,
+    )
     if design.memory_model == "axi":
         db = design.axi_data_bytes or 16
         rate = design.dram_bytes_per_cycle
@@ -1048,12 +1167,18 @@ def analyze(design: Design) -> Analysis:
         dram = ceil_div(beats * db, rate) if rate else 0
         memory = max([dram] + [max(c.read_cycles, c.write_cycles) for c in busy])
         payload = max([dram] + [max(c.read_beats, c.write_beats) for c in busy])
-        lower = axi_bounds(design, compute, common["weight_bytes"],
-                           common["activation_read_bytes"])["lower_bound_cycles"]
+        lower = axi_bounds(
+            design, compute, common["weight_bytes"], common["activation_read_bytes"]
+        )["lower_bound_cycles"]
         estimate = max([lower, dram] + [core.estimate_cycles for core in busy])
-        return Analysis(**common, memory_cycles=memory, memory_data_cycles=payload,
-                        lower_bound_cycles=lower, estimate_cycles=estimate,
-                        dma_bursts=sum(core.bursts for core in cores))
+        return Analysis(
+            **common,
+            memory_cycles=memory,
+            memory_data_cycles=payload,
+            lower_bound_cycles=lower,
+            estimate_cycles=estimate,
+            dma_bursts=sum(core.bursts for core in cores),
+        )
     core = cores[0]
     dma = core.read_cycles
     data = core.data_cycles
@@ -1061,30 +1186,47 @@ def analyze(design: Design) -> Analysis:
     serial = compute + dma
     # Compute cannot start before the first load and the last store follows the last
     # compute; every load precedes the last compute; the DMA is one server.
-    lower = max(compute + core.first_load + core.last_store,
-                loads + core.last_compute + core.last_store, dma)
+    lower = max(
+        compute + core.first_load + core.last_store,
+        loads + core.last_compute + core.last_store,
+        dma,
+    )
     if design.panel_buffers == 1:
         # One panel buffer per slot: a tile's next panel loads only after its previous panel
         # computed, so compute and every non-first panel load form one chain.
         lower = max(lower, core.first_load + compute + core.later_loads + core.last_store)
-    estimate = max(lower, core.first_load + core.last_compute + core.last_store
-                   + max(compute - core.last_compute, dma - core.first_load - core.last_store))
+    estimate = max(
+        lower,
+        core.first_load
+        + core.last_compute
+        + core.last_store
+        + max(compute - core.last_compute, dma - core.first_load - core.last_store),
+    )
     if design.buffer_slots == 1:
         estimate = max(lower, core.one_slot_cycles)
     rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
-    one_tile = (design.grid_groups == 1 and rows0 == design.m
-                and cols0 == design.grid_columns)
-    no_overlap = ((design.buffer_slots == 1 or one_tile)
-                  and (design.reduction_blocks == 1 or design.panel_buffers == 1))
-    return Analysis(**common, memory_cycles=dma, memory_data_cycles=data,
-                    lower_bound_cycles=lower, estimate_cycles=estimate,
-                    dma_bursts=core.bursts, dma_busy_cycles=dma, serial_cycles=serial,
-                    exact_cycles=serial if no_overlap else None)
+    one_tile = design.grid_groups == 1 and rows0 == design.m and cols0 == design.grid_columns
+    no_overlap = (design.buffer_slots == 1 or one_tile) and (
+        design.reduction_blocks == 1 or design.panel_buffers == 1
+    )
+    return Analysis(
+        **common,
+        memory_cycles=dma,
+        memory_data_cycles=data,
+        lower_bound_cycles=lower,
+        estimate_cycles=estimate,
+        dma_bursts=core.bursts,
+        dma_busy_cycles=dma,
+        serial_cycles=serial,
+        exact_cycles=serial if no_overlap else None,
+    )
 
 
 def _store_cycles(design: Design) -> int:
-    return sum(count * dma_cycles(design, store_bytes(rows, cols))
-               for rows, cols, count in tile_classes(design))
+    return sum(
+        count * dma_cycles(design, store_bytes(rows, cols))
+        for rows, cols, count in tile_classes(design)
+    )
 
 
 def activation_run_lengths(design: Design) -> list[tuple[int, int]]:
@@ -1113,17 +1255,26 @@ def activation_run_lengths(design: Design) -> list[tuple[int, int]]:
     return runs
 
 
-def axi_bounds(design: Design, compute_cycles: int | None = None,
-               weight_read_bytes: int | None = None,
-               activation_read_bytes: int | None = None) -> dict[str, int]:
+def axi_bounds(
+    design: Design,
+    compute_cycles: int | None = None,
+    weight_read_bytes: int | None = None,
+    activation_read_bytes: int | None = None,
+) -> dict[str, int]:
     """Lower bounds for the AXI model, valid for any burst split and address alignment.
 
     Per channel: every beat takes one data cycle, one burst issues per cycle, and a burst
     holds one of N outstanding slots for at least latency + beats cycles. The DRAM
     timeline moves at most dram_bytes_per_cycle payload bytes per cycle for all channels.
     """
-    needed = ("axi_data_bytes", "axi_max_burst_beats", "axi_read_outstanding",
-              "axi_write_outstanding", "axi_read_latency", "axi_write_latency")
+    needed = (
+        "axi_data_bytes",
+        "axi_max_burst_beats",
+        "axi_read_outstanding",
+        "axi_write_outstanding",
+        "axi_read_latency",
+        "axi_write_latency",
+    )
     missing = [name for name in needed if getattr(design, name) is None]
     if missing:
         raise ValueError("AXI bounds need " + ", ".join(missing))
@@ -1138,8 +1289,11 @@ def axi_bounds(design: Design, compute_cycles: int | None = None,
             beats += count * run_beats
             bursts += count * run_bursts
             slot_time += count * (run_bursts * latency + run_beats)
-        return {"beats": beats, "bursts": bursts,
-                "cycles": max(beats, bursts, ceil_div(slot_time, outstanding))}
+        return {
+            "beats": beats,
+            "bursts": bursts,
+            "cycles": max(beats, bursts, ceil_div(slot_time, outstanding)),
+        }
 
     # With a cache the panels read are known only in total: one run of that many bytes
     # needs no more beats, bursts or slot time than the panels it stands for.
@@ -1172,33 +1326,49 @@ def axi_bounds(design: Design, compute_cycles: int | None = None,
     payload = sum(length * count for length, count in reads + writes)
     dram = ceil_div(payload, design.dram_bytes_per_cycle) if design.dram_bytes_per_cycle else 0
     if compute_cycles is None:
-        compute_cycles = sum(p.count * panel_compute_cycles(design, p.rows, p.cols, p.depth)
-                             for p in panel_classes(design))
+        compute_cycles = sum(
+            p.count * panel_compute_cycles(design, p.rows, p.cols, p.depth)
+            for p in panel_classes(design)
+        )
     rows0, cols0 = min(design.tile_m, design.m), min(design.tile_n, design.grid_columns)
-    first = (activation_bytes(design, 0, rows0, cols0, 0)
-             + weight_bytes(design, design.panel_depth, cols0)
-             + cols0 * param_record_bytes(design))
-    last = store_bytes(design.m % design.tile_m or rows0,
-                       design.grid_columns % design.tile_n or cols0)
-    chain = (design.axi_read_latency or 0) + ceil_div(first, db) + compute_cycles \
-        + ceil_div(last, db) + (design.axi_write_latency or 0)
+    first = (
+        activation_bytes(design, 0, rows0, cols0, 0)
+        + weight_bytes(design, design.panel_depth, cols0)
+        + cols0 * param_record_bytes(design)
+    )
+    last = store_bytes(
+        design.m % design.tile_m or rows0, design.grid_columns % design.tile_n or cols0
+    )
+    chain = (
+        (design.axi_read_latency or 0)
+        + ceil_div(first, db)
+        + compute_cycles
+        + ceil_div(last, db)
+        + (design.axi_write_latency or 0)
+    )
     per_core = max(ceil_div(read["cycles"], design.cores), ceil_div(write["cycles"], design.cores))
-    return {"read_beats": read["beats"], "read_bursts": read["bursts"],
-            "read_channel_cycles": read["cycles"], "write_beats": write["beats"],
-            "write_bursts": write["bursts"], "write_channel_cycles": write["cycles"],
-            "dram_cycles": dram, "compute_chain_cycles": chain,
-            "lower_bound_cycles": max(per_core, dram,
-                                      chain if design.cores == 1 else ceil_div(compute_cycles,
-                                                                               design.cores))}
+    return {
+        "read_beats": read["beats"],
+        "read_bursts": read["bursts"],
+        "read_channel_cycles": read["cycles"],
+        "write_beats": write["beats"],
+        "write_bursts": write["bursts"],
+        "write_channel_cycles": write["cycles"],
+        "dram_cycles": dram,
+        "compute_chain_cycles": chain,
+        "lower_bound_cycles": max(
+            per_core, dram, chain if design.cores == 1 else ceil_div(compute_cycles, design.cores)
+        ),
+    }
 
 
 # ================================================================ cycle-level schedule ==
 # The rest of the module replays the schedule request by request: the address map, the
 # AXI burst split, each channel's outstanding-window recurrence, the shared DRAM byte
 # timeline, the serial DMA server, the cluster split and each core's LRU weight cache.
-# ``schedule()`` returns the cycle count and the counters npu-sim reports. It is written
-# from SPEC sections 3 to 5 and the interface comments in include/npu/memory.hpp and
-# core.hpp; tests/analytic_model_tests.py checks it against npu-sim.
+# ``schedule()`` returns the cycle count and the counters npu-sim reports. It follows
+# docs/architecture.md sections 4 to 7 and the interface comments in include/npu/memory.hpp
+# and include/npu/core.hpp; tests/analytic_model_tests.py checks it against npu-sim.
 
 ACTIVATION_BASE = 0x8000_0000
 WEIGHT_BASE = 0x9000_0000
@@ -1243,8 +1413,15 @@ def make_tiles(design: Design) -> list[Tile]:
     for group in range(design.grid_groups):
         for row in range(0, design.m, design.tile_m):
             for col in range(0, columns, design.tile_n):
-                tiles.append(Tile(group, row, col, min(design.tile_m, design.m - row),
-                                  min(design.tile_n, columns - col)))
+                tiles.append(
+                    Tile(
+                        group,
+                        row,
+                        col,
+                        min(design.tile_m, design.m - row),
+                        min(design.tile_n, columns - col),
+                    )
+                )
     return tiles
 
 
@@ -1260,12 +1437,19 @@ def weight_panel_offset(design: Design, tile: Tile, block: int) -> int:
     full_cols, edge_cols = divmod(design.grid_columns, design.tile_n)
 
     def column_bytes(cols: int) -> int:
-        return sum(weight_bytes(design, block_extent(design, b)[1], cols)
-                   for b in range(design.reduction_blocks))
-    group_bytes = (full_cols * column_bytes(design.tile_n)
-                   + (column_bytes(edge_cols) if edge_cols else 0))
-    return (tile.group * group_bytes + (tile.col // design.tile_n) * column_bytes(design.tile_n)
-            + block * weight_bytes(design, design.panel_depth, tile.cols))
+        return sum(
+            weight_bytes(design, block_extent(design, b)[1], cols)
+            for b in range(design.reduction_blocks)
+        )
+
+    group_bytes = full_cols * column_bytes(design.tile_n) + (
+        column_bytes(edge_cols) if edge_cols else 0
+    )
+    return (
+        tile.group * group_bytes
+        + (tile.col // design.tile_n) * column_bytes(design.tile_n)
+        + block * weight_bytes(design, design.panel_depth, tile.cols)
+    )
 
 
 def activation_runs(design: Design, tile: Tile, block: int) -> list[tuple[int, int]]:
@@ -1285,8 +1469,10 @@ def activation_runs(design: Design, tile: Tile, block: int) -> list[tuple[int, i
             if depth == design.k:
                 runs.append((base + first * design.k, count * design.k))
             else:
-                runs += [(base + group * design.k + start, depth)
-                         for group in range(first, first + count)]
+                runs += [
+                    (base + group * design.k + start, depth)
+                    for group in range(first, first + count)
+                ]
         return runs
     width = footprints(design)[0].group_channels
     channels, channel = count * width, first * width
@@ -1308,27 +1494,37 @@ def activation_key(design: Design, tile: Tile, block: int) -> tuple[int, int, in
     return unit, tile.row // design.tile_m, block
 
 
-def panel_read_runs(design: Design, tile: Tile, block: int, weight_cached: bool = False,
-                    activations_cached: bool = False) -> list[tuple[int, int]]:
+def panel_read_runs(
+    design: Design,
+    tile: Tile,
+    block: int,
+    weight_cached: bool = False,
+    activations_cached: bool = False,
+) -> list[tuple[int, int]]:
     """(base, length) runs of one panel load: the tile's activation runs unless the
     activation cache holds them, its weight panel unless the weight cache holds it, and on
     the first panel its parameter records."""
     depth = block_extent(design, block)[1]
     runs = [] if activations_cached else activation_runs(design, tile, block)
     if not weight_cached:
-        runs.append((WEIGHT_BASE + weight_panel_offset(design, tile, block),
-                     weight_bytes(design, depth, tile.cols)))
+        runs.append(
+            (
+                WEIGHT_BASE + weight_panel_offset(design, tile, block),
+                weight_bytes(design, depth, tile.cols),
+            )
+        )
     if block == 0:
         record = param_record_bytes(design)
-        runs.append((PARAM_BASE + (tile.group * design.n + tile.col) * record,
-                     tile.cols * record))
+        runs.append((PARAM_BASE + (tile.group * design.n + tile.col) * record, tile.cols * record))
     return runs
 
 
 def tile_store_runs(design: Design, tile: Tile) -> list[tuple[int, int]]:
     stride = design.groups * design.n
-    return [(OUTPUT_BASE + (tile.row + i) * stride + tile.group * design.n + tile.col, tile.cols)
-            for i in range(tile.rows)]
+    return [
+        (OUTPUT_BASE + (tile.row + i) * stride + tile.group * design.n + tile.col, tile.cols)
+        for i in range(tile.rows)
+    ]
 
 
 class DramTimeline:
@@ -1349,7 +1545,7 @@ class DramTimeline:
             begin = max(begin, ends[index])
             index += 1
         end = begin + nbytes
-        # Insert [begin, end) at ``index`` and merge with touching neighbours.
+        # Insert [begin, end) at ``index`` and merge with touching neighbors.
         if index > 0 and ends[index - 1] == begin:
             ends[index - 1] = end
             if index < len(begins) and begins[index] == end:
@@ -1384,7 +1580,8 @@ class ChannelStats:
 
 
 class _AxiChannel:
-    """One read or write channel of a core's port: the burst recurrence of SPEC 4.3.
+    """One read or write channel of a core's port: the burst recurrence of
+    docs/architecture.md 5.4.2.
 
         issue_i      = max(arrival, issue_{i-1} + 1, completion_{i-N})
         start_i      = max(issue_i + read latency (reads), data_free, DRAM grant)
@@ -1395,8 +1592,9 @@ class _AxiChannel:
     def __init__(self, design: Design, direction: int):
         self.write = direction == WRITE
         self.latency = (design.axi_write_latency if self.write else design.axi_read_latency) or 0
-        self.outstanding = (design.axi_write_outstanding if self.write
-                            else design.axi_read_outstanding) or 1
+        self.outstanding = (
+            design.axi_write_outstanding if self.write else design.axi_read_outstanding
+        ) or 1
         self.data_bytes = design.axi_data_bytes or 16
         self.max_beats = design.axi_max_burst_beats or 16
         self.rate = design.dram_bytes_per_cycle
@@ -1411,8 +1609,11 @@ class _AxiChannel:
 
     def begin(self, arrival: int, runs: Sequence[tuple[int, int]]) -> int:
         """Start a request; return the first burst's issue cycle."""
-        self.bursts = [burst for base, length in runs
-                       for burst in axi_bursts(base, length, self.data_bytes, self.max_beats)]
+        self.bursts = [
+            burst
+            for base, length in runs
+            for burst in axi_bursts(base, length, self.data_bytes, self.max_beats)
+        ]
         self.index = 0
         self.arrival = arrival
         return self.next_issue()
@@ -1467,8 +1668,7 @@ class _PanelCache:
 
     def __init__(self, capacity: int):
         self.capacity = capacity
-        self.entries: collections.OrderedDict[tuple[int, int, int], int] = \
-            collections.OrderedDict()
+        self.entries: collections.OrderedDict[tuple[int, int, int], int] = collections.OrderedDict()
         self.used = self.hits = self.misses = self.saved = self.peak = 0
 
     def access(self, key: tuple[int, int, int], size: int) -> bool:
@@ -1491,11 +1691,13 @@ class _PanelCache:
 
 # ----------------------------------------------------------------------------- cluster --
 
+
 @dataclass(frozen=True)
 class ClusterPlan:
-    """The work split of SPEC 5: units are whole groups when G >= P, else the row tiles
-    (partition m) or column tiles (partition n) of every group, numbered group-major.
-    Core c runs a contiguous run of U // P units, one more for each of the first U % P."""
+    """The work split of docs/architecture.md 6.2: units are whole groups when G >= P, else
+    the row tiles (partition m) or column tiles (partition n) of every group, numbered
+    group-major. Core c runs a contiguous run of U // P units, one more for each of the
+    first U % P."""
 
     partition: str
     split: str
@@ -1519,8 +1721,7 @@ def cluster_plan(design: Design, partition: str) -> ClusterPlan:
         return ClusterPlan(partition, "groups", cores, groups)
     if partition == "m":
         return ClusterPlan("m", "rows", cores, groups * ceil_div(design.m, design.tile_m))
-    return ClusterPlan("n", "columns", cores,
-                       groups * ceil_div(design.grid_columns, design.tile_n))
+    return ClusterPlan("n", "columns", cores, groups * ceil_div(design.grid_columns, design.tile_n))
 
 
 def tile_unit(design: Design, plan: ClusterPlan, tile: Tile) -> int:
@@ -1572,9 +1773,11 @@ def choose_plan(design: Design) -> tuple[ClusterPlan, dict[str, dict[str, int]]]
         plan = cluster_plan(design, partition)
         cores = analyze_cores(design, plan, timing=False)
         plans[partition] = plan
-        predicted[partition] = {"read_bytes": sum(c.read_bytes for c in cores),
-                                "write_bytes": sum(c.write_bytes for c in cores),
-                                "bound_cycles": plan_bound(design, cores)}
+        predicted[partition] = {
+            "read_bytes": sum(c.read_bytes for c in cores),
+            "write_bytes": sum(c.write_bytes for c in cores),
+            "bound_cycles": plan_bound(design, cores),
+        }
     if design.partition in ("m", "n"):
         return plans[design.partition], predicted
     m, n = predicted["m"], predicted["n"]
@@ -1584,6 +1787,7 @@ def choose_plan(design: Design) -> tuple[ClusterPlan, dict[str, dict[str, int]]]
 
 
 # ---------------------------------------------------------------------------- schedule --
+
 
 @dataclass
 class CoreSchedule:
@@ -1658,7 +1862,7 @@ class _Core:
         self.buffers = min(design.panel_buffers, self.blocks)
         self.cache = _PanelCache(design.weight_cache_bytes)
         self.activation_cache = _PanelCache(design.activation_cache_bytes)
-        self.next_load = 0                     # flat panel index: tile * blocks + block
+        self.next_load = 0  # flat panel index: tile * blocks + block
         self.loading = False
         self.load_free = 0
         self.compute_free = 0
@@ -1667,8 +1871,11 @@ class _Core:
         self.storing = False
         self.store_free = 0
         self.store_done: list[int | None] = [None] * len(tiles)
-        self.channels = ((_AxiChannel(design, READ), _AxiChannel(design, WRITE))
-                         if design.memory_model == "axi" else None)
+        self.channels = (
+            (_AxiChannel(design, READ), _AxiChannel(design, WRITE))
+            if design.memory_model == "axi"
+            else None
+        )
 
     def load_request(self) -> tuple[int, list[tuple[int, int]], int] | None:
         """(arrival, runs, payload) of the next panel load once its slot and buffer are
@@ -1722,8 +1929,11 @@ class _Core:
             return None
         runs = tile_store_runs(self.design, self.tiles[self.next_store])
         self.storing = True
-        return (max(self.compute_end[last], self.store_free), runs,
-                sum(length for _, length in runs))
+        return (
+            max(self.compute_end[last], self.store_free),
+            runs,
+            sum(length for _, length in runs),
+        )
 
     def store_done_at(self, completion: int) -> None:
         self.store_done[self.next_store] = completion
@@ -1814,8 +2024,9 @@ def _run_serial(design: Design, core: _Core) -> None:
         if load is None and store is None:
             break
         now = max(server_free, min(r[0] for r in (load, store) if r is not None))
-        ready = [(kind, r) for kind, r in ((READ, load), (WRITE, store))
-                 if r is not None and r[0] <= now]
+        ready = [
+            (kind, r) for kind, r in ((READ, load), (WRITE, store)) if r is not None and r[0] <= now
+        ]
         kind, request = ready[1] if len(ready) == 2 and last == READ else ready[0]
         payload = request[2]
         cycles = dma_cycles(design, payload)
@@ -1843,8 +2054,7 @@ def schedule(design: Design) -> Schedule:
     if design.cores > 1 and design.memory_model != "axi":
         raise ValueError("more than one core requires the AXI memory model")
     plan, predicted = choose_plan(design)
-    cores = [_Core(design, index, tiles)
-             for index, tiles in enumerate(core_tiles(design, plan))]
+    cores = [_Core(design, index, tiles) for index, tiles in enumerate(core_tiles(design, plan))]
     if design.memory_model == "axi":
         _run_axi(design, cores)
     else:
@@ -1857,11 +2067,17 @@ def schedule(design: Design) -> Schedule:
         core.out.activation_cache_misses = cache.misses
         core.out.activation_bytes_saved = cache.saved
         core.out.peak_cached_activation_bytes = cache.peak
-    return Schedule(design, plan, predicted, max(core.out.cycles for core in cores),
-                    [core.out for core in cores])
+    return Schedule(
+        design,
+        plan,
+        predicted,
+        max(core.out.cycles for core in cores),
+        [core.out for core in cores],
+    )
 
 
 # ------------------------------------------------------------------ simulator results --
+
 
 @dataclass(frozen=True)
 class Observed:
@@ -1884,8 +2100,7 @@ class Observed:
 
     @property
     def bound(self) -> str:
-        return classify(self.compute_cycles_per_core, self.memory_cycles,
-                        self.memory_data_cycles)
+        return classify(self.compute_cycles_per_core, self.memory_cycles, self.memory_data_cycles)
 
     @property
     def mac_utilization(self) -> float:
@@ -1911,12 +2126,17 @@ def observed(result: Mapping[str, Any]) -> Observed:
         raise ValueError("result has no per-core statistics (schema_version 2)")
     compute = max(core["compute_busy_cycles"] for core in cores)
     if model == "axi":
+
         def in_flight(channel: Mapping[str, Any]) -> int:
             return round(channel["mean_latency_cycles"] * channel["requests"])
-        memory = max(max(in_flight(c["memory"]["read"]), in_flight(c["memory"]["write"]))
-                     for c in cores)
-        data = max(max(c["memory"]["read"]["busy_cycles"], c["memory"]["write"]["busy_cycles"])
-                   for c in cores)
+
+        memory = max(
+            max(in_flight(c["memory"]["read"]), in_flight(c["memory"]["write"])) for c in cores
+        )
+        data = max(
+            max(c["memory"]["read"]["busy_cycles"], c["memory"]["write"]["busy_cycles"])
+            for c in cores
+        )
         dram_bytes = result["memory"]["dram"]["bytes"]
         rate = config_value(config, "dram_bytes_per_cycle")
         dram = ceil_div(dram_bytes, rate) if rate else 0
@@ -1927,12 +2147,22 @@ def observed(result: Mapping[str, Any]) -> Observed:
         data = channels["read"]["busy_cycles"] + channels["write"]["busy_cycles"]
         dram_bytes = result["read_bytes"] + result["write_bytes"]
     cluster = result.get("cluster", {})
-    return Observed(result["cycles"], result["macs"], result["read_bytes"],
-                    result["write_bytes"], dram_bytes, compute, memory, data,
-                    cluster.get("partition", "n"), cluster.get("split", "groups"),
-                    cluster.get("cores", 1), float(cluster.get("imbalance", 1.0)),
-                    result["effective_macs_per_cycle"],
-                    float(result["peak_memory_bytes_per_cycle"]))
+    return Observed(
+        result["cycles"],
+        result["macs"],
+        result["read_bytes"],
+        result["write_bytes"],
+        dram_bytes,
+        compute,
+        memory,
+        data,
+        cluster.get("partition", "n"),
+        cluster.get("split", "groups"),
+        cluster.get("cores", 1),
+        float(cluster.get("imbalance", 1.0)),
+        result["effective_macs_per_cycle"],
+        float(result["peak_memory_bytes_per_cycle"]),
+    )
 
 
 def observed_bound(result: Mapping[str, Any]) -> str:

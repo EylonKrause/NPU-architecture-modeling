@@ -4,6 +4,7 @@ layers against hand-computed outputs.
 
 Entry point for npuperf.mlp_demo (also: python -m npuperf.mlp_demo).
 """
+
 import sys
 from pathlib import Path
 

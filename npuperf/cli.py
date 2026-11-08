@@ -4,14 +4,15 @@ Exit status: 0 success; 1 the run failed (simulator error, failed check, timeout
 2 the tool rejected its arguments or input (bad flag, invalid file, missing binary,
 refusing to overwrite). Errors print one line, ``<tool>: <message>``, on stderr.
 """
+
 from __future__ import annotations
 
 import argparse
 import functools
 import subprocess
 import sys
-from pathlib import Path
 from collections.abc import Callable, Sequence
+from pathlib import Path
 
 from . import binary as binaries
 
@@ -63,21 +64,28 @@ def int_list(low: int, high: int) -> Callable[[str], list[int]]:
         if not values or values[0] < low or values[-1] > high:
             raise argparse.ArgumentTypeError(f"values must be in {low}..{high}")
         return values
+
     return parse
 
 
 def add_binary_options(parser: argparse.ArgumentParser, timeout: bool = True) -> None:
-    parser.add_argument("--binary", type=Path, help="npu-sim executable or build directory "
-                        "(default: $NPU_SIM, then build-live/, build/, build/<preset>/)")
+    parser.add_argument(
+        "--binary",
+        type=Path,
+        help="npu-sim executable or build directory "
+        "(default: $NPU_SIM, then build-live/, build/, build/<preset>/)",
+    )
     parser.add_argument("--build-dir", type=Path, help="CMake build directory to search first")
     if timeout:
-        parser.add_argument("--timeout", type=positive_int, default=60,
-                            help="seconds per simulator run")
+        parser.add_argument(
+            "--timeout", type=positive_int, default=60, help="seconds per simulator run"
+        )
 
 
 def add_format_option(parser: argparse.ArgumentParser, default: str = "table") -> None:
-    parser.add_argument("--format", choices=("table", "json"), default=default,
-                        help="stdout format")
+    parser.add_argument(
+        "--format", choices=("table", "json"), default=default, help="stdout format"
+    )
 
 
 def simulator(args: argparse.Namespace, name: str = "npu-sim") -> Path:
@@ -90,14 +98,18 @@ def report(tool: str, error: BaseException) -> str:
 
 
 def exit_status(error: BaseException) -> int:
-    if isinstance(error, (ValueError, FileNotFoundError, FileExistsError,
-                          IsADirectoryError, NotADirectoryError)):
+    if isinstance(
+        error,
+        (ValueError, FileNotFoundError, FileExistsError, IsADirectoryError, NotADirectoryError),
+    ):
         return EXIT_REJECTED
     return EXIT_FAILED
 
 
 def main_guard(tool: str) -> Callable[[Callable[..., int | None]], Callable[..., int]]:
-    """Wrap ``main(argv)`` so expected failures exit with one stderr line, not a traceback."""
+    """Wrap ``main(argv)``: an expected failure prints one stderr line and returns its exit
+    status; tracebacks are left for programming errors."""
+
     def decorate(function: Callable[..., int | None]) -> Callable[..., int]:
         @functools.wraps(function)
         def guarded(argv: Sequence[str] | None = None) -> int:
@@ -107,9 +119,13 @@ def main_guard(tool: str) -> Callable[[Callable[..., int | None]], Callable[...,
                 return 130
             except (ValueError, RuntimeError, OSError, subprocess.TimeoutExpired) as error:
                 if isinstance(error, subprocess.TimeoutExpired):
-                    error = RuntimeError(f"timed out after {error.timeout:g} s: "
-                                         f"{' '.join(map(str, error.cmd))[:200]}")
+                    error = RuntimeError(
+                        f"timed out after {error.timeout:g} s: "
+                        f"{' '.join(map(str, error.cmd))[:200]}"
+                    )
                 print(report(tool, error), file=sys.stderr)
                 return exit_status(error)
+
         return guarded
+
     return decorate

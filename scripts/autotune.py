@@ -4,6 +4,7 @@ mapping and the cycles/SRAM Pareto front.
 
 Entry point for npuperf.autotune (also: python -m npuperf.autotune).
 """
+
 import sys
 from pathlib import Path
 

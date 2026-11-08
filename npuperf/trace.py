@@ -1,4 +1,5 @@
-"""Read npu-sim --trace CSV files and turn them into utilisation and Gantt figures."""
+"""npu-sim --trace CSV files: stage spans, busy cycles, compute idle gaps and Gantt figures."""
+
 from __future__ import annotations
 
 import csv
@@ -53,24 +54,40 @@ def busy_cycles(spans: Iterable[Span]) -> dict[str, int]:
 def compute_idle_gaps(spans: Sequence[Span]) -> list[tuple[int, int]]:
     """Intervals between compute spans (compute waiting on data or a slot)."""
     compute = sorted((s for s in spans if s.stage == "compute"), key=lambda s: s.start)
-    return [(a.end, b.start) for a, b in zip(compute, compute[1:]) if b.start > a.end]
+    return [(a.end, b.start) for a, b in zip(compute, compute[1:], strict=False) if b.start > a.end]
 
 
-def gantt(spans: Sequence[Span], title: str = "Pipeline", subtitle: str | None = None,
-          max_tiles: int | None = 16, width: int = 760, height: int = 300) -> svg.Figure:
-    """One row per engine; spans colour-coded by stage. Load and store share the single DMA
-    row when the trace comes from the serial memory model."""
+def gantt(
+    spans: Sequence[Span],
+    title: str = "Pipeline",
+    subtitle: str | None = None,
+    max_tiles: int | None = 16,
+    width: int = 760,
+    height: int = 300,
+) -> svg.Figure:
+    """One row per engine, spans colored by stage. Loads and stores share the DMA row."""
     if max_tiles is not None:
         spans = [s for s in spans if s.tile_id < max_tiles]
     rows = ["DMA", "MAC array"]
-    fig = svg.Figure(width, height, title=title, subtitle=subtitle, x_label="cycle",
-                     y_categories=rows, legend="right", x_range=(0, None))
+    fig = svg.Figure(
+        width,
+        height,
+        title=title,
+        subtitle=subtitle,
+        x_label="cycle",
+        y_categories=rows,
+        legend="right",
+        x_range=(0, None),
+    )
     colors = {"load": svg.PALETTE[0], "compute": svg.PALETTE[1], "store": svg.PALETTE[2]}
-    labelled: set[str] = set()
+    labeled: set[str] = set()
     for span in sorted(spans, key=lambda s: (s.start, s.stage)):
         row = 1 if span.stage == "compute" else 0
-        label = None if span.stage in labelled else {"load": "load", "compute": "compute",
-                                                       "store": "store"}.get(span.stage)
-        labelled.add(span.stage)
+        label = (
+            None
+            if span.stage in labeled
+            else {"load": "load", "compute": "compute", "store": "store"}.get(span.stage)
+        )
+        labeled.add(span.stage)
         fig.span(row, span.start, span.end, colors.get(span.stage), label)
     return fig
