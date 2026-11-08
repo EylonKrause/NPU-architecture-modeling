@@ -6,6 +6,7 @@ Python reference before the next node runs.
 
 Entry point for npuperf.graph (also: python -m npuperf.graph).
 """
+
 import sys
 from pathlib import Path
 

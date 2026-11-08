@@ -15,13 +15,11 @@ import argparse
 import csv
 import io
 import json
-import math
-from pathlib import Path
 import random
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 BINARY: Path
 
@@ -29,11 +27,25 @@ ACTIVATIONS, WEIGHTS, PARAMS, OUTPUTS = 0x8000_0000, 0x9000_0000, 0xA000_0000, 0
 PAGE = 4096
 
 BASE = {
-    "m": 4, "n": 5, "k": 7, "groups": 1, "tile_m": 2, "tile_n": 3, "tile_k": 0,
-    "buffer_slots": 2, "panel_buffers": 2, "macs_per_cycle": 8, "pipeline_cycles": 2,
-    "weight_bits": 8, "axi_data_bytes": 16, "axi_burst_beats": 16,
-    "axi_read_outstanding": 4, "axi_write_outstanding": 4,
-    "axi_read_latency": 12, "axi_write_latency": 12, "dram_bytes_per_cycle": 0,
+    "m": 4,
+    "n": 5,
+    "k": 7,
+    "groups": 1,
+    "tile_m": 2,
+    "tile_n": 3,
+    "tile_k": 0,
+    "buffer_slots": 2,
+    "panel_buffers": 2,
+    "macs_per_cycle": 8,
+    "pipeline_cycles": 2,
+    "weight_bits": 8,
+    "axi_data_bytes": 16,
+    "axi_burst_beats": 16,
+    "axi_read_outstanding": 4,
+    "axi_write_outstanding": 4,
+    "axi_read_latency": 12,
+    "axi_write_latency": 12,
+    "dram_bytes_per_cycle": 0,
 }
 
 
@@ -43,6 +55,7 @@ def ceildiv(value: int, divisor: int) -> int:
 
 # ---------------------------------------------------------------- workload --
 
+
 def depths(c: dict) -> list[int]:
     size = c["tile_k"] or c["k"]
     return [min(size, c["k"] - start) for start in range(0, c["k"], size)]
@@ -50,10 +63,12 @@ def depths(c: dict) -> list[int]:
 
 def tile_list(c: dict) -> list[tuple[int, int, int, int, int]]:
     """(group, row, col, rows, cols) in load order: group, then row, then column."""
-    return [(g, r, col, min(c["tile_m"], c["m"] - r), min(c["tile_n"], c["n"] - col))
-            for g in range(c["groups"])
-            for r in range(0, c["m"], c["tile_m"])
-            for col in range(0, c["n"], c["tile_n"])]
+    return [
+        (g, r, col, min(c["tile_m"], c["m"] - r), min(c["tile_n"], c["n"] - col))
+        for g in range(c["groups"])
+        for r in range(0, c["m"], c["tile_m"])
+        for col in range(0, c["n"], c["tile_n"])
+    ]
 
 
 def weight_bytes(c: dict, depth: int, cols: int) -> int:
@@ -97,6 +112,7 @@ def compute_cycles(c: dict, tile, block: int) -> int:
 
 # ------------------------------------------------------------------ bursts --
 
+
 def bursts(run: tuple[int, int], data_bytes: int, max_beats: int) -> list[tuple[int, int]]:
     """(beats, payload bytes) of each burst: walk the beat slots the run touches
     and close a burst when it holds max_beats or the next slot opens a page."""
@@ -107,11 +123,14 @@ def bursts(run: tuple[int, int], data_bytes: int, max_beats: int) -> list[tuple[
         if groups[-1] and (len(groups[-1]) == max_beats or slot * data_bytes % PAGE == 0):
             groups.append([])
         groups[-1].append(slot)
-    return [(len(slots), min(end, (slots[-1] + 1) * data_bytes) - max(base, slots[0] * data_bytes))
-            for slots in groups]
+    return [
+        (len(slots), min(end, (slots[-1] + 1) * data_bytes) - max(base, slots[0] * data_bytes))
+        for slots in groups
+    ]
 
 
 # ------------------------------------------------------------------ memory --
+
 
 class Dram:
     def __init__(self, rate: int):
@@ -134,14 +153,34 @@ class Channel:
         self.last_issue = None
         self.data_free = 0
         self.completions: list[int] = []
-        self.stats = dict(requests=0, bursts=0, beats=0, payload_bytes=0, busy_cycles=0,
-                          latency=0, max_latency_cycles=0, peak_outstanding=0)
+        self.stats = dict(
+            requests=0,
+            bursts=0,
+            beats=0,
+            payload_bytes=0,
+            busy_cycles=0,
+            latency=0,
+            max_latency_cycles=0,
+            peak_outstanding=0,
+        )
 
     def submit(self, now: int, runs, tag, c: dict) -> None:
-        pieces = [b for run in runs if run[1] for b in bursts(run, c["axi_data_bytes"],
-                                                                  c["axi_burst_beats"])]
-        self.request = dict(arrival=now, pieces=pieces, next=0, completion=now, tag=tag,
-                            bytes=sum(length for _, length in runs), beats=0, busy=0)
+        pieces = [
+            b
+            for run in runs
+            if run[1]
+            for b in bursts(run, c["axi_data_bytes"], c["axi_burst_beats"])
+        ]
+        self.request = dict(
+            arrival=now,
+            pieces=pieces,
+            next=0,
+            completion=now,
+            tag=tag,
+            bytes=sum(length for _, length in runs),
+            beats=0,
+            busy=0,
+        )
 
     def pending(self) -> bool:
         return self.request is not None and self.request["next"] < len(self.request["pieces"])
@@ -176,8 +215,7 @@ class Channel:
         request["next"] += 1
 
     def finished(self, now: int) -> bool:
-        return (self.request is not None and not self.pending() and
-                self.request["completion"] == now)
+        return self.request is not None and not self.pending() and self.request["completion"] == now
 
     def retire(self) -> dict:
         request, s = self.request, self.stats
@@ -219,14 +257,26 @@ def simulate(c: dict) -> dict:
                 released = first + load["block"] - buffers + 1
                 if load["block"] < buffers or computed_panels >= released:
                     tile = tiles[load["tile"]]
-                    read.submit(now, read_runs(c, tile, load["block"], offsets),
-                                (load["tile"], load["block"]), c)
+                    read.submit(
+                        now,
+                        read_runs(c, tile, load["block"], offsets),
+                        (load["tile"], load["block"]),
+                        c,
+                    )
                     load["state"] = "reading"
                     progressed = True
             if load["state"] == "reading" and read.finished(now):
                 request = read.retire()
-                spans.append(("load", *request["tag"][:1], request["arrival"], now,
-                              request["bytes"], request["tag"][1]))
+                spans.append(
+                    (
+                        "load",
+                        *request["tag"][:1],
+                        request["arrival"],
+                        now,
+                        request["bytes"],
+                        request["tag"][1],
+                    )
+                )
                 loaded.append(request["tag"])
                 load["block"] += 1
                 if load["block"] == blocks:
@@ -244,13 +294,13 @@ def simulate(c: dict) -> dict:
                 progressed = True
             if compute is None and loaded:
                 tile_id, block = loaded.pop(0)
-                compute = ((tile_id, block), now,
-                           now + compute_cycles(c, tiles[tile_id], block))
+                compute = ((tile_id, block), now, now + compute_cycles(c, tiles[tile_id], block))
                 progressed = True
             if write.request is not None and write.finished(now):
                 request = write.retire()
-                spans.append(("store", request["tag"], request["arrival"], now,
-                              request["bytes"], blocks - 1))
+                spans.append(
+                    ("store", request["tag"], request["arrival"], now, request["bytes"], blocks - 1)
+                )
                 stored += 1
                 free_slots += 1
                 progressed = True
@@ -265,8 +315,11 @@ def simulate(c: dict) -> dict:
         if stored == len(tiles):
             break
         upcoming = [ch.next_issue() for ch in (read, write) if ch.pending()]
-        upcoming += [ch.request["completion"] for ch in (read, write)
-                     if ch.request is not None and not ch.pending()]
+        upcoming += [
+            ch.request["completion"]
+            for ch in (read, write)
+            if ch.request is not None and not ch.pending()
+        ]
         if compute is not None:
             upcoming.append(compute[2])
         upcoming = [t for t in upcoming if t > now]
@@ -277,12 +330,18 @@ def simulate(c: dict) -> dict:
     for start, end in intervals:
         busy += max(0, end - max(start, reach))
         reach = max(reach, end)
-    return dict(cycles=now, read=read.stats, write=write.stats, spans=sorted(spans),
-                dma_busy_cycles=busy, dram_bytes=(read.stats["beats"] + write.stats["beats"]) *
-                c["axi_data_bytes"])
+    return dict(
+        cycles=now,
+        read=read.stats,
+        write=write.stats,
+        spans=sorted(spans),
+        dma_busy_cycles=busy,
+        dram_bytes=(read.stats["beats"] + write.stats["beats"]) * c["axi_data_bytes"],
+    )
 
 
 # --------------------------------------------------------------- simulator --
+
 
 def flags(c: dict) -> list[str]:
     result = ["--memory-model", "axi", "--sram-bytes", str(1 << 26)]
@@ -302,8 +361,16 @@ def run(c: dict, *extra: str, trace: bool = True) -> tuple[dict, list]:
         spans = []
         if trace:
             for row in csv.DictReader(io.StringIO(path.read_text())):
-                spans.append((row["stage"], int(row["tile_id"]), int(row["start_cycle"]),
-                              int(row["end_cycle"]), int(row["bytes"]), int(row["block_id"])))
+                spans.append(
+                    (
+                        row["stage"],
+                        int(row["tile_id"]),
+                        int(row["start_cycle"]),
+                        int(row["end_cycle"]),
+                        int(row["bytes"]),
+                        int(row["block_id"]),
+                    )
+                )
     return result, sorted(spans)
 
 
@@ -318,20 +385,31 @@ class AxiMemoryModel(unittest.TestCase):
         self.assertEqual(memory["model"], "axi")
         for direction in ("read", "write"):
             got, want = memory[direction], expected[direction]
-            for key in ("requests", "bursts", "beats", "payload_bytes", "busy_cycles",
-                        "max_latency_cycles", "peak_outstanding"):
+            for key in (
+                "requests",
+                "bursts",
+                "beats",
+                "payload_bytes",
+                "busy_cycles",
+                "max_latency_cycles",
+                "peak_outstanding",
+            ):
                 self.assertEqual(got[key], want[key], f"{direction}.{key} {c}")
             self.assertAlmostEqual(got["mean_latency_cycles"], want["latency"] / want["requests"])
-            self.assertAlmostEqual(got["burst_efficiency"],
-                                   want["payload_bytes"] / (want["beats"] * c["axi_data_bytes"]))
-            self.assertAlmostEqual(got["achieved_bytes_per_cycle"],
-                                   want["payload_bytes"] / expected["cycles"])
+            self.assertAlmostEqual(
+                got["burst_efficiency"],
+                want["payload_bytes"] / (want["beats"] * c["axi_data_bytes"]),
+            )
+            self.assertAlmostEqual(
+                got["achieved_bytes_per_cycle"], want["payload_bytes"] / expected["cycles"]
+            )
             limit = c["axi_read_outstanding" if direction == "read" else "axi_write_outstanding"]
             self.assertLessEqual(got["peak_outstanding"], limit)
         self.assertEqual(result["read_bytes"], expected["read"]["payload_bytes"])
         self.assertEqual(result["write_bytes"], expected["write"]["payload_bytes"])
-        self.assertEqual(result["dma_bursts"],
-                         expected["read"]["bursts"] + expected["write"]["bursts"])
+        self.assertEqual(
+            result["dma_bursts"], expected["read"]["bursts"] + expected["write"]["bursts"]
+        )
         self.assertEqual(memory["dram"]["bytes"], expected["dram_bytes"])
         self.assertEqual(spans, expected["spans"], c)
         return result
@@ -340,12 +418,15 @@ class AxiMemoryModel(unittest.TestCase):
         # One output: a 16-byte activation run, a 16-byte weight run and a
         # 4-byte bias record, each one beat at its own region base; the store
         # is one beat.
-        base = dict(BASE, m=1, n=1, k=16, tile_m=1, tile_n=1, pipeline_cycles=0,
-                    macs_per_cycle=16)
+        base = dict(BASE, m=1, n=1, k=16, tile_m=1, tile_n=1, pipeline_cycles=0, macs_per_cycle=16)
         for outstanding in (1, 2, 3, 4):
             for latency in (0, 1, 7, 100):
-                c = dict(base, axi_read_outstanding=outstanding, axi_read_latency=latency,
-                         axi_write_latency=latency)
+                c = dict(
+                    base,
+                    axi_read_outstanding=outstanding,
+                    axi_read_latency=latency,
+                    axi_write_latency=latency,
+                )
                 result, spans = run(c)
                 load = next(s for s in spans if s[0] == "load")
                 store = next(s for s in spans if s[0] == "store")
@@ -367,8 +448,17 @@ class AxiMemoryModel(unittest.TestCase):
         # bursts. Away from the first latency, bytes per cycle approach
         # min(data_bytes, N * beats * data_bytes / (latency + beats)).
         latency, beats, data = 100, 16, 16
-        c = dict(BASE, m=1, n=64, k=4096, tile_m=1, tile_n=64, axi_data_bytes=data,
-                 axi_burst_beats=beats, axi_read_latency=latency)
+        c = dict(
+            BASE,
+            m=1,
+            n=64,
+            k=4096,
+            tile_m=1,
+            tile_n=64,
+            axi_data_bytes=data,
+            axi_burst_beats=beats,
+            axi_read_latency=latency,
+        )
         for outstanding in (1, 2, 4, 8, 16):
             with self.subTest(outstanding=outstanding):
                 case = dict(c, axi_read_outstanding=outstanding)
@@ -383,11 +473,21 @@ class AxiMemoryModel(unittest.TestCase):
     def test_four_kib_split(self):
         # Rows of 3000 bytes start at 3000 * r: with 4096-byte bursts each run
         # takes one burst per 4 KiB page it touches.
-        c = dict(BASE, m=8, n=1, k=3000, tile_m=8, tile_n=1, axi_burst_beats=256,
-                 axi_data_bytes=16, macs_per_cycle=64)
+        c = dict(
+            BASE,
+            m=8,
+            n=1,
+            k=3000,
+            tile_m=8,
+            tile_n=1,
+            axi_burst_beats=256,
+            axi_data_bytes=16,
+            macs_per_cycle=64,
+        )
         result = self.assert_matches_oracle(c)
-        activation_bursts = sum((3000 * r + 2999) // PAGE - (3000 * r) // PAGE + 1
-                                for r in range(8))
+        activation_bursts = sum(
+            (3000 * r + 2999) // PAGE - (3000 * r) // PAGE + 1 for r in range(8)
+        )
         weight_bursts = ceildiv(3000, PAGE)  # a 3000-byte panel at the 4 KiB-aligned base
         self.assertEqual(activation_bursts, 13)
         self.assertEqual(result["memory"]["read"]["bursts"], activation_bursts + weight_bursts + 1)
@@ -405,20 +505,31 @@ class AxiMemoryModel(unittest.TestCase):
         read = result["memory"]["read"]
         self.assertEqual(read["beats"], activation_beats + weight_beats + bias_beats)
         self.assertEqual(read["payload_bytes"], 16 * 37 + 37 + 4)
-        self.assertAlmostEqual(read["burst_efficiency"],
-                               read["payload_bytes"] / (16 * read["beats"]))
+        self.assertAlmostEqual(
+            read["burst_efficiency"], read["payload_bytes"] / (16 * read["beats"])
+        )
         self.assertLess(read["burst_efficiency"], 0.75)
         # The same rows aligned to the beat move with full beats.
         aligned = self.assert_matches_oracle(dict(c, k=48))
         self.assertEqual(aligned["memory"]["read"]["beats"], 16 * 3 + 3 + 1)
 
     def test_reads_and_writes_overlap(self):
-        c = dict(BASE, m=32, n=32, k=64, tile_m=8, tile_n=8, buffer_slots=3,
-                 macs_per_cycle=64, axi_read_latency=20, axi_write_latency=20)
+        c = dict(
+            BASE,
+            m=32,
+            n=32,
+            k=64,
+            tile_m=8,
+            tile_n=8,
+            buffer_slots=3,
+            macs_per_cycle=64,
+            axi_read_latency=20,
+            axi_write_latency=20,
+        )
         result, spans = run(c)
         loads = [s for s in spans if s[0] == "load"]
         stores = [s for s in spans if s[0] == "store"]
-        overlapping = [(l, s) for l in loads for s in stores if l[2] < s[3] and s[2] < l[3]]
+        overlapping = [(ld, st) for ld in loads for st in stores if ld[2] < st[3] and st[2] < ld[3]]
         self.assertTrue(overlapping, "a store must run while a later tile loads")
         self.assert_matches_oracle(c)
         # Union busy time is less than the summed request time once they overlap.
@@ -427,9 +538,20 @@ class AxiMemoryModel(unittest.TestCase):
         self.assertLessEqual(result["dma_busy_cycles"], result["cycles"])
 
     def test_dram_rate_caps_both_channels(self):
-        c = dict(BASE, m=64, n=64, k=256, tile_m=16, tile_n=16, macs_per_cycle=4096,
-                 axi_read_outstanding=16, axi_write_outstanding=16, axi_read_latency=30,
-                 axi_write_latency=30, buffer_slots=4)
+        c = dict(
+            BASE,
+            m=64,
+            n=64,
+            k=256,
+            tile_m=16,
+            tile_n=16,
+            macs_per_cycle=4096,
+            axi_read_outstanding=16,
+            axi_write_outstanding=16,
+            axi_read_latency=30,
+            axi_write_latency=30,
+            buffer_slots=4,
+        )
         unlimited = self.assert_matches_oracle(c)
         for rate in (1, 3, 8, 16, 24, 32):
             with self.subTest(rate=rate):
@@ -451,29 +573,46 @@ class AxiMemoryModel(unittest.TestCase):
         rng = random.Random(4)
         for case in range(60):
             m, n, k = rng.randint(1, 24), rng.randint(1, 24), rng.randint(1, 70)
-            c = dict(BASE, m=m, n=n, k=k, groups=rng.choice([1, 1, 2, 3]),
-                     tile_m=rng.randint(1, 9), tile_n=rng.randint(1, 9),
-                     tile_k=rng.choice([0, rng.randint(1, k)]),
-                     buffer_slots=rng.randint(1, 4), panel_buffers=rng.choice([1, 2]),
-                     macs_per_cycle=rng.choice([1, 4, 16, 64]),
-                     pipeline_cycles=rng.randint(0, 5), weight_bits=rng.choice([4, 8]),
-                     axi_data_bytes=rng.choice([8, 16, 32, 64]),
-                     axi_burst_beats=rng.choice([1, 2, 3, 16, 256]),
-                     axi_read_outstanding=rng.randint(1, 8),
-                     axi_write_outstanding=rng.randint(1, 8),
-                     axi_read_latency=rng.randint(0, 40), axi_write_latency=rng.randint(0, 40),
-                     dram_bytes_per_cycle=rng.choice([0, 0, 1, 5, 8, 16, 33]))
+            c = dict(
+                BASE,
+                m=m,
+                n=n,
+                k=k,
+                groups=rng.choice([1, 1, 2, 3]),
+                tile_m=rng.randint(1, 9),
+                tile_n=rng.randint(1, 9),
+                tile_k=rng.choice([0, rng.randint(1, k)]),
+                buffer_slots=rng.randint(1, 4),
+                panel_buffers=rng.choice([1, 2]),
+                macs_per_cycle=rng.choice([1, 4, 16, 64]),
+                pipeline_cycles=rng.randint(0, 5),
+                weight_bits=rng.choice([4, 8]),
+                axi_data_bytes=rng.choice([8, 16, 32, 64]),
+                axi_burst_beats=rng.choice([1, 2, 3, 16, 256]),
+                axi_read_outstanding=rng.randint(1, 8),
+                axi_write_outstanding=rng.randint(1, 8),
+                axi_read_latency=rng.randint(0, 40),
+                axi_write_latency=rng.randint(0, 40),
+                dram_bytes_per_cycle=rng.choice([0, 0, 1, 5, 8, 16, 33]),
+            )
             with self.subTest(case=case, config=c):
                 self.assert_matches_oracle(c)
 
     def test_event_and_cycle_timing_agree(self):
         rng = random.Random(9)
         for case in range(12):
-            c = dict(BASE, m=rng.randint(1, 12), n=rng.randint(1, 12), k=rng.randint(1, 40),
-                     tile_m=rng.randint(1, 5), tile_n=rng.randint(1, 5),
-                     axi_read_outstanding=rng.randint(1, 4), axi_read_latency=rng.randint(0, 9),
-                     axi_write_latency=rng.randint(0, 9),
-                     dram_bytes_per_cycle=rng.choice([0, 4, 16]))
+            c = dict(
+                BASE,
+                m=rng.randint(1, 12),
+                n=rng.randint(1, 12),
+                k=rng.randint(1, 40),
+                tile_m=rng.randint(1, 5),
+                tile_n=rng.randint(1, 5),
+                axi_read_outstanding=rng.randint(1, 4),
+                axi_read_latency=rng.randint(0, 9),
+                axi_write_latency=rng.randint(0, 9),
+                dram_bytes_per_cycle=rng.choice([0, 4, 16]),
+            )
             with self.subTest(case=case):
                 event, event_spans = run(c, "--timing", "event")
                 cycle, cycle_spans = run(c, "--timing", "cycle")
@@ -485,19 +624,49 @@ class AxiMemoryModel(unittest.TestCase):
     def test_traffic_matches_the_serial_model(self):
         # Both models move the same bytes, including palette weights and
         # weight-cache hits, which drop the weight run from a panel load.
-        common = ["--m", "24", "--n", "16", "--k", "40", "--tile-m", "6", "--tile-n", "4",
-                  "--tile-k", "16", "--weight-cache-bytes", "4096", "--weight-encoding",
-                  "palette", "--palette-bits", "8", "--sram-bytes", str(1 << 22)]
+        common = [
+            "--m",
+            "24",
+            "--n",
+            "16",
+            "--k",
+            "40",
+            "--tile-m",
+            "6",
+            "--tile-n",
+            "4",
+            "--tile-k",
+            "16",
+            "--weight-cache-bytes",
+            "4096",
+            "--weight-encoding",
+            "palette",
+            "--palette-bits",
+            "8",
+            "--sram-bytes",
+            str(1 << 22),
+        ]
         results = {}
         for model in ("serial", "axi"):
-            process = subprocess.run([str(BINARY), *common, "--memory-model", model],
-                                     capture_output=True, text=True, timeout=60)
+            process = subprocess.run(
+                [str(BINARY), *common, "--memory-model", model],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
             self.assertEqual(process.returncode, 0, process.stderr)
             results[model] = json.loads(process.stdout)
         serial, axi = results["serial"], results["axi"]
         self.assertGreater(serial["weight_cache_hits"], 0)
-        for key in ("read_bytes", "write_bytes", "weight_read_bytes", "weight_cache_hits",
-                    "output_hash", "macs", "dma_requests"):
+        for key in (
+            "read_bytes",
+            "write_bytes",
+            "weight_read_bytes",
+            "weight_cache_hits",
+            "output_hash",
+            "macs",
+            "dma_requests",
+        ):
             self.assertEqual(serial[key], axi[key], key)
         self.assertEqual(serial["memory"]["read"]["payload_bytes"], serial["read_bytes"])
         self.assertEqual(axi["memory"]["read"]["payload_bytes"], axi["read_bytes"])
@@ -505,13 +674,26 @@ class AxiMemoryModel(unittest.TestCase):
         self.assertNotIn("dram", serial["memory"])
 
     def test_snapshots_carry_channel_state(self):
-        c = dict(BASE, m=16, n=16, k=48, tile_m=4, tile_n=4, tile_k=16,
-                 axi_read_outstanding=3, axi_read_latency=9, dram_bytes_per_cycle=12)
+        c = dict(
+            BASE,
+            m=16,
+            n=16,
+            k=48,
+            tile_m=4,
+            tile_n=4,
+            tile_k=16,
+            axi_read_outstanding=3,
+            axi_read_latency=9,
+            dram_bytes_per_cycle=12,
+        )
         with tempfile.TemporaryDirectory() as directory:
             progress = Path(directory) / "progress.jsonl"
-            process = subprocess.run([str(BINARY), *flags(c), "--progress-jsonl", str(progress),
-                                      "--slice-cycles", "5"],
-                                     capture_output=True, text=True, timeout=60)
+            process = subprocess.run(
+                [str(BINARY), *flags(c), "--progress-jsonl", str(progress), "--slice-cycles", "5"],
+                capture_output=True,
+                text=True,
+                timeout=60,
+            )
             self.assertEqual(process.returncode, 0, process.stderr)
             batch = json.loads(process.stdout)
             snapshots = [json.loads(line) for line in progress.read_text().splitlines()]
@@ -544,30 +726,62 @@ class AxiMemoryModel(unittest.TestCase):
         # so closing stdin mid-transfer exits 0 and LeakSanitizer finds no leak.
         for model in ("serial", "axi"):
             process = subprocess.run(
-                [str(BINARY), "--m", "8", "--n", "8", "--k", "32", "--tile-k", "8",
-                 "--memory-model", model, "--live-stdio"],
-                input="advance 9\n", capture_output=True, text=True, timeout=30)
+                [
+                    str(BINARY),
+                    "--m",
+                    "8",
+                    "--n",
+                    "8",
+                    "--k",
+                    "32",
+                    "--tile-k",
+                    "8",
+                    "--memory-model",
+                    model,
+                    "--live-stdio",
+                ],
+                input="advance 9\n",
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
             self.assertEqual(process.returncode, 0, process.stderr)
             lines = [json.loads(line) for line in process.stdout.splitlines()]
             self.assertEqual(lines[-1]["cycles"], 9)
             self.assertTrue(lines[-1]["dma_busy"])
 
     def test_config_echo_reloads_the_axi_port(self):
-        c = dict(BASE, axi_data_bytes=32, axi_burst_beats=7, axi_read_outstanding=5,
-                 axi_write_outstanding=6, axi_read_latency=3, axi_write_latency=4,
-                 dram_bytes_per_cycle=9)
+        c = dict(
+            BASE,
+            axi_data_bytes=32,
+            axi_burst_beats=7,
+            axi_read_outstanding=5,
+            axi_write_outstanding=6,
+            axi_read_latency=3,
+            axi_write_latency=4,
+            dram_bytes_per_cycle=9,
+        )
         result, _ = run(c, trace=False)
         axi = result["config"]["arch"]["memory"]
         self.assertEqual(axi["model"], "axi")
         self.assertEqual(axi["dram_bytes_per_cycle"], 9)
-        self.assertEqual(axi["axi"], {"data_bytes": 32, "max_burst_beats": 7,
-                                      "read_outstanding": 5, "write_outstanding": 6,
-                                      "read_latency": 3, "write_latency": 4})
+        self.assertEqual(
+            axi["axi"],
+            {
+                "data_bytes": 32,
+                "max_burst_beats": 7,
+                "read_outstanding": 5,
+                "write_outstanding": 6,
+                "read_latency": 3,
+                "write_latency": 4,
+            },
+        )
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "echo.json"
             path.write_text(json.dumps(result["config"]))
-            process = subprocess.run([str(BINARY), "--config", str(path)],
-                                     capture_output=True, text=True, timeout=60)
+            process = subprocess.run(
+                [str(BINARY), "--config", str(path)], capture_output=True, text=True, timeout=60
+            )
             self.assertEqual(process.returncode, 0, process.stderr)
             again = json.loads(process.stdout)
         for key in result:
@@ -575,8 +789,9 @@ class AxiMemoryModel(unittest.TestCase):
                 self.assertEqual(again[key], result[key], key)
 
     def assert_rejected(self, arguments: list[str], message: str) -> None:
-        process = subprocess.run([str(BINARY), *arguments], capture_output=True, text=True,
-                                 timeout=30)
+        process = subprocess.run(
+            [str(BINARY), *arguments], capture_output=True, text=True, timeout=30
+        )
         self.assertEqual(process.returncode, 2, f"{arguments}: {process.stderr}")
         lines = process.stderr.strip().splitlines()
         self.assertTrue(lines and lines[-1].startswith("npu-sim: "), process.stderr)
@@ -592,20 +807,29 @@ class AxiMemoryModel(unittest.TestCase):
             ([*axi, "--axi-burst-beats", "257"], "AXI burst beats must be in 1..256"),
             ([*axi, "--axi-read-outstanding", "0"], "AXI outstanding bursts must be in 1..64"),
             ([*axi, "--axi-write-outstanding", "65"], "AXI outstanding bursts must be in 1..64"),
-            ([*axi, "--axi-read-latency", "1000000001"],
-             "AXI latencies must be at most 1000000000"),
-            ([*axi, "--dram-bytes-per-cycle", "1000000001"],
-             "DRAM bytes per cycle must be at most 1000000000"),
+            (
+                [*axi, "--axi-read-latency", "1000000001"],
+                "AXI latencies must be at most 1000000000",
+            ),
+            (
+                [*axi, "--dram-bytes-per-cycle", "1000000001"],
+                "DRAM bytes per cycle must be at most 1000000000",
+            ),
             ([*axi, "--axi-burst-beats", "-1"], "--axi-burst-beats: expected an unsigned"),
-            ([*axi, "--memory-latency", "5"],
-             "--memory-latency applies to --memory-model serial only"),
-            ([*axi, "--dma-burst-bytes", "64"],
-             "--dma-burst-bytes applies to --memory-model serial only"),
+            (
+                [*axi, "--memory-latency", "5"],
+                "--memory-latency applies to --memory-model serial only",
+            ),
+            (
+                [*axi, "--dma-burst-bytes", "64"],
+                "--dma-burst-bytes applies to --memory-model serial only",
+            ),
             (["--axi-read-latency", "5"], "--axi-read-latency requires --memory-model axi"),
-            (["--dram-bytes-per-cycle", "8"],
-             "--dram-bytes-per-cycle requires --memory-model axi"),
-            ([*axi, "--timing", "cycle", "--m", "1024", "--n", "1024", "--k", "1024"],
-             "cycle mode serial work must be at most 10000000 cycles"),
+            (["--dram-bytes-per-cycle", "8"], "--dram-bytes-per-cycle requires --memory-model axi"),
+            (
+                [*axi, "--timing", "cycle", "--m", "1024", "--n", "1024", "--k", "1024"],
+                "cycle mode serial work must be at most 10000000 cycles",
+            ),
         ]
         for arguments, message in cases:
             with self.subTest(arguments=arguments):
@@ -613,10 +837,18 @@ class AxiMemoryModel(unittest.TestCase):
         # A config file may carry the other model's keys, as every echo does.
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "both.json"
-            path.write_text(json.dumps({"arch": {"memory": {
-                "model": "axi", "latency": 40, "axi": {"read_latency": 7}}}}))
-            process = subprocess.run([str(BINARY), "--config", str(path)],
-                                     capture_output=True, text=True, timeout=30)
+            path.write_text(
+                json.dumps(
+                    {
+                        "arch": {
+                            "memory": {"model": "axi", "latency": 40, "axi": {"read_latency": 7}}
+                        }
+                    }
+                )
+            )
+            process = subprocess.run(
+                [str(BINARY), "--config", str(path)], capture_output=True, text=True, timeout=30
+            )
             self.assertEqual(process.returncode, 0, process.stderr)
             self.assertEqual(json.loads(process.stdout)["memory"]["model"], "axi")
 

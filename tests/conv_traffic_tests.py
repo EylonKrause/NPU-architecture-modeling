@@ -17,22 +17,32 @@ import argparse
 import csv
 import io
 import json
-import math
-from pathlib import Path
 import random
 import subprocess
 import tempfile
 import unittest
-
+from pathlib import Path
 
 BINARY: Path
 
 ACTIVATIONS, WEIGHTS, PARAMS, OUTPUTS = 0x8000_0000, 0x9000_0000, 0xA000_0000, 0xB000_0000
 PAGE = 4096
 MASK32 = (1 << 32) - 1
-NO_CONV = {"input_h": 0, "input_w": 0, "input_c": 0, "kernel_h": 1, "kernel_w": 1,
-           "stride_h": 1, "stride_w": 1, "dilation_h": 1, "dilation_w": 1,
-           "pad_top": 0, "pad_left": 0, "pad_bottom": 0, "pad_right": 0}
+NO_CONV = {
+    "input_h": 0,
+    "input_w": 0,
+    "input_c": 0,
+    "kernel_h": 1,
+    "kernel_w": 1,
+    "stride_h": 1,
+    "stride_w": 1,
+    "dilation_h": 1,
+    "dilation_w": 1,
+    "pad_top": 0,
+    "pad_left": 0,
+    "pad_bottom": 0,
+    "pad_right": 0,
+}
 
 
 def ceildiv(value: int, divisor: int) -> int:
@@ -41,30 +51,89 @@ def ceildiv(value: int, divisor: int) -> int:
 
 # ------------------------------------------------------------------- configs --
 
+
 def base_config(**changes) -> dict:
-    c = {"m": 4, "n": 3, "k": 5, "groups": 1, "seed": 1, "conv": None, "tile_m": 2,
-         "tile_n": 2, "tile_k": 0, "buffer_slots": 2, "panel_buffers": 2,
-         "macs_per_cycle": 16, "pipeline_cycles": 3, "depthwise": 0, "weight_bits": 8,
-         "weight_cache": 0, "activation_cache": 0, "input_zero": -3, "weight_zero": 2,
-         "memory": "serial", "cores": 1, "data_bytes": 16, "burst_beats": 16}
+    c = {
+        "m": 4,
+        "n": 3,
+        "k": 5,
+        "groups": 1,
+        "seed": 1,
+        "conv": None,
+        "tile_m": 2,
+        "tile_n": 2,
+        "tile_k": 0,
+        "buffer_slots": 2,
+        "panel_buffers": 2,
+        "macs_per_cycle": 16,
+        "pipeline_cycles": 3,
+        "depthwise": 0,
+        "weight_bits": 8,
+        "weight_cache": 0,
+        "activation_cache": 0,
+        "input_zero": -3,
+        "weight_zero": 2,
+        "memory": "serial",
+        "cores": 1,
+        "data_bytes": 16,
+        "burst_beats": 16,
+    }
     c.update(changes)
     return c
 
 
 def flags(c: dict) -> list[str]:
-    out = ["--m", c["m"], "--n", c["n"], "--k", c["k"], "--groups", c["groups"],
-           "--seed", c["seed"], "--tile-m", c["tile_m"], "--tile-n", c["tile_n"],
-           "--tile-k", c["tile_k"], "--buffer-slots", c["buffer_slots"],
-           "--panel-buffers", c["panel_buffers"], "--macs-per-cycle", c["macs_per_cycle"],
-           "--pipeline-cycles", c["pipeline_cycles"],
-           "--depthwise-macs-per-cycle", c["depthwise"], "--weight-bits", c["weight_bits"],
-           "--weight-cache-bytes", c["weight_cache"],
-           "--activation-cache-bytes", c["activation_cache"],
-           "--input-zero", c["input_zero"], "--weight-zero", c["weight_zero"],
-           "--sram-bytes", 1 << 24, "--memory-model", c["memory"]]
+    out = [
+        "--m",
+        c["m"],
+        "--n",
+        c["n"],
+        "--k",
+        c["k"],
+        "--groups",
+        c["groups"],
+        "--seed",
+        c["seed"],
+        "--tile-m",
+        c["tile_m"],
+        "--tile-n",
+        c["tile_n"],
+        "--tile-k",
+        c["tile_k"],
+        "--buffer-slots",
+        c["buffer_slots"],
+        "--panel-buffers",
+        c["panel_buffers"],
+        "--macs-per-cycle",
+        c["macs_per_cycle"],
+        "--pipeline-cycles",
+        c["pipeline_cycles"],
+        "--depthwise-macs-per-cycle",
+        c["depthwise"],
+        "--weight-bits",
+        c["weight_bits"],
+        "--weight-cache-bytes",
+        c["weight_cache"],
+        "--activation-cache-bytes",
+        c["activation_cache"],
+        "--input-zero",
+        c["input_zero"],
+        "--weight-zero",
+        c["weight_zero"],
+        "--sram-bytes",
+        1 << 24,
+        "--memory-model",
+        c["memory"],
+    ]
     if c["memory"] == "axi":
-        out += ["--axi-data-bytes", c["data_bytes"], "--axi-burst-beats", c["burst_beats"],
-                "--cores", c["cores"]]
+        out += [
+            "--axi-data-bytes",
+            c["data_bytes"],
+            "--axi-burst-beats",
+            c["burst_beats"],
+            "--cores",
+            c["cores"],
+        ]
     if c["conv"]:
         for key, value in c["conv"].items():
             out += ["--conv-" + key.replace("_", "-"), value]
@@ -73,49 +142,88 @@ def flags(c: dict) -> list[str]:
 
 def conv_shape(conv: dict) -> tuple[int, int]:
     """Output height and width: floor((in + pads - reach) / stride) + 1 per axis."""
+
     def extent(size, kernel, stride, dilation, low, high):
         return (size + low + high - dilation * (kernel - 1) - 1) // stride + 1
-    return (extent(conv["input_h"], conv["kernel_h"], conv["stride_h"], conv["dilation_h"],
-                   conv["pad_top"], conv["pad_bottom"]),
-            extent(conv["input_w"], conv["kernel_w"], conv["stride_w"], conv["dilation_w"],
-                   conv["pad_left"], conv["pad_right"]))
+
+    return (
+        extent(
+            conv["input_h"],
+            conv["kernel_h"],
+            conv["stride_h"],
+            conv["dilation_h"],
+            conv["pad_top"],
+            conv["pad_bottom"],
+        ),
+        extent(
+            conv["input_w"],
+            conv["kernel_w"],
+            conv["stride_w"],
+            conv["dilation_w"],
+            conv["pad_left"],
+            conv["pad_right"],
+        ),
+    )
 
 
 def random_conv_config(rng: random.Random, depthwise: bool, size: int = 8) -> dict:
     while True:
-        conv = dict(NO_CONV, input_h=rng.randint(1, size), input_w=rng.randint(1, size),
-                    kernel_h=rng.randint(1, 3), kernel_w=rng.randint(1, 3),
-                    stride_h=rng.randint(1, 3), stride_w=rng.randint(1, 3),
-                    dilation_h=rng.randint(1, 2), dilation_w=rng.randint(1, 2),
-                    pad_top=rng.randint(0, 2), pad_left=rng.randint(0, 2),
-                    pad_bottom=rng.randint(0, 2), pad_right=rng.randint(0, 2))
+        conv = dict(
+            NO_CONV,
+            input_h=rng.randint(1, size),
+            input_w=rng.randint(1, size),
+            kernel_h=rng.randint(1, 3),
+            kernel_w=rng.randint(1, 3),
+            stride_h=rng.randint(1, 3),
+            stride_w=rng.randint(1, 3),
+            dilation_h=rng.randint(1, 2),
+            dilation_w=rng.randint(1, 2),
+            pad_top=rng.randint(0, 2),
+            pad_left=rng.randint(0, 2),
+            pad_bottom=rng.randint(0, 2),
+            pad_right=rng.randint(0, 2),
+        )
         group_channels = rng.randint(1, 3 if size <= 8 else 8)
         groups = rng.randint(2, 6) if depthwise else rng.choice([1, 1, 2, 3])
         conv["input_c"] = groups * group_channels
-        if (conv["dilation_h"] * (conv["kernel_h"] - 1) + 1 >
-                conv["input_h"] + conv["pad_top"] + conv["pad_bottom"] or
-                conv["dilation_w"] * (conv["kernel_w"] - 1) + 1 >
-                conv["input_w"] + conv["pad_left"] + conv["pad_right"]):
+        if (
+            conv["dilation_h"] * (conv["kernel_h"] - 1) + 1
+            > conv["input_h"] + conv["pad_top"] + conv["pad_bottom"]
+            or conv["dilation_w"] * (conv["kernel_w"] - 1) + 1
+            > conv["input_w"] + conv["pad_left"] + conv["pad_right"]
+        ):
             continue
         out_h, out_w = conv_shape(conv)
         m, row_k = out_h * out_w, conv["kernel_w"] * group_channels
         return base_config(
-            m=m, n=1 if depthwise else rng.randint(1, 3), k=conv["kernel_h"] * row_k,
-            groups=groups, conv=conv, seed=rng.randint(1, 10 ** 6),
-            tile_m=rng.randint(1, m), tile_n=rng.randint(1, 4),
+            m=m,
+            n=1 if depthwise else rng.randint(1, 3),
+            k=conv["kernel_h"] * row_k,
+            groups=groups,
+            conv=conv,
+            seed=rng.randint(1, 10**6),
+            tile_m=rng.randint(1, m),
+            tile_n=rng.randint(1, 4),
             tile_k=rng.randint(0, conv["kernel_h"]) * row_k,
             depthwise=rng.randint(1, 40) if depthwise else 0,
-            input_zero=rng.randint(-10, 10))
+            input_zero=rng.randint(-10, 10),
+        )
 
 
 def random_memory(rng: random.Random, c: dict) -> dict:
     if rng.random() < 0.5:
-        return dict(c, memory="axi", data_bytes=rng.choice([8, 16, 32]),
-                    burst_beats=rng.choice([1, 2, 16]), cores=rng.choice([1, 1, 2, 3]))
+        return dict(
+            c,
+            memory="axi",
+            data_bytes=rng.choice([8, 16, 32]),
+            burst_beats=rng.choice([1, 2, 16]),
+            cores=rng.choice([1, 1, 2, 3]),
+        )
     return c
 
 
 # ------------------------------------------------------------------ workload --
+
 
 def channel_wise(c: dict) -> bool:
     return c["depthwise"] > 0 and c["groups"] > 1 and c["n"] == 1
@@ -130,10 +238,12 @@ def tile_list(c: dict) -> list[tuple[int, int, int, int, int]]:
     """(group, row, col, rows, cols) by tile id: group, then row tile, then column tile. A
     depthwise-datapath tile spans tile_n channels of one group of G columns."""
     groups, columns = grid(c)
-    return [(g, r, col, min(c["tile_m"], c["m"] - r), min(c["tile_n"], columns - col))
-            for g in range(groups)
-            for r in range(0, c["m"], c["tile_m"])
-            for col in range(0, columns, c["tile_n"])]
+    return [
+        (g, r, col, min(c["tile_m"], c["m"] - r), min(c["tile_n"], columns - col))
+        for g in range(groups)
+        for r in range(0, c["m"], c["tile_m"])
+        for col in range(0, columns, c["tile_n"])
+    ]
 
 
 def depths(c: dict) -> list[int]:
@@ -178,11 +288,14 @@ def activation_runs(c: dict, tile, block: int) -> list[tuple[int, int]]:
         for y, columns in sorted(needed_pixels(c, tile, block).items()):
             low, high = min(columns), max(columns)
             if count == channels:
-                runs.append((ACTIVATIONS + (y * width + low) * channels,
-                             (high - low + 1) * channels))
+                runs.append(
+                    (ACTIVATIONS + (y * width + low) * channels, (high - low + 1) * channels)
+                )
             else:
-                runs += [(ACTIVATIONS + (y * width + x) * channels + first, count)
-                         for x in range(low, high + 1)]
+                runs += [
+                    (ACTIVATIONS + (y * width + x) * channels + first, count)
+                    for x in range(low, high + 1)
+                ]
         return runs
     k, stride = c["k"], c["groups"] * c["k"]
     depth, start = depths(c)[block], block * (c["tile_k"] or k)
@@ -226,9 +339,14 @@ def scratchpad(c: dict) -> int:
     depth, blocks = max(depths(c)), len(depths(c))
     if c["conv"]:
         widest = (cols if channel_wise(c) else 1) * (c["conv"]["input_c"] // c["groups"])
-        largest = max(sum(max(xs) - min(xs) + 1 for xs in
-                          needed_pixels(c, tile, block).values())
-                      for tile in tile_list(c) for block in range(blocks)) * widest
+        largest = (
+            max(
+                sum(max(xs) - min(xs) + 1 for xs in needed_pixels(c, tile, block).values())
+                for tile in tile_list(c)
+                for block in range(blocks)
+            )
+            * widest
+        )
     else:
         largest = rows * depth * (cols if channel_wise(c) else 1)
     panel = largest + weight_bytes(c, depth, cols)
@@ -278,6 +396,7 @@ def bursts(run: tuple[int, int], data_bytes: int, max_beats: int) -> list[int]:
 
 # ------------------------------------------------------------------ numerics --
 
+
 def fixtures(c: dict) -> tuple[list[int], list[int], list[int]]:
     """The simulator's generator stream: the NHWC input (or the activation operand), then
     the weights, then the bias."""
@@ -292,11 +411,17 @@ def fixtures(c: dict) -> tuple[list[int], list[int], list[int]]:
         return out
 
     conv = c["conv"]
-    inputs = (conv["input_h"] * conv["input_w"] * conv["input_c"] if conv
-              else c["m"] * c["groups"] * c["k"])
+    inputs = (
+        conv["input_h"] * conv["input_w"] * conv["input_c"]
+        if conv
+        else c["m"] * c["groups"] * c["k"]
+    )
     first = values(inputs, 31, 15)
-    weights = (values(c["groups"] * c["k"] * c["n"], 16, 8) if c["weight_bits"] == 4
-               else values(c["groups"] * c["k"] * c["n"], 31, 15))
+    weights = (
+        values(c["groups"] * c["k"] * c["n"], 16, 8)
+        if c["weight_bits"] == 4
+        else values(c["groups"] * c["k"] * c["n"], 31, 15)
+    )
     return first, weights, values(c["groups"] * c["n"], 127, 63)
 
 
@@ -328,19 +453,25 @@ def expected_outputs(c: dict) -> tuple[list[int], list[int]]:
                         if not (0 <= y < conv["input_h"] and 0 <= x < conv["input_w"]):
                             continue  # padding is the input zero point: no contribution
                         for ci in range(cg):
-                            value = inputs[(y * conv["input_w"] + x) * conv["input_c"] +
-                                           group * cg + ci]
-                            weight = weights[(group * k + (ky * conv["kernel_w"] + kx) * cg +
-                                              ci) * n + out]
+                            value = inputs[
+                                (y * conv["input_w"] + x) * conv["input_c"] + group * cg + ci
+                            ]
+                            weight = weights[
+                                (group * k + (ky * conv["kernel_w"] + kx) * cg + ci) * n + out
+                            ]
                             acc += (value - iz) * (weight - wz)
             else:
-                acc += sum((inputs[m * g * k + group * k + i] - iz) *
-                           (weights[(group * k + i) * n + out] - wz) for i in range(k))
+                acc += sum(
+                    (inputs[m * g * k + group * k + i] - iz)
+                    * (weights[(group * k + i) * n + out] - wz)
+                    for i in range(k)
+                )
             accumulators.append(acc)
     return accumulators, [requantize(acc) for acc in accumulators]
 
 
 # ------------------------------------------------------------------- running --
+
 
 def run(c: dict, *extra: str) -> tuple[dict, list[dict]]:
     with tempfile.TemporaryDirectory() as directory:
@@ -357,8 +488,9 @@ def run(c: dict, *extra: str) -> tuple[dict, list[dict]]:
 
 
 def rejected(arguments: list[str]) -> str:
-    process = subprocess.run([str(BINARY), *[str(a) for a in arguments]], capture_output=True,
-                             text=True, timeout=30)
+    process = subprocess.run(
+        [str(BINARY), *[str(a) for a in arguments]], capture_output=True, text=True, timeout=30
+    )
     if process.returncode != 2:
         raise AssertionError(f"expected exit 2, got {process.returncode}: {process.stderr}")
     return process.stderr
@@ -370,9 +502,17 @@ class ConvTraffic(unittest.TestCase):
         tiles = tile_list(c)
         offsets = weight_offsets(c)
         blocks = len(depths(c))
-        row_tiles = ceildiv(c["m"], c["tile_m"])
-        totals = dict(read=0, activation=0, bursts=0, beats=0, loads=0, act_hits=0,
-                      act_misses=0, act_saved=0, weight_hits=0)
+        totals = dict(
+            read=0,
+            activation=0,
+            bursts=0,
+            beats=0,
+            loads=0,
+            act_hits=0,
+            act_misses=0,
+            act_saved=0,
+            weight_hits=0,
+        )
         loads = [span for span in spans if span["stage"] == "load"]
         for core in sorted({span["core"] for span in loads}):
             weights, activations = Lru(c["weight_cache"]), Lru(c["activation_cache"])
@@ -396,8 +536,9 @@ class ConvTraffic(unittest.TestCase):
                 if block == 0:
                     runs.append((PARAMS + first_channel(c, tile) * 4, cols * 4))
                 payload = sum(length for _, length in runs)
-                self.assertEqual(span["bytes"], payload,
-                                 f"load of tile {span['tile_id']} block {block}")
+                self.assertEqual(
+                    span["bytes"], payload, f"load of tile {span['tile_id']} block {block}"
+                )
                 totals["read"] += payload
                 totals["loads"] += 1
                 for each in runs:
@@ -456,8 +597,18 @@ class ConvTraffic(unittest.TestCase):
     def test_footprint_counts_halo_once_per_panel(self):
         # One tile over the whole image: a 3x3 stride-1 kernel with one pixel of padding
         # reads every input byte exactly once, against 9x for the im2col matrix.
-        conv = dict(NO_CONV, input_h=6, input_w=7, input_c=5, kernel_h=3, kernel_w=3,
-                    pad_top=1, pad_left=1, pad_bottom=1, pad_right=1)
+        conv = dict(
+            NO_CONV,
+            input_h=6,
+            input_w=7,
+            input_c=5,
+            kernel_h=3,
+            kernel_w=3,
+            pad_top=1,
+            pad_left=1,
+            pad_bottom=1,
+            pad_right=1,
+        )
         c = base_config(m=42, n=4, k=45, conv=conv, tile_m=42, tile_n=4)
         result, _ = run(c)
         self.assertEqual(result["activation_read_bytes"], 6 * 7 * 5)
@@ -465,8 +616,10 @@ class ConvTraffic(unittest.TestCase):
         self.assertEqual(run(plain)[0]["activation_read_bytes"], 42 * 45)
         # Row tiles of one output row read three input rows each (two at the edges).
         result, spans = run(dict(c, tile_m=7))
-        self.assertEqual([s["bytes"] - 4 * 45 - 16 for s in spans if s["stage"] == "load"],
-                         [2 * 7 * 5] + [3 * 7 * 5] * 4 + [2 * 7 * 5])
+        self.assertEqual(
+            [s["bytes"] - 4 * 45 - 16 for s in spans if s["stage"] == "load"],
+            [2 * 7 * 5] + [3 * 7 * 5] * 4 + [2 * 7 * 5],
+        )
         # Panels of whole kernel rows: each block reads its own input rows.
         result, _ = run(dict(c, tile_k=15))
         self.assertEqual(result["activation_read_bytes"], 3 * 6 * 7 * 5 - 2 * 7 * 5)
@@ -478,9 +631,16 @@ class ConvTraffic(unittest.TestCase):
                 c = random_conv_config(rng, depthwise=True)
             else:
                 g = rng.randint(2, 12)
-                c = base_config(m=rng.randint(1, 30), n=1, k=rng.randint(1, 20), groups=g,
-                                tile_m=rng.randint(1, 12), tile_n=rng.randint(1, g + 2),
-                                depthwise=rng.randint(1, 64), seed=rng.randint(1, 10 ** 6))
+                c = base_config(
+                    m=rng.randint(1, 30),
+                    n=1,
+                    k=rng.randint(1, 20),
+                    groups=g,
+                    tile_m=rng.randint(1, 12),
+                    tile_n=rng.randint(1, g + 2),
+                    depthwise=rng.randint(1, 64),
+                    seed=rng.randint(1, 10**6),
+                )
                 c["tile_k"] = rng.choice([0, 0, rng.randint(1, c["k"])])
             c = random_memory(rng, c)
             c["pipeline_cycles"] = rng.randint(0, 5)
@@ -492,19 +652,26 @@ class ConvTraffic(unittest.TestCase):
                         continue
                     _, _, _, rows, cols = tiles[span["tile_id"]]
                     depth = depths(c)[span["block_id"]]
-                    self.assertEqual(span["end_cycle"] - span["start_cycle"],
-                                     ceildiv(rows * cols * depth, c["depthwise"]) +
-                                     c["pipeline_cycles"])
+                    self.assertEqual(
+                        span["end_cycle"] - span["start_cycle"],
+                        ceildiv(rows * cols * depth, c["depthwise"]) + c["pipeline_cycles"],
+                    )
                 macs = c["m"] * c["groups"] * c["k"]
                 cores = c["cores"] if c["memory"] == "axi" else 1
                 self.assertEqual(result["macs"], macs)
                 self.assertEqual(result["depthwise_macs"], macs)
                 self.assertEqual(result["effective_macs_per_cycle"], c["depthwise"] * cores)
                 self.assertEqual(result["depthwise_peak_macs_per_cycle"], c["depthwise"] * cores)
-                self.assertAlmostEqual(result["depthwise_mac_utilization"],
-                                       macs / (c["depthwise"] * cores * result["cycles"]))
-                self.assertEqual(result["compute_busy_cycles"], sum(
-                    s["end_cycle"] - s["start_cycle"] for s in spans if s["stage"] == "compute"))
+                self.assertAlmostEqual(
+                    result["depthwise_mac_utilization"],
+                    macs / (c["depthwise"] * cores * result["cycles"]),
+                )
+                self.assertEqual(
+                    result["compute_busy_cycles"],
+                    sum(
+                        s["end_cycle"] - s["start_cycle"] for s in spans if s["stage"] == "compute"
+                    ),
+                )
                 self.replay(c, result, spans)
                 self.check_numerics(c, result)
         # Rate 0, or N > 1, keeps grouped GEMM tiles on the array.
@@ -534,8 +701,9 @@ class ConvTraffic(unittest.TestCase):
         self.replay(dict(c, activation_cache=47), thrash, spans)
         # The capacity counts in the SRAM budget.
         self.assertEqual(fits["scratchpad_bytes"], plain["scratchpad_bytes"] + 48)
-        stderr = rejected([*flags(dict(c, activation_cache=48)), "--sram-bytes",
-                           plain["scratchpad_bytes"] + 47])
+        stderr = rejected(
+            [*flags(dict(c, activation_cache=48)), "--sram-bytes", plain["scratchpad_bytes"] + 47]
+        )
         self.assertIn("tile buffers exceed configured SRAM capacity", stderr)
 
     def test_timing_only_matches_bit_exact_traffic(self):
@@ -545,32 +713,77 @@ class ConvTraffic(unittest.TestCase):
             with self.subTest(trial=trial):
                 exact, _ = run(c)
                 command = [str(BINARY), *flags(c), "--timing-only"]
-                timed = json.loads(subprocess.run(command, capture_output=True, text=True,
-                                                  timeout=60, check=True).stdout)
+                timed = json.loads(
+                    subprocess.run(
+                        command, capture_output=True, text=True, timeout=60, check=True
+                    ).stdout
+                )
                 for key in ("cycles", "read_bytes", "write_bytes", "activation_read_bytes"):
                     self.assertEqual(timed[key], exact[key], key)
                 self.assertEqual(timed["numerics"], "skipped")
 
     def test_rejections(self):
-        conv = ["--conv-input-h", 8, "--conv-input-w", 8, "--conv-input-c", 4,
-                "--conv-kernel-h", 3, "--conv-kernel-w", 3, "--conv-pad-top", 1,
-                "--conv-pad-left", 1, "--conv-pad-bottom", 1, "--conv-pad-right", 1]
+        conv = [
+            "--conv-input-h",
+            8,
+            "--conv-input-w",
+            8,
+            "--conv-input-c",
+            4,
+            "--conv-kernel-h",
+            3,
+            "--conv-kernel-w",
+            3,
+            "--conv-pad-top",
+            1,
+            "--conv-pad-left",
+            1,
+            "--conv-pad-bottom",
+            1,
+            "--conv-pad-right",
+            1,
+        ]
         good = ["--m", 64, "--n", 2, "--k", 36, *conv]
         rejected_cases = [
-            (["--m", 63, "--n", 2, "--k", 36, *conv],
-             "M must equal output height x width = 8 x 8 = 64, got 63"),
-            (["--m", 64, "--n", 2, "--k", 35, *conv],
-             "K must equal kernel_h x kernel_w x input_c / groups = 36, got 35"),
-            ([*good, "--tile-k", 16],
-             "--tile-k must be 0 or a multiple of kernel_w x input_c / groups = 12"),
+            (
+                ["--m", 63, "--n", 2, "--k", 36, *conv],
+                "M must equal output height x width = 8 x 8 = 64, got 63",
+            ),
+            (
+                ["--m", 64, "--n", 2, "--k", 35, *conv],
+                "K must equal kernel_h x kernel_w x input_c / groups = 36, got 35",
+            ),
+            (
+                [*good, "--tile-k", 16],
+                "--tile-k must be 0 or a multiple of kernel_w x input_c / groups = 12",
+            ),
             ([*good, "--groups", 3], "input channels 4 must be a multiple of groups 3"),
             (["--conv-kernel-h", 3], "need the input extents"),
-            (["--m", 64, "--n", 2, "--k", 36, "--conv-input-h", 8, "--conv-input-w", 8],
-             "input height, width and channels must all be in 1..1048576"),
-            ([*good, "--conv-dilation-h", 9], "kernel height extent 19 exceeds the padded "
-                                              "input 10"),
-            (["--m", 4, "--n", 1, "--k", 9, "--groups", 8, "--depthwise-macs-per-cycle", 8,
-              "--weight-encoding", "palette"], "the depthwise datapath reads dense weights"),
+            (
+                ["--m", 64, "--n", 2, "--k", 36, "--conv-input-h", 8, "--conv-input-w", 8],
+                "input height, width and channels must all be in 1..1048576",
+            ),
+            (
+                [*good, "--conv-dilation-h", 9],
+                "kernel height extent 19 exceeds the padded input 10",
+            ),
+            (
+                [
+                    "--m",
+                    4,
+                    "--n",
+                    1,
+                    "--k",
+                    9,
+                    "--groups",
+                    8,
+                    "--depthwise-macs-per-cycle",
+                    8,
+                    "--weight-encoding",
+                    "palette",
+                ],
+                "the depthwise datapath reads dense weights",
+            ),
         ]
         for arguments, message in rejected_cases:
             with self.subTest(arguments=arguments):
@@ -578,20 +791,33 @@ class ConvTraffic(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             tensors = Path(directory) / "t.npu"
             tensors.write_text("NPU1 64 2 36\n" + "0 " * (64 * 36 + 72 + 2))
-            self.assertIn("--input holds a GEMM operand",
-                          rejected(["--input", str(tensors), *conv]))
+            self.assertIn(
+                "--input holds a GEMM operand", rejected(["--input", str(tensors), *conv])
+            )
         # Accepted: tile_k on whole kernel rows, and the echo reloads.
-        result = json.loads(subprocess.run([str(BINARY), *[str(a) for a in good], "--tile-k", "24"],
-                                           capture_output=True, text=True, check=True,
-                                           timeout=30).stdout)
+        result = json.loads(
+            subprocess.run(
+                [str(BINARY), *[str(a) for a in good], "--tile-k", "24"],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=30,
+            ).stdout
+        )
         self.assertEqual(result["reduction_blocks"], 2)
         self.assertEqual(result["config"]["shape"]["conv"]["kernel_h"], 3)
         with tempfile.TemporaryDirectory() as directory:
             echo = Path(directory) / "echo.json"
             echo.write_text(json.dumps(result["config"]))
-            again = json.loads(subprocess.run([str(BINARY), "--config", str(echo)],
-                                              capture_output=True, text=True, check=True,
-                                              timeout=30).stdout)
+            again = json.loads(
+                subprocess.run(
+                    [str(BINARY), "--config", str(echo)],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=30,
+                ).stdout
+            )
             self.assertEqual(again["cycles"], result["cycles"])
             self.assertEqual(again["output_hash"], result["output_hash"])
 

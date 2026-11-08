@@ -7,27 +7,47 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from pathlib import Path
 import queue
 import subprocess
 import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 
 BINARY: Path
-WORKLOAD = ["--m", "4", "--n", "5", "--k", "7", "--tile-m", "2",
-            "--tile-n", "3", "--tile-k", "3", "--buffer-slots", "2"]
+WORKLOAD = [
+    "--m",
+    "4",
+    "--n",
+    "5",
+    "--k",
+    "7",
+    "--tile-m",
+    "2",
+    "--tile-n",
+    "3",
+    "--tile-k",
+    "3",
+    "--buffer-slots",
+    "2",
+]
 
 
 class LiveChild:
     """npu-sim --live-stdio child with timed reads; a reader thread makes the timeout work on
     Windows anonymous pipes."""
+
     def __init__(self, arguments: list[str]):
-        self.error_file = tempfile.TemporaryFile(mode="w+t")
-        self.process = subprocess.Popen([str(BINARY), *WORKLOAD, *arguments, "--live-stdio"],
-                                        stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                                        stderr=self.error_file, text=True, bufsize=1)
+        self.error_file = tempfile.TemporaryFile(mode="w+t")  # noqa: SIM115
+        self.process = subprocess.Popen(
+            [str(BINARY), *WORKLOAD, *arguments, "--live-stdio"],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=self.error_file,
+            text=True,
+            bufsize=1,
+        )
         self.responses: queue.Queue[str | None] = queue.Queue()
 
         def read_lines() -> None:
@@ -48,7 +68,9 @@ class LiveChild:
         try:
             line = self.responses.get(timeout=5)
         except queue.Empty as error:
-            raise AssertionError(f"live process did not respond within 5 seconds: {self.errors()}") from error
+            raise AssertionError(
+                f"live process did not respond within 5 seconds: {self.errors()}"
+            ) from error
         if line is None:
             raise AssertionError(f"live process exited before a response: {self.errors()}")
         value = json.loads(line)
@@ -62,7 +84,7 @@ class LiveChild:
         self.process.stdin.flush()
         return self.read()
 
-    def __enter__(self) -> "LiveChild":
+    def __enter__(self) -> LiveChild:
         return self
 
     def __exit__(self, *_) -> None:
@@ -96,15 +118,23 @@ class LiveProtocolChecks(unittest.TestCase):
             combinations.append(["--vcd", destination, "--progress-jsonl", alias])
             for arguments in combinations:
                 with self.subTest(arguments=arguments):
-                    run = subprocess.run([str(BINARY), *map(str, arguments)],
-                                         text=True, capture_output=True, timeout=10)
+                    run = subprocess.run(
+                        [str(BINARY), *map(str, arguments)],
+                        text=True,
+                        capture_output=True,
+                        timeout=10,
+                    )
                     self.assertNotEqual(run.returncode, 0)
                     self.assertIn("conflict", run.stderr)
                     self.assertEqual(destination.read_text(), "existing contents\n")
 
     def batch(self, arguments: list[str] | None = None) -> dict:
-        process = subprocess.run([str(BINARY), *WORKLOAD, "--dump-output", *(arguments or [])],
-                                 capture_output=True, text=True, timeout=30)
+        process = subprocess.run(
+            [str(BINARY), *WORKLOAD, "--dump-output", *(arguments or [])],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
         self.assertEqual(process.returncode, 0, process.stderr)
         return json.loads(process.stdout)
 
@@ -120,8 +150,14 @@ class LiveProtocolChecks(unittest.TestCase):
         self.assertEqual(current["loaded_panels"], current["panels_total"])
         self.assertEqual(current["inflight_tiles"], 0)
         self.assertEqual(current["active_stages"], [])
-        for name in ("cycles", "macs", "read_bytes", "write_bytes",
-                     "compute_busy_cycles", "dma_busy_cycles"):
+        for name in (
+            "cycles",
+            "macs",
+            "read_bytes",
+            "write_bytes",
+            "compute_busy_cycles",
+            "dma_busy_cycles",
+        ):
             self.assertEqual(current[name], batch[name], name)
 
     def test_pause_step_and_completion_follow_the_kernel(self):
@@ -135,8 +171,11 @@ class LiveProtocolChecks(unittest.TestCase):
             self.assertIsNone(initial["output_hash"])
             self.assertEqual(initial["output_preview"], [])
             time.sleep(0.08)
-            self.assertEqual(child.command("snapshot"), initial,
-                             "host waiting must not advance the SystemC kernel")
+            self.assertEqual(
+                child.command("snapshot"),
+                initial,
+                "host waiting must not advance the SystemC kernel",
+            )
             current = child.command("advance 1")
             self.assertEqual(current["cycles"], 1)
             self.assertFalse(current["completed"])
@@ -150,14 +189,24 @@ class LiveProtocolChecks(unittest.TestCase):
                 self.assertLess(time.monotonic(), deadline, "live run did not complete in 15 s")
                 current = child.command("advance 3")
                 self.assertGreaterEqual(current["cycles"], previous["cycles"])
-                for name in ("macs", "read_bytes", "write_bytes", "tiles_completed",
-                             "loaded_panels", "panels_completed", "compute_busy_cycles", "dma_busy_cycles"):
+                for name in (
+                    "macs",
+                    "read_bytes",
+                    "write_bytes",
+                    "tiles_completed",
+                    "loaded_panels",
+                    "panels_completed",
+                    "compute_busy_cycles",
+                    "dma_busy_cycles",
+                ):
                     self.assertGreaterEqual(current[name], previous[name], name)
                 self.assertLessEqual(current["inflight_tiles"], 2)
                 # A loaded panel holds one of its slot's two panel buffers
                 # until compute finishes it.
-                self.assertLessEqual(current["loaded_panels"] - current["panels_completed"],
-                                     2 * current["inflight_tiles"])
+                self.assertLessEqual(
+                    current["loaded_panels"] - current["panels_completed"],
+                    2 * current["inflight_tiles"],
+                )
                 seen_dma |= current["dma_busy"]
                 seen_compute |= current["compute_busy"]
                 if not current["completed"]:
@@ -166,8 +215,9 @@ class LiveProtocolChecks(unittest.TestCase):
             self.assertTrue(seen_dma)
             self.assertTrue(seen_compute)
             self.assert_final(current, batch)
-            self.assertEqual(child.command("advance 100"), current,
-                             "a completed model must not keep advancing")
+            self.assertEqual(
+                child.command("advance 100"), current, "a completed model must not keep advancing"
+            )
             stopped = child.command("stop")
             self.assertEqual(stopped, dict(current, type="stopped"))
             self.assertEqual(child.process.wait(timeout=3), 0, child.errors())
@@ -185,8 +235,10 @@ class LiveProtocolChecks(unittest.TestCase):
             while not current["completed"]:
                 self.assertLess(time.monotonic(), deadline, "live run did not complete in 15 s")
                 current = child.command("advance 5")
-                self.assertLessEqual(current["loaded_panels"] - current["panels_completed"],
-                                     current["inflight_tiles"])
+                self.assertLessEqual(
+                    current["loaded_panels"] - current["panels_completed"],
+                    current["inflight_tiles"],
+                )
             self.assert_final(current, single)
             self.assertEqual(child.command("stop")["type"], "stopped")
             self.assertEqual(child.process.wait(timeout=3), 0, child.errors())
@@ -194,9 +246,20 @@ class LiveProtocolChecks(unittest.TestCase):
     def test_invalid_commands_do_not_advance_or_terminate(self):
         with LiveChild([]) as child:
             initial = child.read()
-            for command in ("", "nonsense", "snapshot extra", "stop extra", "advance",
-                            "advance 0", "advance -1", "advance 10000001", "advance 1x",
-                            "advance 1 trailing", "x" * 257, "x" * 256):
+            for command in (
+                "",
+                "nonsense",
+                "snapshot extra",
+                "stop extra",
+                "advance",
+                "advance 0",
+                "advance -1",
+                "advance 10000001",
+                "advance 1x",
+                "advance 1 trailing",
+                "x" * 257,
+                "x" * 256,
+            ):
                 with self.subTest(command=command[:40]):
                     response = child.command(command)
                     self.assertEqual(response["type"], "error")
@@ -217,16 +280,18 @@ class LiveProtocolChecks(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
             progress, waveform = path / "progress.jsonl", path / "npu.vcd"
-            automatic = self.batch(["--progress-jsonl", str(progress), "--slice-cycles", "7",
-                                    "--vcd", str(waveform)])
+            automatic = self.batch(
+                ["--progress-jsonl", str(progress), "--slice-cycles", "7", "--vcd", str(waveform)]
+            )
             for key in baseline:
                 if key != "simulation_wall_seconds":
                     self.assertEqual(automatic[key], baseline[key], key)
             snapshots = [json.loads(line) for line in progress.read_text().splitlines()]
             self.assertGreater(len(snapshots), 2)
             self.assertEqual(snapshots[0]["cycles"], 0)
-            self.assertEqual([s["cycles"] for s in snapshots],
-                             sorted(s["cycles"] for s in snapshots))
+            self.assertEqual(
+                [s["cycles"] for s in snapshots], sorted(s["cycles"] for s in snapshots)
+            )
             self.assertTrue(all(s["type"] == "snapshot" for s in snapshots))
             self.assertTrue(all(s["numerical_match"] is None for s in snapshots[:-1]))
             self.assert_final(snapshots[-1], baseline)
@@ -243,16 +308,23 @@ class LiveProtocolChecks(unittest.TestCase):
                 self.assert_final(current, baseline)
                 stopped = child.command("stop")
                 self.assertEqual(child.process.wait(timeout=3), 0, child.errors())
-            self.assertEqual([json.loads(line) for line in progress.read_text().splitlines()],
-                             [initial, current, stopped])
+            self.assertEqual(
+                [json.loads(line) for line in progress.read_text().splitlines()],
+                [initial, current, stopped],
+            )
             self.assertIn("$enddefinitions", waveform.read_text())
 
     def test_invalid_slice_and_waveform_arguments_fail(self):
-        for arguments in (["--slice-cycles", "0"], ["--slice-cycles", "10000001"],
-                          ["--vcd", "incorrect-extension.txt"], ["--vcd", ""]):
+        for arguments in (
+            ["--slice-cycles", "0"],
+            ["--slice-cycles", "10000001"],
+            ["--vcd", "incorrect-extension.txt"],
+            ["--vcd", ""],
+        ):
             with self.subTest(arguments=arguments):
-                process = subprocess.run([str(BINARY), *arguments], capture_output=True,
-                                         text=True, timeout=30)
+                process = subprocess.run(
+                    [str(BINARY), *arguments], capture_output=True, text=True, timeout=30
+                )
                 self.assertNotEqual(process.returncode, 0)
                 self.assertNotIn('"numerical_match":true', process.stdout)
 

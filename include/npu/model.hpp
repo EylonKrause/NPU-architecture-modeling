@@ -2,11 +2,11 @@
 
 #include "npu/core.hpp"
 #include "npu/memory.hpp"
-#include <systemc>
 #include <array>
 #include <memory>
 #include <ostream>
 #include <string>
+#include <systemc>
 #include <vector>
 
 namespace npu {
@@ -75,8 +75,7 @@ class Core;
 // transfer is in flight releases it with the module.
 class Accelerator final : public sc_core::sc_module {
 public:
-    Accelerator(sc_core::sc_module_name name, const Config& config,
-                const Problem& problem);
+    Accelerator(sc_core::sc_module_name name, const Config& config, const Problem& problem);
     ~Accelerator() override;
     const Output& output() const { return output_; }
     const ClusterPlan& plan() const { return plan_; }

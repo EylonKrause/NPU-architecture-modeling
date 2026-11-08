@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
 """npuperf.graph_optimize ReLU fusion: fused graphs reproduce the unfused npu-sim outputs with
 no host traffic, and rewrites that would change an observable tensor are refused."""
+
 import argparse
-from copy import deepcopy
 import json
-from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import unittest
+from copy import deepcopy
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from npuperf.graph_optimize import optimize_graph, verify_graphs
+from npuperf.graph_optimize import optimize_graph, verify_graphs  # noqa: E402
 
 BINARY = ROOT / "build/npu-sim"
 
@@ -23,11 +24,27 @@ def fixture(op="Dense", zero=-3, rounding="away"):
     if op in ("Conv2D", "DepthwiseConv2D"):
         a["shape"] = [1, 1, 2, 2]
         w["shape"] = [1, 1, 2, 2]
-    return {"schema_version": 1, "tensors": {"x": a, "w": w},
-            "nodes": [{"name": "project", "op": op, "inputs": ["x", "w"], "output": "pre",
-                       "quant": {"multiplier": 1, "shift": 1, "output_scale": 2, "output_zero": zero,
-                                 "rounding": rounding}},
-                      {"name": "clamp", "op": "ReLU", "inputs": ["pre"], "output": "y"}], "outputs": ["y"]}
+    return {
+        "schema_version": 1,
+        "tensors": {"x": a, "w": w},
+        "nodes": [
+            {
+                "name": "project",
+                "op": op,
+                "inputs": ["x", "w"],
+                "output": "pre",
+                "quant": {
+                    "multiplier": 1,
+                    "shift": 1,
+                    "output_scale": 2,
+                    "output_zero": zero,
+                    "rounding": rounding,
+                },
+            },
+            {"name": "clamp", "op": "ReLU", "inputs": ["pre"], "output": "y"},
+        ],
+        "outputs": ["y"],
+    }
 
 
 class OptimizerTests(unittest.TestCase):
@@ -49,12 +66,18 @@ class OptimizerTests(unittest.TestCase):
                     self.assertEqual(result["compiled"]["cpu_fallback_nodes"], [])
                     # The output stage applies ReLU as a clamp at no cycle cost
                     # (src/core.cpp), so fusion leaves NPU cycles and writes unchanged.
-                    self.assertEqual(result["original"]["npu_cycles"], result["compiled"]["npu_cycles"])
-                    self.assertEqual(result["original"]["npu_write_bytes"], result["compiled"]["npu_write_bytes"])
+                    self.assertEqual(
+                        result["original"]["npu_cycles"], result["compiled"]["npu_cycles"]
+                    )
+                    self.assertEqual(
+                        result["original"]["npu_write_bytes"], result["compiled"]["npu_write_bytes"]
+                    )
 
     def test_shared_intermediate_is_preserved(self):
         graph = fixture()
-        graph["nodes"].append({"name": "skip", "op": "Add", "inputs": ["pre", "pre"], "output": "z"})
+        graph["nodes"].append(
+            {"name": "skip", "op": "Add", "inputs": ["pre", "pre"], "output": "z"}
+        )
         compiled, report = optimize_graph(graph)
         self.assertEqual(report["fused_nodes"], 0)
         self.assertEqual(compiled, graph)
@@ -94,8 +117,16 @@ class OptimizerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             source, output = Path(temp) / "source.json", Path(temp) / "compiled.json"
             source.write_text(json.dumps(fixture()), encoding="utf-8")
-            command = [sys.executable, str(ROOT / "scripts/graph_optimize.py"), str(source),
-                       "--binary", str(BINARY), "--verify", "--output", str(output)]
+            command = [
+                sys.executable,
+                str(ROOT / "scripts/graph_optimize.py"),
+                str(source),
+                "--binary",
+                str(BINARY),
+                "--verify",
+                "--output",
+                str(output),
+            ]
             run = subprocess.run(command, capture_output=True, text=True, timeout=30)
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertTrue(json.loads(run.stdout)["verification"]["outputs_match"])

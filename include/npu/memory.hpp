@@ -1,11 +1,11 @@
 #pragma once
 
 #include "npu/core.hpp"
-#include <systemc>
 #include <cstdint>
 #include <deque>
 #include <functional>
 #include <memory>
+#include <systemc>
 #include <vector>
 
 namespace npu {

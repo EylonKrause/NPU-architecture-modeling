@@ -3,6 +3,7 @@
 
 Entry point for npuperf.onnx_import (also: python -m npuperf.onnx_import).
 """
+
 import sys
 from pathlib import Path
 

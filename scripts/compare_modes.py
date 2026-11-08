@@ -4,6 +4,7 @@ run times.
 
 Entry point for npuperf.compare_modes (also: python -m npuperf.compare_modes).
 """
+
 import sys
 from pathlib import Path
 

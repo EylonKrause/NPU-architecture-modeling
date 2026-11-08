@@ -69,8 +69,8 @@ public:
         view.tile_id = tile_id_;
         view.block_id = block_id_;
         view.reading = read_;
-        view.busy_cycles = busy_ ? checked_add(busy_cycles_, std::min(now() - start_, duration_)) :
-                                   busy_cycles_;
+        view.busy_cycles =
+            busy_ ? checked_add(busy_cycles_, std::min(now() - start_, duration_)) : busy_cycles_;
         return view;
     }
 
@@ -137,8 +137,11 @@ class AxiMemory final : public sc_core::sc_module, public MemoryPort {
 public:
     AxiMemory(sc_core::sc_module_name name, const Config& config, MemoryListener changed,
               std::uint64_t ports)
-        : sc_module(name), config_(config), changed_(std::move(changed)),
-          ports_(static_cast<std::size_t>(ports)), issue_at_(2 * ports_.size(), none) {
+        : sc_module(name),
+          config_(config),
+          changed_(std::move(changed)),
+          ports_(static_cast<std::size_t>(ports)),
+          issue_at_(2 * ports_.size(), none) {
         const auto& axi = config.arch.memory.axi;
         for (auto& port : ports_) {
             port.read.limit = axi.read_outstanding;
@@ -187,9 +190,9 @@ public:
         const auto channel_view = [time](const Channel& channel) {
             ChannelView result;
             result.active = channel.active != 0;
-            result.outstanding = static_cast<std::uint64_t>(std::count_if(
-                channel.recent.begin(), channel.recent.end(),
-                [time](std::uint64_t completion) { return completion > time; }));
+            result.outstanding = static_cast<std::uint64_t>(
+                std::count_if(channel.recent.begin(), channel.recent.end(),
+                              [time](std::uint64_t completion) { return completion > time; }));
             result.queued = static_cast<std::uint64_t>(channel.queue.size()) -
                             static_cast<std::uint64_t>(channel.started);
             result.statistics = channel.stats;
@@ -201,8 +204,8 @@ public:
         const auto& shown = view.reading ? port.read : port.write;
         view.tile_id = shown.tile_id;
         view.block_id = shown.block_id;
-        view.busy_cycles = port.active ? checked_add(port.busy_cycles, time - port.busy_since) :
-                                         port.busy_cycles;
+        view.busy_cycles =
+            port.active ? checked_add(port.busy_cycles, time - port.busy_since) : port.busy_cycles;
         view.dram_bytes = checked_mul(checked_add(port.read.stats.beats, port.write.stats.beats),
                                       config_.arch.memory.axi.data_bytes);
         return view;
@@ -331,9 +334,9 @@ private:
         channel.recent.push_back(completion);
         channel.last_issue = time;
         channel.issued = channel.started = true;
-        const auto outstanding = static_cast<std::uint64_t>(std::count_if(
-            channel.recent.begin(), channel.recent.end(),
-            [time](std::uint64_t done) { return done > time; }));
+        const auto outstanding = static_cast<std::uint64_t>(
+            std::count_if(channel.recent.begin(), channel.recent.end(),
+                          [time](std::uint64_t done) { return done > time; }));
         channel.stats.peak_outstanding = std::max(channel.stats.peak_outstanding, outstanding);
         ++request.bursts;
         request.beats = checked_add(request.beats, burst.beats);
@@ -392,8 +395,7 @@ MemoryView combine(const std::vector<MemoryView>& ports) {
 
 std::unique_ptr<MemoryPort> make_memory(const Config& config, MemoryListener changed) {
     if (config.arch.memory.model == MemoryModel::Axi)
-        return std::make_unique<AxiMemory>("memory", config, std::move(changed),
-                                           config.arch.cores);
+        return std::make_unique<AxiMemory>("memory", config, std::move(changed), config.arch.cores);
     if (config.arch.cores != 1) throw std::invalid_argument("the serial DMA has one port");
     return std::make_unique<SerialDma>("memory", config, std::move(changed));
 }

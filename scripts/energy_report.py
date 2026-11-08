@@ -3,6 +3,7 @@
 
 Entry point for npuperf.energy (also: python -m npuperf.energy).
 """
+
 import sys
 from pathlib import Path
 

@@ -1,4 +1,5 @@
 """Strict JSON input and deterministic JSON output."""
+
 from __future__ import annotations
 
 import csv
@@ -35,8 +36,12 @@ def _finite_float(text: str) -> float:
 def loads_strict(text: str) -> Any:
     """Parse JSON, rejecting duplicate keys, NaN/Infinity and numbers that overflow a double."""
     try:
-        return json.loads(text, object_pairs_hook=_unique_object,
-                          parse_constant=_reject_constant, parse_float=_finite_float)
+        return json.loads(
+            text,
+            object_pairs_hook=_unique_object,
+            parse_constant=_reject_constant,
+            parse_float=_finite_float,
+        )
     except json.JSONDecodeError as error:
         raise ValueError(f"invalid JSON: {error}") from error
 
@@ -67,8 +72,9 @@ def write_json(path: Path | str, value: Any, overwrite: bool = True) -> Path:
     return write_text(path, dumps(value), overwrite)
 
 
-def write_report(directory: Path | str, name: str, report: Any,
-                 rows: Sequence[Mapping[str, Any]]) -> tuple[Path, Path]:
+def write_report(
+    directory: Path | str, name: str, report: Any, rows: Sequence[Mapping[str, Any]]
+) -> tuple[Path, Path]:
     """Write ``<directory>/<name>.json`` and ``<name>.csv``, replacing earlier runs."""
     if not rows:
         raise ValueError("no report rows")
@@ -77,5 +83,7 @@ def write_report(directory: Path | str, name: str, report: Any,
     writer = csv.DictWriter(stream, fieldnames=list(rows[0]), lineterminator="\n")
     writer.writeheader()
     writer.writerows(rows)
-    return (write_json(directory / (name + ".json"), report),
-            write_text(directory / (name + ".csv"), stream.getvalue()))
+    return (
+        write_json(directory / (name + ".json"), report),
+        write_text(directory / (name + ".csv"), stream.getvalue()),
+    )

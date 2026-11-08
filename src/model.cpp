@@ -18,8 +18,8 @@ std::uint64_t now() { return sc_core::sc_time_stamp().value(); }
 void merge_memory(Statistics& stats, const MemoryView& memory) {
     stats.read_bytes = memory.read.statistics.payload_bytes;
     stats.write_bytes = memory.write.statistics.payload_bytes;
-    stats.dma_requests = checked_add(memory.read.statistics.requests,
-                                     memory.write.statistics.requests);
+    stats.dma_requests =
+        checked_add(memory.read.statistics.requests, memory.write.statistics.requests);
     stats.dma_bursts = checked_add(memory.read.statistics.bursts, memory.write.statistics.bursts);
     stats.dma_busy_cycles = memory.busy_cycles;
 }
@@ -35,34 +35,34 @@ Statistics sum_statistics(const std::vector<Statistics>& cores) {
             std::max(total.peak_cached_weight_bytes, s.peak_cached_weight_bytes);
         total.peak_cached_activation_bytes =
             std::max(total.peak_cached_activation_bytes, s.peak_cached_activation_bytes);
-        for (auto [sum, value] : {
-                 std::pair{&total.macs, s.macs},
-                 std::pair{&total.read_bytes, s.read_bytes},
-                 std::pair{&total.write_bytes, s.write_bytes},
-                 std::pair{&total.compute_busy_cycles, s.compute_busy_cycles},
-                 std::pair{&total.dma_busy_cycles, s.dma_busy_cycles},
-                 std::pair{&total.slot_wait_cycles, s.slot_wait_cycles},
-                 std::pair{&total.panel_wait_cycles, s.panel_wait_cycles},
-                 std::pair{&total.dma_requests, s.dma_requests},
-                 std::pair{&total.dma_bursts, s.dma_bursts},
-                 std::pair{&total.weight_cache_hits, s.weight_cache_hits},
-                 std::pair{&total.weight_cache_misses, s.weight_cache_misses},
-                 std::pair{&total.weight_bytes_saved, s.weight_bytes_saved},
-                 std::pair{&total.loaded_panels, s.loaded_panels},
-                 std::pair{&total.computed_panels, s.computed_panels},
-                 std::pair{&total.completed_tiles, s.completed_tiles},
-                 std::pair{&total.executed_macs, s.executed_macs},
-                 std::pair{&total.skipped_macs, s.skipped_macs},
-                 std::pair{&total.weight_decode_cycles, s.weight_decode_cycles},
-                 std::pair{&total.decoded_weight_values, s.decoded_weight_values},
-                 std::pair{&total.weight_read_bytes, s.weight_read_bytes},
-                 std::pair{&total.encoded_weight_storage_bytes, s.encoded_weight_storage_bytes},
-                 std::pair{&total.dense_weight_storage_bytes, s.dense_weight_storage_bytes},
-                 std::pair{&total.activation_cache_hits, s.activation_cache_hits},
-                 std::pair{&total.activation_cache_misses, s.activation_cache_misses},
-                 std::pair{&total.activation_bytes_saved, s.activation_bytes_saved},
-                 std::pair{&total.activation_read_bytes, s.activation_read_bytes},
-                 std::pair{&total.depthwise_macs, s.depthwise_macs}})
+        for (auto [sum, value] :
+             {std::pair{&total.macs, s.macs},
+              std::pair{&total.read_bytes, s.read_bytes},
+              std::pair{&total.write_bytes, s.write_bytes},
+              std::pair{&total.compute_busy_cycles, s.compute_busy_cycles},
+              std::pair{&total.dma_busy_cycles, s.dma_busy_cycles},
+              std::pair{&total.slot_wait_cycles, s.slot_wait_cycles},
+              std::pair{&total.panel_wait_cycles, s.panel_wait_cycles},
+              std::pair{&total.dma_requests, s.dma_requests},
+              std::pair{&total.dma_bursts, s.dma_bursts},
+              std::pair{&total.weight_cache_hits, s.weight_cache_hits},
+              std::pair{&total.weight_cache_misses, s.weight_cache_misses},
+              std::pair{&total.weight_bytes_saved, s.weight_bytes_saved},
+              std::pair{&total.loaded_panels, s.loaded_panels},
+              std::pair{&total.computed_panels, s.computed_panels},
+              std::pair{&total.completed_tiles, s.completed_tiles},
+              std::pair{&total.executed_macs, s.executed_macs},
+              std::pair{&total.skipped_macs, s.skipped_macs},
+              std::pair{&total.weight_decode_cycles, s.weight_decode_cycles},
+              std::pair{&total.decoded_weight_values, s.decoded_weight_values},
+              std::pair{&total.weight_read_bytes, s.weight_read_bytes},
+              std::pair{&total.encoded_weight_storage_bytes, s.encoded_weight_storage_bytes},
+              std::pair{&total.dense_weight_storage_bytes, s.dense_weight_storage_bytes},
+              std::pair{&total.activation_cache_hits, s.activation_cache_hits},
+              std::pair{&total.activation_cache_misses, s.activation_cache_misses},
+              std::pair{&total.activation_bytes_saved, s.activation_bytes_saved},
+              std::pair{&total.activation_read_bytes, s.activation_read_bytes},
+              std::pair{&total.depthwise_macs, s.depthwise_macs}})
             *sum = checked_add(*sum, value);
     }
     return total;
@@ -156,8 +156,8 @@ class Core final : public sc_core::sc_module {
 public:
     Core(sc_core::sc_module_name name, std::uint64_t index, const Config& config,
          const Problem& problem, const std::vector<EncodedWeightPanel>& encoded_weights,
-         const std::vector<std::uint64_t>& weight_offsets, std::vector<Tile> tiles,
-         Output& output, sc_core::sc_event& state_changed);
+         const std::vector<std::uint64_t>& weight_offsets, std::vector<Tile> tiles, Output& output,
+         sc_core::sc_event& state_changed);
 
     void attach(MemoryPort& memory) { memory_ = &memory; }
     std::uint64_t tiles() const { return static_cast<std::uint64_t>(tiles_.size()); }
@@ -239,9 +239,15 @@ Core::Core(sc_core::sc_module_name name, std::uint64_t index, const Config& conf
            const Problem& problem, const std::vector<EncodedWeightPanel>& encoded_weights,
            const std::vector<std::uint64_t>& weight_offsets, std::vector<Tile> tiles,
            Output& output, sc_core::sc_event& state_changed)
-    : sc_module(name), index_(index), config_(config), problem_(problem),
-      encoded_weights_(encoded_weights), weight_offsets_(weight_offsets),
-      tiles_(std::move(tiles)), output_(output), changed_(state_changed),
+    : sc_module(name),
+      index_(index),
+      config_(config),
+      problem_(problem),
+      encoded_weights_(encoded_weights),
+      weight_offsets_(weight_offsets),
+      tiles_(std::move(tiles)),
+      output_(output),
+      changed_(state_changed),
       record_spans_(!config.sim.trace_path.empty()),
       panel_buffers_(slot_panel_buffers(config)),
       free_slots_("free_slots", static_cast<int>(config.mapping.buffer_slots)),
@@ -298,8 +304,9 @@ PipelineView Core::view(const MemoryView& memory) const {
     view.compute_block_id = compute_block_id_;
     view.statistics = statistics(memory);
     view.statistics.cycles = view.cycles;
-    if (compute_busy_) view.statistics.compute_busy_cycles = checked_add(
-        stats_.compute_busy_cycles, std::min(now() - compute_start_, compute_duration_));
+    if (compute_busy_)
+        view.statistics.compute_busy_cycles = checked_add(
+            stats_.compute_busy_cycles, std::min(now() - compute_start_, compute_duration_));
     return view;
 }
 
@@ -313,8 +320,8 @@ void Core::observe(const MemoryView& memory) {
     const auto view = this->view(memory);
     if (view.inflight_tiles > config_.mapping.buffer_slots ||
         view.loaded_tiles > config_.mapping.buffer_slots * panel_buffers_ ||
-        view.computed_tiles > config_.mapping.buffer_slots ||
-        weight_cache_.overfull() || activation_cache_.overfull() ||
+        view.computed_tiles > config_.mapping.buffer_slots || weight_cache_.overfull() ||
+        activation_cache_.overfull() ||
         ((view.dma_busy || view.compute_busy) && view.inflight_tiles == 0) ||
         (view.completed && (view.inflight_tiles != 0 || view.dma_busy || view.compute_busy ||
                             view.read_queue_depth != 0 || view.write_queue_depth != 0))) {
@@ -379,8 +386,7 @@ void Core::trace_signals(sc_core::sc_trace_file* file, const std::string& prefix
 
 void Core::advance(std::uint64_t cycles) {
     if (config_.sim.timing == TimingMode::Cycle) {
-        for (std::uint64_t i = 0; i < cycles; ++i)
-            wait(sc_core::sc_time::from_value(1));
+        for (std::uint64_t i = 0; i < cycles; ++i) wait(sc_core::sc_time::from_value(1));
     } else {
         wait(sc_core::sc_time::from_value(cycles));
     }
@@ -405,7 +411,8 @@ void Core::transfer(const Tile& tile, bool read, std::uint64_t block) {
         const auto weight_key = checked_add(checked_mul(channel, reduction_blocks(config_)), block);
         if (!weight_cache_.lookup(weight_key, encoded_bytes)) weight_bytes = encoded_bytes;
         const auto activations = activation_panel_bytes(config_, tile, block);
-        const bool reused = config_.arch.activation_cache_bytes &&
+        const bool reused =
+            config_.arch.activation_cache_bytes &&
             activation_cache_.lookup(activation_cache_key(config_, tile, block), activations);
         if (!reused) activation_bytes = activations;
         panel_read_runs(config_, tile, block, offset, weight_bytes, request.runs, !reused);
@@ -462,10 +469,12 @@ void Core::compute() {
         loaded_.read(job);
         const auto block = job % blocks;
         const auto& tile = tiles_.at(static_cast<std::size_t>(job / blocks));
-        const auto* encoded = config_.weights.encoding == WeightEncoding::Dense ? nullptr :
-            &weight_panel(config_, encoded_weights_, tile, block);
-        const auto duration = encoded ? encoded_panel_compute_cycles(config_, tile, block, *encoded) :
-            panel_compute_cycles(config_, tile, block);
+        const auto* encoded = config_.weights.encoding == WeightEncoding::Dense ?
+                                  nullptr :
+                                  &weight_panel(config_, encoded_weights_, tile, block);
+        const auto duration = encoded ?
+                                  encoded_panel_compute_cycles(config_, tile, block, *encoded) :
+                                  panel_compute_cycles(config_, tile, block);
         const auto start = now();
         compute_start_ = start;
         compute_duration_ = duration;
@@ -483,16 +492,20 @@ void Core::compute() {
         }
         advance(duration);
         stats_.compute_busy_cycles = checked_add(stats_.compute_busy_cycles, duration);
-        const auto logical_macs = checked_mul(checked_mul(tile.rows, tile.cols), panel_k(config_, block));
+        const auto logical_macs =
+            checked_mul(checked_mul(tile.rows, tile.cols), panel_k(config_, block));
         const auto executed_macs = config_.weights.encoding == WeightEncoding::Sparse ?
-            checked_mul(tile.rows, encoded->nonzero_values) : logical_macs;
+                                       checked_mul(tile.rows, encoded->nonzero_values) :
+                                       logical_macs;
         stats_.macs = checked_add(stats_.macs, logical_macs);
         stats_.executed_macs = checked_add(stats_.executed_macs, executed_macs);
         stats_.skipped_macs = checked_add(stats_.skipped_macs, logical_macs - executed_macs);
         if (depthwise) stats_.depthwise_macs = checked_add(stats_.depthwise_macs, logical_macs);
         if (encoded) {
-            stats_.weight_decode_cycles = checked_add(stats_.weight_decode_cycles, encoded->decode_cycles);
-            stats_.decoded_weight_values = checked_add(stats_.decoded_weight_values, encoded->retained_values);
+            stats_.weight_decode_cycles =
+                checked_add(stats_.weight_decode_cycles, encoded->decode_cycles);
+            stats_.decoded_weight_values =
+                checked_add(stats_.decoded_weight_values, encoded->retained_values);
         }
         ++stats_.computed_panels;
         compute_busy_ = false;
@@ -522,38 +535,39 @@ void Core::store() {
     // process has finished or blocks with no pending event.
 }
 
-Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
-                         const Problem& problem)
+Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config, const Problem& problem)
     : sc_module(name),
       encoded_weights_(config.sim.timing_only ? std::vector<EncodedWeightPanel>{} :
-                       encode_weights(config, problem)) {
+                                                encode_weights(config, problem)) {
     validate(config);
     weight_offsets_.reserve(encoded_weights_.size());
     for (const auto& panel : encoded_weights_) {
         // Packed back to back in load order, as encode_weights lists them.
         weight_offsets_.push_back(encoded_storage_bytes_);
         encoded_storage_bytes_ = checked_add(encoded_storage_bytes_, panel.buffer.size());
-        dense_storage_bytes_ = checked_add(dense_storage_bytes_,
-            packed_weight_bytes(config, panel.k, panel.cols));
+        dense_storage_bytes_ =
+            checked_add(dense_storage_bytes_, packed_weight_bytes(config, panel.k, panel.cols));
     }
     const auto column_panels = ceil_div(grid_columns(config), config.mapping.tile_n);
     const bool dense = config.weights.encoding == WeightEncoding::Dense;
     // Both splits are predicted from the panels the loader reads and the
     // array computes.
-    const auto column_costs = dense ? dense_column_costs(config) :
-                                      encoded_column_costs(config, encoded_weights_);
+    const auto column_costs =
+        dense ? dense_column_costs(config) : encoded_column_costs(config, encoded_weights_);
     if (dense) {
         // Every group of the grid stores the same column panels.
         for (std::uint64_t col = 0; col < column_panels; ++col) {
             const auto column = column_costs(0, col);
-            dense_storage_bytes_ = checked_add(dense_storage_bytes_, checked_mul(
-                grid_groups(config), checked_add(column.cacheable, column.uncacheable)));
+            dense_storage_bytes_ =
+                checked_add(dense_storage_bytes_,
+                            checked_mul(grid_groups(config),
+                                        checked_add(column.cacheable, column.uncacheable)));
         }
         encoded_storage_bytes_ = dense_storage_bytes_;
     }
     if (!config.sim.timing_only) {
-        const auto size = static_cast<std::size_t>(checked_mul(config.shape.m,
-            checked_mul(config.shape.groups, config.shape.n)));
+        const auto size = static_cast<std::size_t>(
+            checked_mul(config.shape.m, checked_mul(config.shape.groups, config.shape.n)));
         output_.accumulators.resize(size);
         output_.quantized.resize(size);
     }
@@ -562,8 +576,9 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
     const auto by_columns = cluster_plan(config, Partition::N);
     estimates_[1] = estimate_cluster(config, by_columns, column_costs);
     // With whole groups per core both splits are the same.
-    estimates_[0] = by_rows.split == ClusterSplit::Groups ? estimates_[1] :
-                    estimate_cluster(config, by_rows, column_costs);
+    estimates_[0] = by_rows.split == ClusterSplit::Groups ?
+                        estimates_[1] :
+                        estimate_cluster(config, by_rows, column_costs);
     auto partition = config.mapping.partition;
     if (partition == Partition::Auto) partition = auto_partition(estimates_[0], estimates_[1]);
     plan_ = partition == Partition::M ? by_rows : by_columns;
@@ -572,10 +587,10 @@ Accelerator::Accelerator(sc_core::sc_module_name name, const Config& config,
     // Process creation order: every core's load, compute and store threads,
     // then the memory module's, then the observer.
     for (std::uint64_t core = 0; core < plan_.cores; ++core)
-        cores_.push_back(std::make_unique<Core>(
-            ("core" + std::to_string(core)).c_str(), core, config, problem, encoded_weights_,
-            weight_offsets_, std::move(assigned[static_cast<std::size_t>(core)]), output_,
-            state_changed_));
+        cores_.push_back(std::make_unique<Core>(("core" + std::to_string(core)).c_str(), core,
+                                                config, problem, encoded_weights_, weight_offsets_,
+                                                std::move(assigned[static_cast<std::size_t>(core)]),
+                                                output_, state_changed_));
     memory_ = make_memory(config, [this](std::uint64_t requester) {
         cores_.at(static_cast<std::size_t>(requester))->mark();
         state_changed_.notify(sc_core::SC_ZERO_TIME);
@@ -633,8 +648,7 @@ bool Accelerator::completed() const {
 LiveSnapshot Accelerator::snapshot() const {
     LiveSnapshot snapshot;
     for (std::uint64_t core = 0; core < cores(); ++core)
-        snapshot.cores.push_back(
-            cores_[static_cast<std::size_t>(core)]->view(memory_->view(core)));
+        snapshot.cores.push_back(cores_[static_cast<std::size_t>(core)]->view(memory_->view(core)));
     static_cast<PipelineView&>(snapshot) = combine_views(snapshot.cores);
     snapshot.statistics.encoded_weight_storage_bytes = encoded_storage_bytes_;
     snapshot.statistics.dense_weight_storage_bytes = dense_storage_bytes_;
@@ -661,7 +675,8 @@ void write_trace(std::ostream& stream, const std::vector<Span>& spans) {
     ordered.reserve(spans.size());
     for (const auto& span : spans) ordered.push_back(&span);
     std::sort(ordered.begin(), ordered.end(), [](const Span* a, const Span* b) {
-        return std::tie(a->start, a->stage, a->tile_id, a->block_id) < std::tie(b->start, b->stage, b->tile_id, b->block_id);
+        return std::tie(a->start, a->stage, a->tile_id, a->block_id) <
+               std::tie(b->start, b->stage, b->tile_id, b->block_id);
     });
     stream << "stage,tile_id,start_cycle,end_cycle,bytes,block_id,core\n";
     for (const auto* s : ordered)

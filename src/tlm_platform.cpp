@@ -1,5 +1,5 @@
-#include "npu/core.hpp"
 #include "npu/tlm_platform.hpp"
+#include "npu/core.hpp"
 
 #include <systemc>
 #include <tlm>
@@ -24,8 +24,7 @@ using namespace npu::tlm_platform;
 
 std::uint32_t load_u32(const unsigned char* bytes) {
     std::uint32_t value = 0;
-    for (unsigned i = 0; i != 4; ++i)
-        value |= static_cast<std::uint32_t>(bytes[i]) << (8U * i);
+    for (unsigned i = 0; i != 4; ++i) value |= static_cast<std::uint32_t>(bytes[i]) << (8U * i);
     return value;
 }
 
@@ -57,7 +56,8 @@ public:
     Traffic host, dma;
     std::uint64_t protocol_errors = 0, debug_reads = 0, arbitration_wait_cycles = 0;
 
-    Dram(sc_module_name name, sc_time period) : sc_module(name), period_(period), bytes_(dram_size, 0) {
+    Dram(sc_module_name name, sc_time period)
+        : sc_module(name), period_(period), bytes_(dram_size, 0) {
         host_socket.register_b_transport(this, &Dram::host_transport);
         dma_socket.register_b_transport(this, &Dram::dma_transport);
         host_socket.register_transport_dbg(this, &Dram::debug_transport);
@@ -74,11 +74,14 @@ private:
         tx.set_dmi_allowed(false);
         if (tx.get_command() != tlm::TLM_READ_COMMAND && tx.get_command() != tlm::TLM_WRITE_COMMAND)
             tx.set_response_status(tlm::TLM_COMMAND_ERROR_RESPONSE);
-        else if (tx.get_byte_enable_ptr()) tx.set_response_status(tlm::TLM_BYTE_ENABLE_ERROR_RESPONSE);
+        else if (tx.get_byte_enable_ptr())
+            tx.set_response_status(tlm::TLM_BYTE_ENABLE_ERROR_RESPONSE);
         else if (!tx.get_data_ptr() || tx.get_data_length() == 0 ||
-                 tx.get_data_length() > maximum_burst || tx.get_streaming_width() < tx.get_data_length())
+                 tx.get_data_length() > maximum_burst ||
+                 tx.get_streaming_width() < tx.get_data_length())
             tx.set_response_status(tlm::TLM_BURST_ERROR_RESPONSE);
-        else if (tx.get_address() >= dram_size || tx.get_data_length() > dram_size - tx.get_address())
+        else if (tx.get_address() >= dram_size ||
+                 tx.get_data_length() > dram_size - tx.get_address())
             tx.set_response_status(tlm::TLM_ADDRESS_ERROR_RESPONSE);
         else return true;
         ++protocol_errors;
@@ -106,7 +109,9 @@ private:
         tx.set_response_status(tlm::TLM_OK_RESPONSE);
     }
 
-    void host_transport(tlm::tlm_generic_payload& tx, sc_time& delay) { transport(tx, delay, host); }
+    void host_transport(tlm::tlm_generic_payload& tx, sc_time& delay) {
+        transport(tx, delay, host);
+    }
     void dma_transport(tlm::tlm_generic_payload& tx, sc_time& delay) { transport(tx, delay, dma); }
 
     // Debug reads take no time, have no burst limit and stay out of the traffic
@@ -199,35 +204,49 @@ private:
         if (tx.is_read()) {
             std::uint32_t value = 0;
             switch (address) {
-            case reg_m: value = static_cast<std::uint32_t>(config_.shape.m); break;
-            case reg_n: value = static_cast<std::uint32_t>(config_.shape.n); break;
-            case reg_k: value = static_cast<std::uint32_t>(config_.shape.k); break;
-            case reg_status: value = (busy_ ? status_busy : 0U) | (done_ ? status_done : 0U); break;
-            case reg_irq_enable: value = irq_enabled_ ? 1U : 0U; break;
-            case reg_jobs: value = jobs_; break;
-            default: return reject(tx, tlm::TLM_COMMAND_ERROR_RESPONSE);
+                case reg_m:
+                    value = static_cast<std::uint32_t>(config_.shape.m);
+                    break;
+                case reg_n:
+                    value = static_cast<std::uint32_t>(config_.shape.n);
+                    break;
+                case reg_k:
+                    value = static_cast<std::uint32_t>(config_.shape.k);
+                    break;
+                case reg_status:
+                    value = (busy_ ? status_busy : 0U) | (done_ ? status_done : 0U);
+                    break;
+                case reg_irq_enable:
+                    value = irq_enabled_ ? 1U : 0U;
+                    break;
+                case reg_jobs:
+                    value = jobs_;
+                    break;
+                default:
+                    return reject(tx, tlm::TLM_COMMAND_ERROR_RESPONSE);
             }
             store_u32(tx.get_data_ptr(), value);
         } else {
             const auto value = load_u32(tx.get_data_ptr());
             switch (address) {
-            case reg_start:
-                if (value != 1U || busy_ || done_)
-                    return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
-                busy_ = true;
-                start_pending_ = true;
-                start_time_ = sc_time_stamp() + delay + period_;
-                command_.notify(delay + period_);
-                break;
-            case reg_irq_enable:
-                if (value > 1U) return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
-                irq_enabled_ = value != 0;
-                break;
-            case reg_irq_ack:
-                if (value != 1U || busy_) return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
-                done_ = false;
-                break;
-            default: return reject(tx, tlm::TLM_COMMAND_ERROR_RESPONSE);
+                case reg_start:
+                    if (value != 1U || busy_ || done_)
+                        return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
+                    busy_ = true;
+                    start_pending_ = true;
+                    start_time_ = sc_time_stamp() + delay + period_;
+                    command_.notify(delay + period_);
+                    break;
+                case reg_irq_enable:
+                    if (value > 1U) return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
+                    irq_enabled_ = value != 0;
+                    break;
+                case reg_irq_ack:
+                    if (value != 1U || busy_) return reject(tx, tlm::TLM_GENERIC_ERROR_RESPONSE);
+                    done_ = false;
+                    break;
+                default:
+                    return reject(tx, tlm::TLM_COMMAND_ERROR_RESPONSE);
             }
         }
         delay += period_;
@@ -238,7 +257,8 @@ private:
 
     void transfer(bool write, std::uint64_t address, unsigned char* bytes, std::size_t length) {
         for (std::size_t offset = 0; offset < length; offset += maximum_burst) {
-            const auto count = static_cast<unsigned>(std::min<std::size_t>(maximum_burst, length - offset));
+            const auto count =
+                static_cast<unsigned>(std::min<std::size_t>(maximum_burst, length - offset));
             tlm::tlm_generic_payload tx;
             tx.set_command(write ? tlm::TLM_WRITE_COMMAND : tlm::TLM_READ_COMMAND);
             tx.set_address(address + offset);
@@ -254,7 +274,11 @@ private:
     }
 
     void run() {
-        busy_ = false; done_ = false; irq_enabled_ = false; start_pending_ = false; jobs_ = 0;
+        busy_ = false;
+        done_ = false;
+        irq_enabled_ = false;
+        start_pending_ = false;
+        jobs_ = 0;
         command_.cancel();
         changed_.notify(SC_ZERO_TIME);
         wait();
@@ -265,14 +289,17 @@ private:
             // that edge; keep the issue time the MMIO write annotated.
             if (start_time_ > sc_time_stamp()) wait(start_time_ - sc_time_stamp());
             npu::Problem problem;
-            problem.m = config_.shape.m; problem.n = config_.shape.n; problem.k = config_.shape.k;
+            problem.m = config_.shape.m;
+            problem.n = config_.shape.n;
+            problem.k = config_.shape.k;
             problem.activations.resize(static_cast<std::size_t>(config_.shape.m * config_.shape.k));
             problem.weights.resize(static_cast<std::size_t>(config_.shape.k * config_.shape.n));
             problem.bias.resize(static_cast<std::size_t>(config_.shape.n));
             transfer(false, activation_address,
                      reinterpret_cast<unsigned char*>(problem.activations.data()),
                      problem.activations.size());
-            transfer(false, weight_address, reinterpret_cast<unsigned char*>(problem.weights.data()),
+            transfer(false, weight_address,
+                     reinterpret_cast<unsigned char*>(problem.weights.data()),
                      problem.weights.size());
             std::vector<unsigned char> bias(problem.bias.size() * 4U);
             transfer(false, bias_address, bias.data(), bias.size());
@@ -287,13 +314,17 @@ private:
                 compute_cycles += cycles;
                 wait(period_ * static_cast<double>(cycles));
             }
-            transfer(true, output_address, reinterpret_cast<unsigned char*>(output.quantized.data()),
+            transfer(true, output_address,
+                     reinterpret_cast<unsigned char*>(output.quantized.data()),
                      output.quantized.size());
             std::vector<unsigned char> accum(output.accumulators.size() * 4U);
             for (std::size_t i = 0; i < output.accumulators.size(); ++i)
-                store_u32(accum.data() + 4U * i, static_cast<std::uint32_t>(output.accumulators[i]));
+                store_u32(accum.data() + 4U * i,
+                          static_cast<std::uint32_t>(output.accumulators[i]));
             transfer(true, accumulator_address, accum.data(), accum.size());
-            busy_ = false; done_ = true; ++jobs_;
+            busy_ = false;
+            done_ = true;
+            ++jobs_;
             changed_.notify(SC_ZERO_TIME);
         }
     }
@@ -316,7 +347,10 @@ public:
 
     Host(sc_module_name name, const npu::Config& config, unsigned jobs, sc_time period,
          bool start_at_reset_release)
-        : sc_module(name), config_(config), jobs_(jobs), period_(period),
+        : sc_module(name),
+          config_(config),
+          jobs_(jobs),
+          period_(period),
           start_at_reset_release_(start_at_reset_release) {
         SC_THREAD(run);
     }
@@ -333,12 +367,19 @@ private:
                      bool byte_enable = false, unsigned streaming_width = 0) {
         tlm::tlm_generic_payload tx;
         unsigned char enable = 0xff;
-        tx.set_command(command); tx.set_address(address); tx.set_data_ptr(bytes);
-        tx.set_data_length(length); tx.set_streaming_width(streaming_width ? streaming_width : length);
-        if (byte_enable) { tx.set_byte_enable_ptr(&enable); tx.set_byte_enable_length(1); }
+        tx.set_command(command);
+        tx.set_address(address);
+        tx.set_data_ptr(bytes);
+        tx.set_data_length(length);
+        tx.set_streaming_width(streaming_width ? streaming_width : length);
+        if (byte_enable) {
+            tx.set_byte_enable_ptr(&enable);
+            tx.set_byte_enable_length(1);
+        }
         tx.set_response_status(tlm::TLM_INCOMPLETE_RESPONSE);
         sc_time delay = SC_ZERO_TIME;
-        if (registers) mmio->b_transport(tx, delay); else memory->b_transport(tx, delay);
+        if (registers) mmio->b_transport(tx, delay);
+        else memory->b_transport(tx, delay);
         require(tx.get_response_status() == expected, "unexpected TLM response status");
         require(!tx.is_dmi_allowed(), "target granted DMI");
         if (expected != tlm::TLM_OK_RESPONSE) ++expected_errors;
@@ -347,7 +388,8 @@ private:
 
     void write_register(std::uint64_t address, std::uint32_t value,
                         tlm::tlm_response_status expected = tlm::TLM_OK_RESPONSE) {
-        std::array<unsigned char, 4> bytes{}; store_u32(bytes.data(), value);
+        std::array<unsigned char, 4> bytes{};
+        store_u32(bytes.data(), value);
         transaction(true, tlm::TLM_WRITE_COMMAND, address, bytes.data(), 4, expected);
     }
 
@@ -359,7 +401,8 @@ private:
 
     void transfer(bool write, std::uint64_t address, unsigned char* bytes, std::size_t length) {
         for (std::size_t offset = 0; offset < length; offset += maximum_burst) {
-            const auto count = static_cast<unsigned>(std::min<std::size_t>(maximum_burst, length - offset));
+            const auto count =
+                static_cast<unsigned>(std::min<std::size_t>(maximum_burst, length - offset));
             transaction(false, write ? tlm::TLM_WRITE_COMMAND : tlm::TLM_READ_COMMAND,
                         address + offset, bytes + offset, count);
         }
@@ -370,19 +413,24 @@ private:
         std::array<unsigned char, 68> bytes{};
         transaction(true, tlm::TLM_READ_COMMAND, reg_status + 1, bytes.data(), 4,
                     tlm::TLM_ADDRESS_ERROR_RESPONSE);
-        transaction(true, tlm::TLM_READ_COMMAND, 0x80, bytes.data(), 4, tlm::TLM_ADDRESS_ERROR_RESPONSE);
-        transaction(true, tlm::TLM_WRITE_COMMAND, reg_m, bytes.data(), 4, tlm::TLM_COMMAND_ERROR_RESPONSE);
+        transaction(true, tlm::TLM_READ_COMMAND, 0x80, bytes.data(), 4,
+                    tlm::TLM_ADDRESS_ERROR_RESPONSE);
+        transaction(true, tlm::TLM_WRITE_COMMAND, reg_m, bytes.data(), 4,
+                    tlm::TLM_COMMAND_ERROR_RESPONSE);
         transaction(true, tlm::TLM_READ_COMMAND, reg_status, bytes.data(), 4,
                     tlm::TLM_BYTE_ENABLE_ERROR_RESPONSE, true);
         transaction(true, tlm::TLM_IGNORE_COMMAND, reg_status, bytes.data(), 4,
                     tlm::TLM_COMMAND_ERROR_RESPONSE);
-        transaction(true, tlm::TLM_READ_COMMAND, reg_status, bytes.data(), 2, tlm::TLM_BURST_ERROR_RESPONSE);
+        transaction(true, tlm::TLM_READ_COMMAND, reg_status, bytes.data(), 2,
+                    tlm::TLM_BURST_ERROR_RESPONSE);
         transaction(false, tlm::TLM_READ_COMMAND, dram_size - 2, bytes.data(), 4,
                     tlm::TLM_ADDRESS_ERROR_RESPONSE);
-        transaction(false, tlm::TLM_IGNORE_COMMAND, 0, bytes.data(), 4, tlm::TLM_COMMAND_ERROR_RESPONSE);
+        transaction(false, tlm::TLM_IGNORE_COMMAND, 0, bytes.data(), 4,
+                    tlm::TLM_COMMAND_ERROR_RESPONSE);
         transaction(false, tlm::TLM_WRITE_COMMAND, 0, bytes.data(), 4,
                     tlm::TLM_BYTE_ENABLE_ERROR_RESPONSE, true);
-        transaction(false, tlm::TLM_READ_COMMAND, 0, bytes.data(), 65, tlm::TLM_BURST_ERROR_RESPONSE);
+        transaction(false, tlm::TLM_READ_COMMAND, 0, bytes.data(), 65,
+                    tlm::TLM_BURST_ERROR_RESPONSE);
         transaction(false, tlm::TLM_READ_COMMAND, 0, bytes.data(), 4, tlm::TLM_BURST_ERROR_RESPONSE,
                     false, 2);
         tlm::tlm_generic_payload tx;
@@ -393,7 +441,9 @@ private:
 
     npu::Problem input(unsigned job) const {
         npu::Problem p;
-        p.m = config_.shape.m; p.n = config_.shape.n; p.k = config_.shape.k;
+        p.m = config_.shape.m;
+        p.n = config_.shape.n;
+        p.k = config_.shape.k;
         for (std::uint64_t i = 0; i < p.m * p.k; ++i)
             p.activations.push_back(static_cast<std::int8_t>(
                 static_cast<int>((i * 7 + config_.shape.seed + job * 3U) % 31U) - 15));
@@ -408,7 +458,8 @@ private:
     void stage(npu::Problem& p) {
         transfer(true, activation_address, reinterpret_cast<unsigned char*>(p.activations.data()),
                  p.activations.size());
-        transfer(true, weight_address, reinterpret_cast<unsigned char*>(p.weights.data()), p.weights.size());
+        transfer(true, weight_address, reinterpret_cast<unsigned char*>(p.weights.data()),
+                 p.weights.size());
         std::vector<unsigned char> bias(p.bias.size() * 4U);
         for (std::size_t i = 0; i < p.bias.size(); ++i)
             store_u32(bias.data() + 4U * i, static_cast<std::uint32_t>(p.bias[i]));
@@ -419,18 +470,23 @@ private:
     void check_debug_read(const npu::Problem& p) {
         std::array<unsigned char, 4> debug{};
         tlm::tlm_generic_payload debug_tx;
-        debug_tx.set_command(tlm::TLM_READ_COMMAND); debug_tx.set_address(bias_address);
-        debug_tx.set_data_ptr(debug.data()); debug_tx.set_data_length(4); debug_tx.set_streaming_width(4);
+        debug_tx.set_command(tlm::TLM_READ_COMMAND);
+        debug_tx.set_address(bias_address);
+        debug_tx.set_data_ptr(debug.data());
+        debug_tx.set_data_length(4);
+        debug_tx.set_streaming_width(4);
         const auto debug_before = sc_time_stamp();
         require(memory->transport_dbg(debug_tx) == 4 && debug_tx.is_response_ok() &&
-                sc_time_stamp() == debug_before &&
-                load_u32(debug.data()) == static_cast<std::uint32_t>(p.bias[0]),
+                    sc_time_stamp() == debug_before &&
+                    load_u32(debug.data()) == static_cast<std::uint32_t>(p.bias[0]),
                 "debug read failed or consumed time");
     }
 
     void check_identity() {
-        require(read_register(reg_m) == config_.shape.m && read_register(reg_n) == config_.shape.n &&
-                read_register(reg_k) == config_.shape.k, "fixed dimensions readback failed");
+        require(read_register(reg_m) == config_.shape.m &&
+                    read_register(reg_n) == config_.shape.n &&
+                    read_register(reg_k) == config_.shape.k,
+                "fixed dimensions readback failed");
     }
 
     // Job 0 completes with IRQ_ENABLE set. Later jobs complete masked, are
@@ -470,19 +526,21 @@ private:
         result.elapsed_cycles = static_cast<std::uint64_t>((sc_time_stamp() - before) / period_);
         result.output.accumulators.resize(expected.accumulators.size());
         result.output.quantized.resize(expected.quantized.size());
-        transfer(false, output_address, reinterpret_cast<unsigned char*>(result.output.quantized.data()),
+        transfer(false, output_address,
+                 reinterpret_cast<unsigned char*>(result.output.quantized.data()),
                  result.output.quantized.size());
         std::vector<unsigned char> accum(expected.accumulators.size() * 4U);
         transfer(false, accumulator_address, accum.data(), accum.size());
         for (std::size_t i = 0; i < result.output.accumulators.size(); ++i)
             result.output.accumulators[i] = signed_word(load_u32(accum.data() + 4U * i));
         require(result.output.accumulators == expected.accumulators &&
-                result.output.quantized == expected.quantized,
+                    result.output.quantized == expected.quantized,
                 "DMA result differs from the scalar reference");
         result.hash = npu::output_hash(result.output);
         results.push_back(std::move(result));
         write_register(reg_irq_ack, 1);
-        require(!irq.read() && read_register(reg_status) == 0, "IRQ acknowledgement did not restore IDLE");
+        require(!irq.read() && read_register(reg_status) == 0,
+                "IRQ acknowledgement did not restore IDLE");
     }
 
     void run() {
@@ -515,7 +573,8 @@ private:
     }
 };
 
-template<class T> void print_array(const std::vector<T>& values) {
+template <class T>
+void print_array(const std::vector<T>& values) {
     std::cout << '[';
     for (std::size_t i = 0; i < values.size(); ++i) {
         if (i) std::cout << ',';
@@ -524,12 +583,12 @@ template<class T> void print_array(const std::vector<T>& values) {
     std::cout << ']';
 }
 
-
 unsigned parse_unsigned(const std::string& flag, const std::string& text) {
     unsigned value = 0;
     const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
     if (result.ec != std::errc{} || result.ptr != text.data() + text.size())
-        throw std::invalid_argument(flag + ": expected an unsigned 32-bit integer, got '" + text + "'");
+        throw std::invalid_argument(flag + ": expected an unsigned 32-bit integer, got '" + text +
+                                    "'");
     return value;
 }
 
@@ -543,14 +602,23 @@ constexpr const char* usage =
 int sc_main(int argc, char* argv[]) {
     try {
         for (int i = 1; i < argc; ++i)
-            if (std::string(argv[i]) == "--help") { std::cout << usage; return 0; }
+            if (std::string(argv[i]) == "--help") {
+                std::cout << usage;
+                return 0;
+            }
         unsigned jobs = 2, seed = 1;
         bool dump = false, start_at_reset_release = false;
         std::string vcd;
         for (int i = 1; i < argc; ++i) {
             const std::string flag(argv[i]);
-            if (flag == "--dump-output") { dump = true; continue; }
-            if (flag == "--start-at-reset-release") { start_at_reset_release = true; continue; }
+            if (flag == "--dump-output") {
+                dump = true;
+                continue;
+            }
+            if (flag == "--start-at-reset-release") {
+                start_at_reset_release = true;
+                continue;
+            }
             if (flag != "--jobs" && flag != "--seed" && flag != "--vcd")
                 throw std::invalid_argument("unknown argument: " + flag);
             if (i + 1 == argc) throw std::invalid_argument(flag + ": missing value");
@@ -562,10 +630,15 @@ int sc_main(int argc, char* argv[]) {
         }
         if (jobs == 0 || jobs > 100) throw std::invalid_argument("--jobs: must be 1..100");
         npu::Config config;
-        config.shape.m = gemm_m; config.shape.n = gemm_n; config.shape.k = gemm_k;
-        config.mapping.tile_m = 2; config.mapping.tile_n = 3;
-        config.arch.compute.macs_per_cycle = 4; config.arch.compute.pipeline_cycles = 2;
-        config.quant.shift = 4; config.quant.rounding = npu::Rounding::HalfToEven;
+        config.shape.m = gemm_m;
+        config.shape.n = gemm_n;
+        config.shape.k = gemm_k;
+        config.mapping.tile_m = 2;
+        config.mapping.tile_n = 3;
+        config.arch.compute.macs_per_cycle = 4;
+        config.arch.compute.pipeline_cycles = 2;
+        config.quant.shift = 4;
+        config.quant.rounding = npu::Rounding::HalfToEven;
         config.shape.seed = seed;
         npu::validate(config);
         // Keep stdout machine-readable. Warnings and errors keep their default
@@ -579,17 +652,25 @@ int sc_main(int argc, char* argv[]) {
         Dram dram("dram", period);
         Engine engine("npu", config, period);
         Host host("host", config, jobs, period, start_at_reset_release);
-        engine.clock(clock); engine.reset_n(reset_n); engine.irq(irq);
-        host.clock(clock); host.reset_n(reset_n); host.irq(irq);
-        host.mmio.bind(engine.registers); host.memory.bind(dram.host_socket);
+        engine.clock(clock);
+        engine.reset_n(reset_n);
+        engine.irq(irq);
+        host.clock(clock);
+        host.reset_n(reset_n);
+        host.irq(irq);
+        host.mmio.bind(engine.registers);
+        host.memory.bind(dram.host_socket);
         engine.dma.bind(dram.dma_socket);
         sc_trace_file* trace = nullptr;
         if (!vcd.empty()) {
             trace = sc_create_vcd_trace_file(vcd.c_str());
             require(trace != nullptr, "cannot create VCD trace");
             trace->set_time_unit(1, SC_PS);
-            sc_trace(trace, clock, "clock"); sc_trace(trace, reset_n, "reset_n"); sc_trace(trace, irq, "irq");
-            sc_trace(trace, engine.busy_trace, "npu_busy"); sc_trace(trace, engine.done_trace, "npu_done");
+            sc_trace(trace, clock, "clock");
+            sc_trace(trace, reset_n, "reset_n");
+            sc_trace(trace, irq, "irq");
+            sc_trace(trace, engine.busy_trace, "npu_busy");
+            sc_trace(trace, engine.done_trace, "npu_done");
             sc_trace(trace, engine.jobs_trace, "completed_jobs");
         }
         // Watchdog: a lost IRQ or START handshake ends the run at 1 ms of simulated time.
@@ -603,9 +684,11 @@ int sc_main(int argc, char* argv[]) {
                 "target error counters disagree with the host's rejected accesses");
         const auto cycle = [&](sc_time time) { return static_cast<std::uint64_t>(time / period); };
         std::cout << "{\n\"schema_version\":1,\"model\":\"systemc-tlm2-serial-coprocessor\","
-                  << "\"jobs_completed\":" << host.results.size() << ",\"interrupts_observed\":" << host.irqs
-                  << ",\"seed\":" << seed << ",\"m\":" << config.shape.m << ",\"n\":" << config.shape.n
-                  << ",\"k\":" << config.shape.k << ",\"clock_period_ns\":" << period / sc_time(1, SC_NS)
+                  << "\"jobs_completed\":" << host.results.size()
+                  << ",\"interrupts_observed\":" << host.irqs << ",\"seed\":" << seed
+                  << ",\"m\":" << config.shape.m << ",\"n\":" << config.shape.n
+                  << ",\"k\":" << config.shape.k
+                  << ",\"clock_period_ns\":" << period / sc_time(1, SC_NS)
                   << ",\"reset_release_cycle\":" << cycle(host.reset_release)
                   << ",\"first_start_cycle\":" << cycle(host.first_start)
                   << ",\"simulation_cycles\":" << cycle(sc_time_stamp())
@@ -624,8 +707,10 @@ int sc_main(int argc, char* argv[]) {
             std::cout << "{\"id\":" << result.id << ",\"elapsed_cycles\":" << result.elapsed_cycles
                       << ",\"output_hash\":" << result.hash;
             if (dump) {
-                std::cout << ",\"accumulators\":"; print_array(result.output.accumulators);
-                std::cout << ",\"outputs\":"; print_array(result.output.quantized);
+                std::cout << ",\"accumulators\":";
+                print_array(result.output.accumulators);
+                std::cout << ",\"outputs\":";
+                print_array(result.output.quantized);
             }
             std::cout << '}';
         }

@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 """run.py: startup from another directory against a built npu-sim, a validated job on the
 dashboard, clean shutdown, and one-line errors for bad arguments and environments."""
+
 from __future__ import annotations
 
 import argparse
 import json
 import os
-from pathlib import Path
 import queue
 import re
 import signal
@@ -17,9 +17,9 @@ import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
-
 
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "run.py"
@@ -32,11 +32,15 @@ class LauncherProcess:
 
     def __init__(self, arguments: list[str], working_directory: Path):
         self.url = ""
-        self.errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+        self.errors = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")  # noqa: SIM115
         self.process = subprocess.Popen(
             [sys.executable, "-u", str(LAUNCHER), *arguments],
-            cwd=working_directory, stdout=subprocess.PIPE, stderr=self.errors,
-            text=True, encoding="utf-8", bufsize=1,
+            cwd=working_directory,
+            stdout=subprocess.PIPE,
+            stderr=self.errors,
+            text=True,
+            encoding="utf-8",
+            bufsize=1,
         )
         self.lines: queue.Queue[str | None] = queue.Queue()
 
@@ -85,7 +89,9 @@ class LauncherProcess:
                 # simulator child is stopped through /api/control first.
                 if self.url:
                     request = Request(
-                        self.url + "/api/control", data=b'{"action":"stop"}', method="POST",
+                        self.url + "/api/control",
+                        data=b'{"action":"stop"}',
+                        method="POST",
                         headers={"Content-Type": "application/json", "Origin": self.url},
                     )
                     try:
@@ -109,8 +115,13 @@ class LauncherTests(unittest.TestCase):
     def run_launcher(self, arguments: list[str], *, env: dict[str, str] | None = None):
         with tempfile.TemporaryDirectory(prefix="npu-launcher-cwd-") as directory:
             return subprocess.run(
-                [sys.executable, str(LAUNCHER), *arguments], cwd=directory,
-                env=env, capture_output=True, text=True, encoding="utf-8", timeout=20,
+                [sys.executable, str(LAUNCHER), *arguments],
+                cwd=directory,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=20,
             )
 
     def assert_clean_failure(self, result, status: int, *terms: str) -> None:
@@ -124,8 +135,15 @@ class LauncherTests(unittest.TestCase):
     def test_launches_from_another_directory_and_validates_a_job(self):
         with tempfile.TemporaryDirectory(prefix="npu-launcher-cwd-") as directory:
             launcher = LauncherProcess(
-                ["--skip-build", "--build-dir", str(BUILD_DIRECTORY),
-                 "--port", "0", "--no-browser"], Path(directory),
+                [
+                    "--skip-build",
+                    "--build-dir",
+                    str(BUILD_DIRECTORY),
+                    "--port",
+                    "0",
+                    "--no-browser",
+                ],
+                Path(directory),
             )
             url = ""
             try:
@@ -172,7 +190,8 @@ class LauncherTests(unittest.TestCase):
     def test_missing_binary_has_actionable_error(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-binary-") as directory:
             result = self.run_launcher(
-                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
+                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"]
+            )
             self.assert_clean_failure(result, 2, "npu-sim", "without --skip-build")
 
     def test_corrupt_executable_is_rejected_before_serving(self):
@@ -182,7 +201,8 @@ class LauncherTests(unittest.TestCase):
             if os.name == "posix":
                 executable.chmod(0o755)
             result = self.run_launcher(
-                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"])
+                ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"]
+            )
             self.assert_clean_failure(result, 1, "npu-sim")
             self.assertNotRegex(result.stdout, r"http://127\.0\.0\.1:\d+")
 
@@ -194,7 +214,8 @@ class LauncherTests(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix="npu-busy-port-") as directory:
                 build = Path(directory) / "must-not-be-created"
                 result = self.run_launcher(
-                    ["--build-dir", str(build), "--port", str(port), "--no-browser"])
+                    ["--build-dir", str(build), "--port", str(port), "--no-browser"]
+                )
                 self.assert_clean_failure(result, 1, "port", str(port))
                 self.assertFalse(build.exists(), "busy port reported after configuring a build")
 
@@ -204,14 +225,16 @@ class LauncherTests(unittest.TestCase):
         # succeeds only with SO_REUSEADDR, the option DashboardServer sets.
         sys.path.insert(0, str(ROOT))
         from npuperf import live
+
         first = live.DashboardServer(("127.0.0.1", 0))
         port = first.server_address[1]
         thread = threading.Thread(target=first.serve_forever, daemon=True)
         thread.start()
         client = socket.create_connection(("127.0.0.1", port), timeout=3)
         try:
-            client.sendall(b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\n"
-                           b"Connection: close\r\n\r\n" % port)
+            client.sendall(
+                b"GET /missing HTTP/1.1\r\nHost: 127.0.0.1:%d\r\nConnection: close\r\n\r\n" % port
+            )
             while client.recv(4096):  # read to EOF: the server has closed its end
                 pass
         finally:

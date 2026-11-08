@@ -4,6 +4,7 @@ cycle speedups. Every variant must reproduce the baseline's output hash.
 
 Entry point for npuperf.sweep (also: python -m npuperf.sweep).
 """
+
 import sys
 from pathlib import Path
 

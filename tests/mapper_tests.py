@@ -4,6 +4,7 @@ lowest analytic estimate among its candidates, the free SRAM split between the c
 lowerings of convolutions, and npu-sim cycles close to the best of an exhaustive mapping
 search.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -22,8 +23,11 @@ BINARY: Path
 
 def point(name: str) -> tuple[analytic.Design, int, str]:
     """A design point's Design, minimum panel depth and config path."""
-    return (designs.design(designs.load(name)), designs.min_panel_depth(name),
-            str(designs.config_path(name)))
+    return (
+        designs.design(designs.load(name)),
+        designs.min_panel_depth(name),
+        str(designs.config_path(name)),
+    )
 
 
 def map_on(item: tuple[str, workloads.Gemm]) -> mapper.Mapping:
@@ -38,7 +42,7 @@ def map_all(items: list[tuple[str, workloads.Gemm]]) -> dict:
     distinct = list(dict.fromkeys(items))
     workers = max(1, min(4, os.cpu_count() or 1))
     with concurrent.futures.ProcessPoolExecutor(workers) as pool:
-        return dict(zip(distinct, pool.map(map_on, distinct)))
+        return dict(zip(distinct, pool.map(map_on, distinct), strict=True))
 
 
 class MapperTests(unittest.TestCase):
@@ -49,12 +53,21 @@ class MapperTests(unittest.TestCase):
         caches taking the rest, and npu-sim accepts the mapping with the scratchpad,
         traffic and estimate the model predicts."""
         names = ("edge-256", "client-16c")
-        layers = [gemm for workload in ("resnet50_v1.5_224", "mobilenet_v2_1.0_224")
-                  for _, gemm in workloads.iter_calls(workloads.load(workload))]
-        res3 = next(gemm for layer, gemm in workloads.iter_calls(
-            workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
-        depthwise = next(gemm for layer, gemm in workloads.iter_calls(
-            workloads.load("mobilenet_v2_1.0_224")) if layer["name"] == "block_3_depthwise")
+        layers = [
+            gemm
+            for workload in ("resnet50_v1.5_224", "mobilenet_v2_1.0_224")
+            for _, gemm in workloads.iter_calls(workloads.load(workload))
+        ]
+        res3 = next(
+            gemm
+            for layer, gemm in workloads.iter_calls(workloads.load("resnet50_v1.5_224"))
+            if layer["name"] == "layer2.1-3.conv2"
+        )
+        depthwise = next(
+            gemm
+            for layer, gemm in workloads.iter_calls(workloads.load("mobilenet_v2_1.0_224"))
+            if layer["name"] == "block_3_depthwise"
+        )
         runs = (res3, depthwise, res3.plain(), workloads.Gemm("dw", 196, 1, 9, 384))
         mapped = map_all([(name, gemm) for name in names for gemm in (*layers, *runs)])
         for name in names:
@@ -62,14 +75,19 @@ class MapperTests(unittest.TestCase):
             for gemm in layers:
                 mapping = mapped[(name, gemm)]
                 trial = design.replace(**gemm.flags(conv=mapping.conv))
-                rows, cols = ((8, 8) if trial.channel_wise
-                              else (design.array_rows, design.array_cols))
-                width = (analytic.conv_geometry(trial).output_w if mapping.conv else 0)
+                rows, cols = (
+                    (8, 8) if trial.channel_wise else (design.array_rows, design.array_cols)
+                )
+                width = analytic.conv_geometry(trial).output_w if mapping.conv else 0
                 with self.subTest(point=name, layer=gemm.name):
-                    self.assertTrue(mapping.tile_m % rows == 0 or mapping.tile_m == gemm.m
-                                    or (width and mapping.tile_m % width == 0))
-                    self.assertTrue(mapping.tile_n % cols == 0
-                                    or mapping.tile_n == trial.grid_columns)
+                    self.assertTrue(
+                        mapping.tile_m % rows == 0
+                        or mapping.tile_m == gemm.m
+                        or (width and mapping.tile_m % width == 0)
+                    )
+                    self.assertTrue(
+                        mapping.tile_n % cols == 0 or mapping.tile_n == trial.grid_columns
+                    )
                     if mapping.conv:
                         row_k = analytic.conv_geometry(trial).kernel_row_k
                         self.assertEqual(mapping.tile_k % row_k, 0)
@@ -85,26 +103,37 @@ class MapperTests(unittest.TestCase):
                         self.assertGreater(trial.grid_columns, mapping.tile_n)
             for gemm in runs:
                 mapping = mapped[(name, gemm)]
-                result = sim.run({"config": config, **gemm.flags(conv=mapping.conv),
-                                  **mapping.flags(), "timing_only": True}, BINARY)
+                result = sim.run(
+                    {
+                        "config": config,
+                        **gemm.flags(conv=mapping.conv),
+                        **mapping.flags(),
+                        "timing_only": True,
+                    },
+                    BINARY,
+                )
                 with self.subTest(point=name, layer=gemm.name):
                     self.assertEqual(result["scratchpad_bytes"], mapping.scratchpad_bytes)
                     model = analytic.analyze(analytic.Design.from_result(result))
                     self.assertEqual(model.estimate_cycles, mapping.estimate_cycles)
                     self.assertEqual(model.dram_bytes, mapping.dram_bytes)
-                    self.assertEqual((model.read_bytes, model.activation_read_bytes),
-                                     (result["read_bytes"], result["activation_read_bytes"]))
+                    self.assertEqual(
+                        (model.read_bytes, model.activation_read_bytes),
+                        (result["read_bytes"], result["activation_read_bytes"]),
+                    )
                     channel_wise = design.replace(**gemm.flags(conv=False)).channel_wise
                     self.assertEqual(result["depthwise_macs"] > 0, channel_wise)
-                    self.assertEqual(channel_wise, gemm.groups > 1 and
-                                     design.depthwise_macs_per_cycle > 0)
+                    self.assertEqual(
+                        channel_wise, gemm.groups > 1 and design.depthwise_macs_per_cycle > 0
+                    )
 
     def test_activation_cache_takes_the_largest_row_tile(self):
         """With several column tiles the mapper also tries the activation cache sized to
         the largest row tile's panels; that split helps only when those panels hit."""
         design, min_depth, _ = point("mobile-2k")
-        trial = design.replace(m=196, n=1024, k=512, tile_m=128, tile_n=64, tile_k=128,
-                               buffer_slots=1)
+        trial = design.replace(
+            m=196, n=1024, k=512, tile_m=128, tile_n=64, tile_k=128, buffer_slots=1
+        )
         need = mapper.activation_need(trial)
         self.assertEqual(need, 128 * 512)
         self.assertEqual(mapper.cache_splits(trial, need + 10), [(need + 10, 0), (10, need)])
@@ -119,13 +148,19 @@ class MapperTests(unittest.TestCase):
 
     def test_pointwise_layers_try_both_lowerings(self):
         design, _, _ = point("edge-256")
-        pointwise = next(gemm for layer, gemm in workloads.iter_calls(
-            workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer4.1-2.conv1")
+        pointwise = next(
+            gemm
+            for layer, gemm in workloads.iter_calls(workloads.load("resnet50_v1.5_224"))
+            if layer["name"] == "layer4.1-2.conv1"
+        )
         lowered = mapper.lowerings(design.replace(**pointwise.flags()))
         self.assertEqual([d.conv for d in lowered], [True, False])
         self.assertEqual(lowered[1].replace(**pointwise.conv_flags()), lowered[0])
-        res3 = next(gemm for layer, gemm in workloads.iter_calls(
-            workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
+        res3 = next(
+            gemm
+            for layer, gemm in workloads.iter_calls(workloads.load("resnet50_v1.5_224"))
+            if layer["name"] == "layer2.1-3.conv2"
+        )
         self.assertEqual(len(mapper.lowerings(design.replace(**res3.flags()))), 1)
         # K = 2048 whole does not fit 50 KiB with the array's 16-row tiles: the plain
         # operand's panels do.
@@ -148,8 +183,10 @@ class MapperTests(unittest.TestCase):
         gate_proj GEMV most candidates share the DRAM-bound estimate and the fastest replay
         ranks fifth or lower, so replaying only the top four candidates would miss it."""
         design, min_depth, config = point("client-16c")
-        layers = {"conv": design.replace(m=196, n=256, k=2304),
-                  "gemv": design.replace(m=1, n=8192, k=2048, depthwise_macs_per_cycle=0)}
+        layers = {
+            "conv": design.replace(m=196, n=256, k=2304),
+            "gemv": design.replace(m=1, n=8192, k=2048, depthwise_macs_per_cycle=0),
+        }
         replayed = {}
         for name, layer in layers.items():
             mapping = mapper.map_layer(layer, min_depth)
@@ -157,17 +194,38 @@ class MapperTests(unittest.TestCase):
             replays = [analytic.schedule(trial).cycles for _, trial, _ in ranked]
             replayed[name] = (ranked, replays)
             with self.subTest(layer=name):
-                for (_, trial, model), cycles in zip(ranked, replays):
+                for (_, _, model), cycles in zip(ranked, replays, strict=True):
                     self.assertLessEqual(model.lower_bound_cycles, cycles)
                 best = min(replays)
                 chosen = ranked[replays.index(best)][1]
                 self.assertEqual(mapping.replayed_cycles, best)
-                self.assertEqual((mapping.tile_m, mapping.tile_n, mapping.tile_k,
-                                  mapping.buffer_slots, mapping.weight_cache_bytes),
-                                 (chosen.tile_m, chosen.tile_n, chosen.tile_k,
-                                  chosen.buffer_slots, chosen.weight_cache_bytes))
-                result = sim.run({"config": config, "m": layer.m, "n": layer.n, "k": layer.k,
-                                  **mapping.flags(), "timing_only": True}, BINARY)
+                self.assertEqual(
+                    (
+                        mapping.tile_m,
+                        mapping.tile_n,
+                        mapping.tile_k,
+                        mapping.buffer_slots,
+                        mapping.weight_cache_bytes,
+                    ),
+                    (
+                        chosen.tile_m,
+                        chosen.tile_n,
+                        chosen.tile_k,
+                        chosen.buffer_slots,
+                        chosen.weight_cache_bytes,
+                    ),
+                )
+                result = sim.run(
+                    {
+                        "config": config,
+                        "m": layer.m,
+                        "n": layer.n,
+                        "k": layer.k,
+                        **mapping.flags(),
+                        "timing_only": True,
+                    },
+                    BINARY,
+                )
                 self.assertEqual(result.cycles, mapping.replayed_cycles)
         gemv, replays = replayed["gemv"]
         estimates = [model.estimate_cycles for _, _, model in gemv]
@@ -182,14 +240,27 @@ class MapperTests(unittest.TestCase):
         npu-sim cycles are within 10% of the fastest mapping of a 48-point search that
         fits."""
         design, min_depth, config = point("mobile-2k")
-        gemm = next(gemm for layer, gemm in workloads.iter_calls(
-            workloads.load("resnet50_v1.5_224")) if layer["name"] == "layer2.1-3.conv2")
+        gemm = next(
+            gemm
+            for layer, gemm in workloads.iter_calls(workloads.load("resnet50_v1.5_224"))
+            if layer["name"] == "layer2.1-3.conv2"
+        )
         plain = mapper.map_call(design, gemm, min_depth, cache=False)
         self.assertTrue(plain.conv)
-        grid = [(m, n, k, s) for m in (32, 64, 128, 256) for n in (64, 128)
-                for k in (0, 384, 768) for s in (1, 2)]
-        base = {"config": config, **gemm.flags(), "weight_cache_bytes": 0,
-                "activation_cache_bytes": 0, "timing_only": True}
+        grid = [
+            (m, n, k, s)
+            for m in (32, 64, 128, 256)
+            for n in (64, 128)
+            for k in (0, 384, 768)
+            for s in (1, 2)
+        ]
+        base = {
+            "config": config,
+            **gemm.flags(),
+            "weight_cache_bytes": 0,
+            "activation_cache_bytes": 0,
+            "timing_only": True,
+        }
         _, rows = autotune.search(BINARY, [gemm.m, gemm.n, gemm.k], grid, base)
         best = min(row["cycles"] for row in rows if row["feasible"])
         chosen = sim.run({**base, **plain.flags()}, BINARY)

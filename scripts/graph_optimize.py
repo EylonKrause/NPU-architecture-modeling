@@ -5,6 +5,7 @@ every output.
 
 Entry point for npuperf.graph_optimize (also: python -m npuperf.graph_optimize).
 """
+
 import sys
 from pathlib import Path
 

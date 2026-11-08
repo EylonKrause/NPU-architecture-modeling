@@ -37,16 +37,16 @@ struct Register {
 // TLM_COMMAND_ERROR_RESPONSE. Every access is refused while reset_n is low.
 inline constexpr std::array<Register, 8> register_map{{
     // offset          name          access               reset   description
-    {reg_m,          "M",          Access::read_only,  gemm_m, "output rows"},
-    {reg_n,          "N",          Access::read_only,  gemm_n, "output columns"},
-    {reg_k,          "K",          Access::read_only,  gemm_k, "reduction depth"},
-    {reg_start,      "START",      Access::write_only, 0,
+    {reg_m, "M", Access::read_only, gemm_m, "output rows"},
+    {reg_n, "N", Access::read_only, gemm_n, "output columns"},
+    {reg_k, "K", Access::read_only, gemm_k, "reduction depth"},
+    {reg_start, "START", Access::write_only, 0,
      "write 1: latch a job; refused while STATUS.BUSY or STATUS.DONE is set"},
-    {reg_status,     "STATUS",     Access::read_only,  0,
+    {reg_status, "STATUS", Access::read_only, 0,
      "bit 0 BUSY: job latched or running; bit 1 DONE: outputs in DRAM, cleared by IRQ_ACK"},
     {reg_irq_enable, "IRQ_ENABLE", Access::read_write, 0, "bit 0: irq = STATUS.DONE & IRQ_ENABLE"},
-    {reg_irq_ack,    "IRQ_ACK",    Access::write_only, 0, "write 1: clear DONE; refused while BUSY"},
-    {reg_jobs,       "JOBS",       Access::read_only,  0, "jobs completed since reset release"},
+    {reg_irq_ack, "IRQ_ACK", Access::write_only, 0, "write 1: clear DONE; refused while BUSY"},
+    {reg_jobs, "JOBS", Access::read_only, 0, "jobs completed since reset release"},
 }};
 
 constexpr const Register* find_register(std::uint64_t offset) {

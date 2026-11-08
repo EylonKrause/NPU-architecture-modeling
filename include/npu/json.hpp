@@ -18,8 +18,8 @@ struct JsonValue {
     enum class Type : std::uint8_t { Null, Boolean, Number, String, Array, Object };
     Type type = Type::Null;
     bool boolean = false;
-    bool integer = false;         // Number without fraction or exponent.
-    std::string text;             // String contents or number literal.
+    bool integer = false;           // Number without fraction or exponent.
+    std::string text;               // String contents or number literal.
     std::vector<std::string> keys;  // Object member names, in document order.
     std::vector<JsonValue> items;   // Array elements or object member values.
     std::size_t line = 1, column = 1;

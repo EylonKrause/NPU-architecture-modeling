@@ -4,8 +4,11 @@ The HTTP API selects built-in workload profiles only; it never accepts a command
 executable or address. GET /api/state returns the last published snapshot and never waits
 on the simulator process.
 """
+
 from __future__ import annotations
 
+import contextlib
+import json
 import os
 import random
 import signal
@@ -21,37 +24,111 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from socketserver import TCPServer
 from urllib.parse import urlsplit
-import json
 
 from . import analytic, cli, sim
 from .binary import ROOT
 from .sim import LiveError
 
 PROFILE_ARGS = {
-    "balanced": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8",
-                 "--tile-k", "32", "--buffer-slots", "2"],
-    "compute-bound": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8",
-                      "--tile-k", "32", "--buffer-slots", "2", "--macs-per-cycle", "4",
-                      "--memory-bytes-per-cycle", "128"],
-    "memory-bound": ["--m", "64", "--n", "64", "--k", "128", "--tile-m", "8", "--tile-n", "8",
-                     "--tile-k", "32", "--buffer-slots", "2", "--macs-per-cycle", "256",
-                     "--memory-bytes-per-cycle", "4", "--memory-latency", "24"],
-    "palette-weights": ["--tile-m", "8", "--tile-n", "8", "--tile-k", "32", "--buffer-slots", "2",
-                        "--weight-bits", "8", "--weight-encoding", "palette", "--palette-bits", "2",
-                        "--input-zero", "0", "--weight-zero", "0", "--shift", "4"],
+    "balanced": [
+        "--m",
+        "64",
+        "--n",
+        "64",
+        "--k",
+        "128",
+        "--tile-m",
+        "8",
+        "--tile-n",
+        "8",
+        "--tile-k",
+        "32",
+        "--buffer-slots",
+        "2",
+    ],
+    "compute-bound": [
+        "--m",
+        "64",
+        "--n",
+        "64",
+        "--k",
+        "128",
+        "--tile-m",
+        "8",
+        "--tile-n",
+        "8",
+        "--tile-k",
+        "32",
+        "--buffer-slots",
+        "2",
+        "--macs-per-cycle",
+        "4",
+        "--memory-bytes-per-cycle",
+        "128",
+    ],
+    "memory-bound": [
+        "--m",
+        "64",
+        "--n",
+        "64",
+        "--k",
+        "128",
+        "--tile-m",
+        "8",
+        "--tile-n",
+        "8",
+        "--tile-k",
+        "32",
+        "--buffer-slots",
+        "2",
+        "--macs-per-cycle",
+        "256",
+        "--memory-bytes-per-cycle",
+        "4",
+        "--memory-latency",
+        "24",
+    ],
+    "palette-weights": [
+        "--tile-m",
+        "8",
+        "--tile-n",
+        "8",
+        "--tile-k",
+        "32",
+        "--buffer-slots",
+        "2",
+        "--weight-bits",
+        "8",
+        "--weight-encoding",
+        "palette",
+        "--palette-bits",
+        "2",
+        "--input-zero",
+        "0",
+        "--weight-zero",
+        "0",
+        "--shift",
+        "4",
+    ],
 }
 PROFILES = {
-    "balanced": {"label": "Default machine",
-                 "description": "64x64x128 INT8 GEMM, 8x8x32 tiles, 2 slots, 64 MAC/cycle, "
-                                "16 B/cycle."},
-    "compute-bound": {"label": "4 MAC/cycle",
-                      "description": "The default GEMM with 4 MACs per cycle and 128 B/cycle."},
-    "memory-bound": {"label": "4 B/cycle",
-                     "description": "The default GEMM with 256 MACs per cycle, 4 B/cycle and "
-                                    "24-cycle request latency."},
-    "palette-weights": {"label": "2-bit palette weights",
-                        "description": "Weights stored as 2-bit indices into a 4-entry LUT; "
-                                       "decode cycles charged."},
+    "balanced": {
+        "label": "Default machine",
+        "description": "64x64x128 INT8 GEMM, 8x8x32 tiles, 2 slots, 64 MAC/cycle, 16 B/cycle.",
+    },
+    "compute-bound": {
+        "label": "4 MAC/cycle",
+        "description": "The default GEMM with 4 MACs per cycle and 128 B/cycle.",
+    },
+    "memory-bound": {
+        "label": "4 B/cycle",
+        "description": "The default GEMM with 256 MACs per cycle, 4 B/cycle and "
+        "24-cycle request latency.",
+    },
+    "palette-weights": {
+        "label": "2-bit palette weights",
+        "description": "Weights stored as 2-bit indices into a 4-entry LUT; decode cycles charged.",
+    },
 }
 MAX_STEP = 10000
 SLICE_COUNTERS = ("cycles", "compute_busy_cycles", "dma_busy_cycles")
@@ -68,16 +145,44 @@ TIMELINE_TRANSITIONS = 512
 # a schema_version 1 snapshot config omits take the values of the build that wrote it: one
 # panel buffer per slot, one group, serial memory, one core. analytic.Design.from_result
 # assumes the same values for the same keys.
-SNAPSHOT_DEFAULTS = {"panel_buffers": 1, "groups": 1, "memory_model": "serial", "cores": 1,
-                     "partition": "auto", "dram_bytes_per_cycle": 0}
+SNAPSHOT_DEFAULTS = {
+    "panel_buffers": 1,
+    "groups": 1,
+    "memory_model": "serial",
+    "cores": 1,
+    "partition": "auto",
+    "dram_bytes_per_cycle": 0,
+}
 STAGE_KEYS = ("dma_busy", "dma_read", "dma_tile_id", "compute_busy", "compute_tile_id")
 WORKLOAD_KEYS = ("m", "n", "k", "groups", "weight_bits", "weight_encoding", "frequency_mhz")
-MACHINE_KEYS = ("source", "macs_per_cycle", "bytes_per_cycle", "ridge", "memory_model",
-                "memory_latency", "pipeline_cycles", "buffer_slots", "panel_buffers", "cores",
-                "tile_m", "tile_n", "tile_k", "frequency_mhz", "analysis")
-ANALYSIS_KEYS = ("bound", "resource_bound_cycles", "lower_bound_cycles", "estimate_cycles",
-                 "compute_busy_cycles", "memory_cycles", "dram_bytes", "arithmetic_intensity",
-                 "effective_bytes_per_cycle")
+MACHINE_KEYS = (
+    "source",
+    "macs_per_cycle",
+    "bytes_per_cycle",
+    "ridge",
+    "memory_model",
+    "memory_latency",
+    "pipeline_cycles",
+    "buffer_slots",
+    "panel_buffers",
+    "cores",
+    "tile_m",
+    "tile_n",
+    "tile_k",
+    "frequency_mhz",
+    "analysis",
+)
+ANALYSIS_KEYS = (
+    "bound",
+    "resource_bound_cycles",
+    "lower_bound_cycles",
+    "estimate_cycles",
+    "compute_busy_cycles",
+    "memory_cycles",
+    "dram_bytes",
+    "arithmetic_intensity",
+    "effective_bytes_per_cycle",
+)
 
 
 def _count(value: object) -> bool:
@@ -108,9 +213,11 @@ def stages(snapshot: dict) -> dict | None:
     if any(key not in snapshot for key in STAGE_KEYS):
         return None
     dma = snapshot["dma_tile_id"] if snapshot["dma_busy"] else None
-    return {"load": dma if snapshot["dma_read"] else None,
-            "compute": snapshot["compute_tile_id"] if snapshot["compute_busy"] else None,
-            "store": None if snapshot["dma_read"] else dma}
+    return {
+        "load": dma if snapshot["dma_read"] else None,
+        "compute": snapshot["compute_tile_id"] if snapshot["compute_busy"] else None,
+        "store": None if snapshot["dma_read"] else dma,
+    }
 
 
 def profile_design(profile: str, config: object = None) -> analytic.Design:
@@ -138,15 +245,23 @@ def machine_summary(profile: str, telemetry: dict) -> dict:
         design = profile_design(profile, telemetry.get("config"))
         source = "profile"
     bandwidth = design.bandwidth
-    summary = {"source": source, "macs_per_cycle": design.peak_macs_per_cycle,
-               "bytes_per_cycle": bandwidth,
-               "ridge": design.ridge if bandwidth > 0 else None,
-               "memory_model": design.memory_model, "memory_latency": design.memory_latency,
-               "pipeline_cycles": design.pipeline_cycles, "buffer_slots": design.buffer_slots,
-               "panel_buffers": design.panel_buffers, "cores": design.cores,
-               "tile_m": design.tile_m, "tile_n": design.tile_n, "tile_k": design.tile_k,
-               "frequency_mhz": design.frequency_mhz,
-               "analysis": None}
+    summary = {
+        "source": source,
+        "macs_per_cycle": design.peak_macs_per_cycle,
+        "bytes_per_cycle": bandwidth,
+        "ridge": design.ridge if bandwidth > 0 else None,
+        "memory_model": design.memory_model,
+        "memory_latency": design.memory_latency,
+        "pipeline_cycles": design.pipeline_cycles,
+        "buffer_slots": design.buffer_slots,
+        "panel_buffers": design.panel_buffers,
+        "cores": design.cores,
+        "tile_m": design.tile_m,
+        "tile_n": design.tile_n,
+        "tile_k": design.tile_k,
+        "frequency_mhz": design.frequency_mhz,
+        "analysis": None,
+    }
     # Compressed panels' sizes depend on the weight values; the page shows the analytic bound
     # of dense designs only.
     if design.weight_encoding != "dense":
@@ -156,15 +271,19 @@ def machine_summary(profile: str, telemetry: dict) -> dict:
     except (ValueError, TypeError, ArithmeticError):
         return summary
     summary["analysis"] = {
-        "bound": result.bound, "resource_bound_cycles": result.resource_bound_cycles,
+        "bound": result.bound,
+        "resource_bound_cycles": result.resource_bound_cycles,
         "lower_bound_cycles": result.lower_bound_cycles,
         "estimate_cycles": result.estimate_cycles,
         "compute_busy_cycles": result.compute_busy_cycles,
-        "memory_cycles": result.memory_cycles, "dram_bytes": result.dram_bytes,
+        "memory_cycles": result.memory_cycles,
+        "dram_bytes": result.dram_bytes,
         "arithmetic_intensity": result.arithmetic_intensity,
         # Payload over memory-busy cycles: the bandwidth roof once request latency is paid.
-        "effective_bytes_per_cycle": (result.dram_bytes / result.memory_cycles
-                                      if result.memory_cycles else None)}
+        "effective_bytes_per_cycle": (
+            result.dram_bytes / result.memory_cycles if result.memory_cycles else None
+        ),
+    }
     return summary
 
 
@@ -214,8 +333,7 @@ class Controller:
         self.started_at: float | None = None
         self._published: dict = {}
         self._publish()
-        self.thread = threading.Thread(target=self._schedule, name="systemc-scheduler",
-                                       daemon=True)
+        self.thread = threading.Thread(target=self._schedule, name="systemc-scheduler", daemon=True)
         self.thread.start()
 
     @property
@@ -223,18 +341,25 @@ class Controller:
         return self.session.process if self.session is not None else None
 
     def _publish(self) -> None:
-        view = {"kind": "SystemC architectural simulator", "state": self.state,
-                "profile": self.profile, "slice_cycles": self.slice_cycles,
-                "jobs_completed": self.jobs_completed, "completed_job_cycles": self.total_cycles,
-                "completed_job_macs": self.total_macs,
-                "completed_job_executed_macs": self.total_executed_macs,
-                "telemetry": self.telemetry,
-                "slice": self.slice, "slices": list(self.slices),
-                "timeline": {"stride_cycles": TIMELINE_STRIDE,
-                             "transitions": list(self.transitions)},
-                "max_step": MAX_STEP, "machine": self.machine,
-                "workload": workload_summary(self.telemetry.get("config")),
-                "recent_jobs": list(self.history), "error": self.error}
+        view = {
+            "kind": "SystemC architectural simulator",
+            "state": self.state,
+            "profile": self.profile,
+            "slice_cycles": self.slice_cycles,
+            "jobs_completed": self.jobs_completed,
+            "completed_job_cycles": self.total_cycles,
+            "completed_job_macs": self.total_macs,
+            "completed_job_executed_macs": self.total_executed_macs,
+            "telemetry": self.telemetry,
+            "slice": self.slice,
+            "slices": list(self.slices),
+            "timeline": {"stride_cycles": TIMELINE_STRIDE, "transitions": list(self.transitions)},
+            "max_step": MAX_STEP,
+            "machine": self.machine,
+            "workload": workload_summary(self.telemetry.get("config")),
+            "recent_jobs": list(self.history),
+            "error": self.error,
+        }
         with self.view_lock:
             self._published = view
 
@@ -243,8 +368,11 @@ class Controller:
         seed = self.jobs_completed + 1
         # The palette profile reads a fixed-shape tensor file that this process writes;
         # HTTP clients never supply tensors or paths.
-        fixture = (tempfile.TemporaryDirectory(prefix="npu-live-palette-")
-                   if self.profile == "palette-weights" else None)
+        fixture = (
+            tempfile.TemporaryDirectory(prefix="npu-live-palette-")
+            if self.profile == "palette-weights"
+            else None
+        )
         try:
             flags = list(PROFILE_ARGS[self.profile])
             if fixture is not None:
@@ -253,8 +381,9 @@ class Controller:
                 values = [rng.randint(-8, 8) for _ in range(64 * 128)]
                 values += [rng.choice((-3, -1, 1, 3)) for _ in range(128 * 64)]
                 values += [rng.randint(-31, 31) for _ in range(64)]
-                path.write_text("NPU1 64 64 128\n" + " ".join(map(str, values)) + "\n",
-                                encoding="ascii")
+                path.write_text(
+                    "NPU1 64 64 128\n" + " ".join(map(str, values)) + "\n", encoding="ascii"
+                )
                 flags += ["--input", str(path)]
             self.session = sim.LiveSession(self.binary, [*flags, "--seed", str(seed)])
             self.telemetry = self.session.receive()  # first snapshot: all files read
@@ -297,8 +426,9 @@ class Controller:
             self._record_stages(value)
         self.slice = slice_delta(start, value)
         if self.slice is not None:
-            self.slices.append({"job": self.jobs_completed + 1, "end_cycle": value["cycles"],
-                                **self.slice})
+            self.slices.append(
+                {"job": self.jobs_completed + 1, "end_cycle": value["cycles"], **self.slice}
+            )
         self.telemetry = value
         if value.get("completed", False):
             if value.get("validated") is not True:
@@ -307,11 +437,14 @@ class Controller:
             self.total_cycles += value["cycles"]
             self.total_macs += value["macs"]
             executed = value.get("executed_macs")
-            self.total_executed_macs = (self.total_executed_macs + executed
-                                        if _count(executed) and self.total_executed_macs is not None
-                                        else None)
-            self.history.appendleft({"job": self.jobs_completed, "profile": self.profile,
-                                     "telemetry": value})
+            self.total_executed_macs = (
+                self.total_executed_macs + executed
+                if _count(executed) and self.total_executed_macs is not None
+                else None
+            )
+            self.history.appendleft(
+                {"job": self.jobs_completed, "profile": self.profile, "telemetry": value}
+            )
 
     def _terminate(self) -> None:
         session, self.session = self.session, None
@@ -345,12 +478,20 @@ class Controller:
         if not isinstance(command, dict) or set(command) - {"action", "profile", "cycles"}:
             raise ValueError("Only action, profile and cycles are accepted.")
         action = command.get("action")
-        if not isinstance(action, str) or action not in {"start", "pause", "resume", "step",
-                                                         "stop", "reset"}:
+        if not isinstance(action, str) or action not in {
+            "start",
+            "pause",
+            "resume",
+            "step",
+            "stop",
+            "reset",
+        }:
             raise ValueError("Unknown control action.")
-        if "profile" in command and (action not in {"start", "reset"}
-                                     or not isinstance(command["profile"], str)
-                                     or command["profile"] not in PROFILES):
+        if "profile" in command and (
+            action not in {"start", "reset"}
+            or not isinstance(command["profile"], str)
+            or command["profile"] not in PROFILES
+        ):
             raise ValueError("Choose a built-in workload profile for start or reset.")
         if "cycles" in command and action != "step":
             raise ValueError("Only step accepts a cycle count.")
@@ -443,22 +584,24 @@ class Handler(BaseHTTPRequestHandler):
         return host in {f"127.0.0.1:{port}", f"localhost:{port}", f"[::1]:{port}"}
 
     def _respond(self, status: int, value, content_type: str = "application/json") -> None:
-        content = value if isinstance(value, bytes) else json.dumps(value, separators=(",", ":")).encode()
+        content = (
+            value if isinstance(value, bytes) else json.dumps(value, separators=(",", ":")).encode()
+        )
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Referrer-Policy", "no-referrer")
-        self.send_header("Content-Security-Policy",
-                         "default-src 'self'; script-src 'self'; style-src 'self'; "
-                         "connect-src 'self'; img-src 'self'; object-src 'none'; "
-                         "base-uri 'none'; frame-ancestors 'none'")
+        self.send_header(
+            "Content-Security-Policy",
+            "default-src 'self'; script-src 'self'; style-src 'self'; "
+            "connect-src 'self'; img-src 'self'; object-src 'none'; "
+            "base-uri 'none'; frame-ancestors 'none'",
+        )
         self.end_headers()
-        try:
+        with contextlib.suppress(BrokenPipeError, ConnectionResetError):
             self.wfile.write(content)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
 
     def do_GET(self) -> None:
         if not self._allowed_host():
@@ -468,13 +611,17 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/state":
             self._respond(200, self.server.controller.snapshot())
         elif path == "/api/profiles":
-            self._respond(200, {name: {**info, "bound": profile_bound(name)}
-                                for name, info in PROFILES.items()})
+            self._respond(
+                200,
+                {name: {**info, "bound": profile_bound(name)} for name, info in PROFILES.items()},
+            )
         elif path in {"/", "/index.html", "/app.js", "/style.css"}:
             name = "index.html" if path == "/" else path[1:]
-            content_type = {"index.html": "text/html; charset=utf-8",
-                            "app.js": "text/javascript; charset=utf-8",
-                            "style.css": "text/css; charset=utf-8"}[name]
+            content_type = {
+                "index.html": "text/html; charset=utf-8",
+                "app.js": "text/javascript; charset=utf-8",
+                "style.css": "text/css; charset=utf-8",
+            }[name]
             self._respond(200, (ROOT / "web" / name).read_bytes(), content_type)
         else:
             self._respond(404, {"error": "Not found."})
@@ -493,7 +640,9 @@ class Handler(BaseHTTPRequestHandler):
             self.close_connection = True
             self._respond(404, {"error": "Not found."})
             return
-        if self.headers.get_content_type() != "application/json" or self.headers.get("Transfer-Encoding"):
+        if self.headers.get_content_type() != "application/json" or self.headers.get(
+            "Transfer-Encoding"
+        ):
             self.close_connection = True
             self._respond(415, {"error": "Send an application/json body of at most 4096 bytes."})
             return
@@ -513,8 +662,14 @@ class Handler(BaseHTTPRequestHandler):
         self._respond(403, {"error": "Cross-origin access is disabled."})
 
 
-def serve(binary: Path, port: int, profile: str = "balanced", autostart: bool = False,
-          open_browser: bool = False, bound: DashboardServer | None = None) -> int:
+def serve(
+    binary: Path,
+    port: int,
+    profile: str = "balanced",
+    autostart: bool = False,
+    open_browser: bool = False,
+    bound: DashboardServer | None = None,
+) -> int:
     controller = Controller(binary)
     server = bound
     browser_timer = None
@@ -524,8 +679,10 @@ def serve(binary: Path, port: int, profile: str = "balanced", autostart: bool = 
             try:
                 server = DashboardServer(("127.0.0.1", port), controller)
             except OSError as error:
-                raise RuntimeError(f"cannot listen on 127.0.0.1:{port}: "
-                                   f"{error.strerror or error}; choose another --port") from error
+                raise RuntimeError(
+                    f"cannot listen on 127.0.0.1:{port}: "
+                    f"{error.strerror or error}; choose another --port"
+                ) from error
         else:
             server.controller = controller
         if autostart:
@@ -534,16 +691,20 @@ def serve(binary: Path, port: int, profile: str = "balanced", autostart: bool = 
         stopping = server
         for signum in (signal.SIGINT, signal.SIGTERM):
             previous_signals[signum] = signal.signal(
-                signum, lambda *_: threading.Thread(target=stopping.shutdown, daemon=True).start())
+                signum, lambda *_: threading.Thread(target=stopping.shutdown, daemon=True).start()
+            )
         print(f"Dashboard: {url} (Ctrl+C to stop)", flush=True)
         if open_browser:
+
             def launch_browser() -> None:
                 import webbrowser
+
                 try:
                     if not webbrowser.open(url, new=2):
                         print(f"Open {url} in a browser.", flush=True)
                 except (OSError, webbrowser.Error):
                     print(f"Open {url} in a browser.", flush=True)
+
             # Let serve_forever start before the browser connects.
             browser_timer = threading.Timer(0.3, launch_browser)
             browser_timer.daemon = True
@@ -571,14 +732,18 @@ def port_number(text: str) -> int:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = cli.Parser("live_dashboard", __doc__)
     cli.add_binary_options(parser, timeout=False)
-    parser.add_argument("--port", type=port_number, default=8765,
-                        help="loopback port; 0 picks a free one")
-    parser.add_argument("--profile", choices=PROFILES, default="balanced",
-                        help="workload started by --autostart")
-    parser.add_argument("--autostart", action="store_true",
-                        help="start --profile when the server starts")
-    parser.add_argument("--open-browser", action="store_true",
-                        help="open the dashboard in the default browser")
+    parser.add_argument(
+        "--port", type=port_number, default=8765, help="loopback port; 0 picks a free one"
+    )
+    parser.add_argument(
+        "--profile", choices=PROFILES, default="balanced", help="workload started by --autostart"
+    )
+    parser.add_argument(
+        "--autostart", action="store_true", help="start --profile when the server starts"
+    )
+    parser.add_argument(
+        "--open-browser", action="store_true", help="open the dashboard in the default browser"
+    )
     args = parser.parse_args(argv)
     return serve(cli.simulator(args), args.port, args.profile, args.autostart, args.open_browser)
 

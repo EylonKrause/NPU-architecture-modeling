@@ -8,11 +8,12 @@ Each directory is tried with and without a ``Release/`` subdirectory (multi-conf
 generators), and with the ``.exe`` suffix on Windows. Paths resolve against the repository
 root, never the current directory.
 """
+
 from __future__ import annotations
 
 import os
-from pathlib import Path
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SIMULATORS = ("npu-sim", "npu-tlm-demo", "npu-transformer-demo", "npu-mobile-demo")
@@ -34,8 +35,11 @@ def default_build_dirs() -> list[Path]:
     dirs = [ROOT / "build-live", ROOT / "build"]
     presets = ROOT / "build"
     if presets.is_dir():
-        dirs += sorted(path for path in presets.iterdir()
-                       if path.is_dir() and not path.name.startswith(("_", ".", "CMakeFiles")))
+        dirs += sorted(
+            path
+            for path in presets.iterdir()
+            if path.is_dir() and not path.name.startswith(("_", ".", "CMakeFiles"))
+        )
     return dirs
 
 
@@ -57,8 +61,11 @@ def find_in(build_dir: Path | str, name: str = "npu-sim") -> Path:
     raise BinaryNotFound(f"{executable_names(name)[0]} not found in {directory}")
 
 
-def find_simulator(name: str = "npu-sim", build_dir: Path | str | None = None,
-                   environ: Mapping[str, str] | None = None) -> Path:
+def find_simulator(
+    name: str = "npu-sim",
+    build_dir: Path | str | None = None,
+    environ: Mapping[str, str] | None = None,
+) -> Path:
     environ = os.environ if environ is None else environ
     variable = environment_variable(name)
     override = environ.get(variable)
@@ -72,12 +79,14 @@ def find_simulator(name: str = "npu-sim", build_dir: Path | str | None = None,
         if path.is_file():
             return path.resolve()
     searched = ", ".join(str(d) for d in dirs[:4]) + (", ..." if len(dirs) > 4 else "")
-    raise BinaryNotFound(f"{name} not found (set ${variable}, pass --binary or --build-dir; "
-                         f"searched {searched})")
+    raise BinaryNotFound(
+        f"{name} not found (set ${variable}, pass --binary or --build-dir; searched {searched})"
+    )
 
 
-def resolve(path: Path | str | None, name: str = "npu-sim",
-            build_dir: Path | str | None = None) -> Path:
+def resolve(
+    path: Path | str | None, name: str = "npu-sim", build_dir: Path | str | None = None
+) -> Path:
     """The given file or build directory, else the default search."""
     if path is None:
         return find_simulator(name, build_dir)
