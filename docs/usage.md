@@ -254,12 +254,26 @@ switch. Descriptions are the `--help` text.
 | `--k` | `shape.k` | `N` | `32` | reduction depth K per group |
 | `--groups` | `shape.groups` | `N` | `1` | independent GEMMs G sharing M; depthwise convolution is G channels, N 1, K kh\*kw |
 | `--seed` | `shape.seed` | `N` | `1` | synthetic-tensor seed; the low 32 bits are used |
+| `--conv-input-h` | `shape.conv.input_h` | `N` | `0` | implicit convolution: NHWC input height; with -w and -c set, the activation operand is the input's im2col view (M = output pixels, K = kernel_h\*kernel_w\*input_c/groups) and panel loads read the input footprint; 0 is a plain GEMM operand |
+| `--conv-input-w` | `shape.conv.input_w` | `N` | `0` | implicit convolution: input width |
+| `--conv-input-c` | `shape.conv.input_c` | `N` | `0` | implicit convolution: input channels, a multiple of `--groups` |
+| `--conv-kernel-h` | `shape.conv.kernel_h` | `N` | `1` | implicit convolution: kernel height |
+| `--conv-kernel-w` | `shape.conv.kernel_w` | `N` | `1` | implicit convolution: kernel width |
+| `--conv-stride-h` | `shape.conv.stride_h` | `N` | `1` | implicit convolution: vertical stride |
+| `--conv-stride-w` | `shape.conv.stride_w` | `N` | `1` | implicit convolution: horizontal stride |
+| `--conv-dilation-h` | `shape.conv.dilation_h` | `N` | `1` | implicit convolution: vertical dilation |
+| `--conv-dilation-w` | `shape.conv.dilation_w` | `N` | `1` | implicit convolution: horizontal dilation |
+| `--conv-pad-top` | `shape.conv.pad_top` | `N` | `0` | implicit convolution: zero-point rows above the input |
+| `--conv-pad-left` | `shape.conv.pad_left` | `N` | `0` | implicit convolution: zero-point columns left of the input |
+| `--conv-pad-bottom` | `shape.conv.pad_bottom` | `N` | `0` | implicit convolution: zero-point rows below the input |
+| `--conv-pad-right` | `shape.conv.pad_right` | `N` | `0` | implicit convolution: zero-point columns right of the input |
 | `--macs-per-cycle` | `arch.compute.macs_per_cycle` | `N` | `64` | vector-datapath MACs per cycle; unused when an array is configured |
 | `--array-rows` | `arch.compute.array_rows` | `N` | `0` | systolic array rows; 0 with `--array-cols` 0 selects the vector datapath |
 | `--array-cols` | `arch.compute.array_cols` | `N` | `0` | systolic array columns |
 | `--dataflow` | `arch.compute.dataflow` | `os\|ws` | `os` | array dataflow, needs `--array-rows`/`--array-cols`: os holds an output block in the PEs and streams K; ws holds a weight block and streams the tile's rows |
 | `--pipeline-cycles` | `arch.compute.pipeline_cycles` | `N` | `4` | fixed cycles charged per reduction panel on top of MAC and decode time |
 | `--weight-decode-values-per-cycle` | `arch.compute.weight_decode_values_per_cycle` | `N` | `16` | compressed-weight decoder throughput in values per cycle |
+| `--depthwise-macs-per-cycle` | `arch.compute.depthwise_macs_per_cycle` | `N` | `0` | channel-wise datapath for depthwise problems (groups > 1, N 1): tiles span tile_n consecutive groups and a panel takes ceil(M_t\*C_t\*K_p / rate) + pipeline cycles; 0 runs them as grouped GEMMs on the MAC datapath |
 | `--memory-model` | `arch.memory.model` | `serial\|axi` | `serial` | serial: one DMA server alternating reads and writes, one transfer at a time; axi: independent read and write channels with outstanding bursts and a shared DRAM rate |
 | `--memory-bytes-per-cycle` | `arch.memory.bytes_per_cycle` | `N` | `16` | serial model: DMA bytes transferred per cycle |
 | `--memory-latency` | `arch.memory.latency` | `N` | `12` | serial model: cycles charged once per DMA burst |
@@ -271,8 +285,9 @@ switch. Descriptions are the `--help` text.
 | `--axi-write-outstanding` | `arch.memory.axi.write_outstanding` | `N` | `4` | axi model: write bursts in flight, 1..64 |
 | `--axi-read-latency` | `arch.memory.axi.read_latency` | `N` | `12` | axi model: cycles from AR issue to the first R beat |
 | `--axi-write-latency` | `arch.memory.axi.write_latency` | `N` | `12` | axi model: cycles from the last W beat to the B response |
-| `--sram-bytes` | `arch.sram_bytes` | `N` | `262144` | SRAM capacity for tile slots plus the weight cache |
+| `--sram-bytes` | `arch.sram_bytes` | `N` | `262144` | SRAM capacity for tile slots plus the weight and activation caches |
 | `--weight-cache-bytes` | `arch.weight_cache_bytes` | `N` | `0` | LRU weight-panel cache capacity; 0 disables it |
+| `--activation-cache-bytes` | `arch.activation_cache_bytes` | `N` | `0` | LRU activation-panel cache capacity, keyed by group or channel tile, row tile and reduction panel, so column tiles of a row tile reuse its panels; 0 disables it |
 | `--frequency-mhz` | `arch.frequency_mhz` | `X` | `200` | clock used to convert cycles to modeled time |
 | `--cores` | `arch.cores` | `N` | `1` | core pipelines, 1..64, each with its own slots, SRAM, weight cache and AXI port; all share one DRAM timeline, so more than one needs `--memory-model` axi |
 | `--tile-m` | `mapping.tile_m` | `N` | `8` | output tile rows |
