@@ -137,9 +137,9 @@ def resnet50_v15():
         out = width * 4
         p = "layer%d.0" % stage
         L.append(conv(p + ".conv1", h, h, cin, width, 1, 1, 0,
-                      note="v1.5: stride 1 here, at the INPUT resolution" if stride == 2 else None))
+                      note="v1.5: stride 1, at the input resolution" if stride == 2 else None))
         L.append(conv(p + ".conv2", h, h, width, width, 3, stride, 1,
-                      note="v1.5: stride lives in the 3x3" if stride == 2 else None))
+                      note="v1.5: the block's stride 2 is in this 3x3" if stride == 2 else None))
         ho = L[-1]["out_h"]
         L.append(conv(p + ".conv3", ho, ho, width, out, 1, 1, 0))
         L.append(conv(p + ".downsample", h, h, cin, out, 1, stride, 0))
@@ -173,11 +173,11 @@ def llama(m, kv_len, phase):
     L.append(mm("q_proj", m, H * hd, d, repeat=nl))
     L.append(mm("k_proj", m, KV * hd, d, repeat=nl, note="GQA: 8 KV heads x 64 = 512"))
     L.append(mm("v_proj", m, KV * hd, d, repeat=nl, note="GQA: 8 KV heads x 64 = 512"))
-    causal = (" Causal mask: only %d of %d score entries are live (%.1f%%)."
+    causal = ("; causal mask: %d of %d score entries live (%.1f%%)"
               % (m * (m + 1) // 2, m * kv_len, 100.0 * m * (m + 1) / 2 / (m * kv_len))
               if phase == "prefill" else "")
     L.append(attention("attn_scores_QKt", m, kv_len, hd, H, KV, nl,
-                       note="per query head; 4 query heads share each KV head." + causal))
+                       note="per query head; 4 query heads share each KV head" + causal))
     L.append(attention("attn_context_PV", m, hd, kv_len, H, KV, nl,
                        note="per query head; 4 query heads share each KV head"))
     L.append(mm("o_proj", m, d, H * hd, repeat=nl))
@@ -260,7 +260,7 @@ def build():
               "notes": "alpha=1.0, 224x224x3, batch 1. Table 2 (t,c,n,s): (1,16,1,1) (6,24,2,2) "
                        "(6,32,3,2) (6,64,4,2) (6,96,3,1) (6,160,3,2) (6,320,1,1). The first block "
                        "(t=1) has no expansion conv. Stride applies to the first block of each "
-                       "sequence, in the 3x3 depthwise. Expansion t multiplies the block INPUT "
+                       "sequence, in the 3x3 depthwise. Expansion t multiplies the block input "
                        "channels. BN folded into bias; ReLU6 after expand and depthwise, linear "
                        "after project. Residual add when stride 1 and in_c == out_c (10 adds).",
               "layers": L, "vector_ops": V, "totals": t})
@@ -287,11 +287,11 @@ def build():
                          "https://docs.pytorch.org/vision/main/models/generated/torchvision.models.resnet50.html",
                          "https://catalog.ngc.nvidia.com/orgs/nvidia/resources/resnet_50_v1_5_for_pytorch"],
               "notes": "224x224x3, batch 1. Stages (bottleneck width, blocks, stride): (64,3,1) "
-                       "(128,4,2) (256,6,2) (512,3,2); expansion 4. v1.5 = stride in the 3x3 conv2, "
-                       "not the first 1x1 (torchvision/NVIDIA/MLPerf). Projection shortcut (1x1, "
-                       "stride s) on the first block of every stage. BN folded into bias. 7x7/s2 "
-                       "stem + 3x3/s2 maxpool. Layers with repeat > 1 are the identical blocks 2..n "
-                       "of a stage.",
+                       "(128,4,2) (256,6,2) (512,3,2); expansion 4. v1.5 (torchvision/NVIDIA/"
+                       "MLPerf) puts the stride in the 3x3 conv2; v1 puts it in the first 1x1. "
+                       "Projection shortcut (1x1, stride s) on the first block of every stage. BN "
+                       "folded into bias. 7x7/s2 stem + 3x3/s2 maxpool. Layers with repeat > 1 are "
+                       "the identical blocks 2..n of a stage.",
               "layers": L, "vector_ops": V, "totals": t})
     c = LLAMA
     per_layer_w = (c["hidden"] * c["heads"] * c["head_dim"] * 2
@@ -327,9 +327,9 @@ def build():
                                        "Decode of the first generated token after a 128-token "
                                        "prompt (KV length 129), batch 1: every projection is a "
                                        "GEMV (M=1), so the step is weight-bandwidth bound. ")
-                  + "Attention matmuls (b_operand=activations) read the KV cache, not weights. "
-                    "repeat = 16 layers (x32 heads for attention matmuls). The INT8 KV cache for "
-                    "this context is in totals.",
+                  + "Attention matmuls (b_operand=activations) take their B operand from the KV "
+                    "cache. repeat = 16 layers (x32 heads for attention matmuls). The INT8 KV "
+                    "cache for this context is in totals.",
                   "layers": L, "vector_ops": V, "totals": t})
     L, V = bert_layer(128)
     t = totals(L)
