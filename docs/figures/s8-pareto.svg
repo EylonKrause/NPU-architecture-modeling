@@ -119,15 +119,15 @@
 <line x1="264.96" y1="60" x2="264.96" y2="446" stroke="#52514e" stroke-width="1.25" stroke-dasharray="5 4"/>
 </g>
 <text x="269.96" y="73" font-size="11" fill="#52514e">mobile-2k SRAM 267 KiB</text>
-<g transform="translate(523.36,68)">
-<rect width="262.64" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
-<circle cx="18" cy="14.5" r="4" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
-<text x="34" y="18.7" font-size="12" fill="#0b0b0b">feasible mapping</text>
-<line x1="8" y1="33.5" x2="28" y2="33.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
-<text x="34" y="37.7" font-size="12" fill="#0b0b0b">Pareto front</text>
-<polygon points="18,47.5 23,52.5 18,57.5 13,52.5" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
-<text x="34" y="56.7" font-size="12" fill="#0b0b0b">npuperf.mapper, cache off</text>
-<polygon points="18,66.9 22.6,74.95 13.4,74.95" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
-<text x="34" y="75.7" font-size="12" fill="#0b0b0b">npuperf.mapper, free SRAM as caches</text>
+<g transform="translate(507.36,68)">
+<rect width="278.64" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<circle cx="24" cy="14.5" r="4" fill="none" stroke="#6f6e69" stroke-width="1.75"/>
+<text x="50" y="18.7" font-size="12" fill="#0b0b0b">feasible mapping</text>
+<line x1="6" y1="33.5" x2="42" y2="33.5" stroke="#2a78d6" stroke-width="2" stroke-linecap="round"/>
+<text x="50" y="37.7" font-size="12" fill="#0b0b0b">Pareto front</text>
+<polygon points="24,47.5 29,52.5 24,57.5 19,52.5" fill="#eb6834" stroke="#ffffff" stroke-width="1.5"/>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">npuperf.mapper, cache off</text>
+<polygon points="24,66.9 28.6,74.95 19.4,74.95" fill="#1baf7a" stroke="#ffffff" stroke-width="1.5"/>
+<text x="50" y="75.7" font-size="12" fill="#0b0b0b">npuperf.mapper, free SRAM as caches</text>
 </g>
 </svg>

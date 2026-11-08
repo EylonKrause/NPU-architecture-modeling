@@ -52,7 +52,7 @@
 <text x="21.2" y="303" font-size="13" fill="#0b0b0b" text-anchor="middle" dominant-baseline="middle" transform="rotate(-90 21.2 303)">weight-stationary utilisation</text>
 <g clip-path="url(#s5-plot)">
 <path d="M62.04,546 L796,60" fill="none" stroke="#6f6e69" stroke-width="1" stroke-linejoin="round" stroke-linecap="round" stroke-dasharray="4 4"/>
-<circle cx="593.53" cy="90.38" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="605.3" cy="90.38" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="608.94" cy="84.61" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="608.94" cy="84.61" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="606.43" cy="74.73" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
@@ -61,50 +61,50 @@
 <circle cx="606.43" cy="74.73" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="606.43" cy="88.59" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="646.82" cy="97.38" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="653.43" cy="105.34" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="664.79" cy="94.07" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="664.79" cy="86.24" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="674.19" cy="105.34" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="669.46" cy="94.07" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="680.63" cy="81.5" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="692.64" cy="74.73" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="646.82" cy="114" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="653.43" cy="114" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="681.44" cy="74.73" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="664.79" cy="101.19" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="671.03" cy="101.19" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="681.44" cy="88.59" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="660.19" cy="114" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="699.51" cy="178.85" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="718.17" cy="128.06" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="758" cy="85.2" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="653.43" cy="121.85" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="758" cy="72.94" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="756.26" cy="85.2" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="758" cy="92.03" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="586.74" cy="206.27" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="580.96" cy="242.6" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="736.14" cy="72.94" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="737.77" cy="111.07" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="737.77" cy="111.07" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="563.28" cy="206.27" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="595.06" cy="231.7" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="749.01" cy="104.81" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="772.63" cy="82.63" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<circle cx="772.63" cy="82.19" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<circle cx="773.09" cy="82.19" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="641.33" cy="262.28" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="751.56" cy="102.45" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="386.36" cy="342.71" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <circle cx="688.35" cy="330.5" r="4.5" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
 <rect x="608.11" y="75.39" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
 <rect x="694.99" y="62.61" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
-<rect x="760.37" y="62.61" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
+<rect x="770.74" y="62.61" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
 <rect x="781.38" y="66.27" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
-<rect x="617.5" y="198.89" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
+<rect x="692.96" y="198.89" width="8.1" height="8.1" fill="none" stroke="#eb6834" stroke-width="1.75"/>
 <polygon points="775.97,110.78 781.14,119.83 770.79,119.83" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
 <polygon points="83.88,525.92 89.5,531.55 83.88,537.17 78.25,531.55" fill="none" stroke="#eda100" stroke-width="1.75"/>
 <polygon points="83.74,526.01 89.36,531.64 83.74,537.26 78.11,531.64" fill="none" stroke="#eda100" stroke-width="1.75"/>
 </g>
 <text x="290.23" y="414.2" font-size="12" fill="#6f6e69">equal</text>
 <g transform="translate(72.04,68)">
-<rect width="225.32" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
-<circle cx="18" cy="14.5" r="4" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
-<text x="34" y="18.7" font-size="12" fill="#0b0b0b">pointwise (70 layers, 34 shapes)</text>
-<rect x="14.4" y="29.9" width="7.2" height="7.2" fill="none" stroke="#eb6834" stroke-width="1.75"/>
-<text x="34" y="37.7" font-size="12" fill="#0b0b0b">3x3 (17 layers, 5 shapes)</text>
-<polygon points="18,47.9 22.6,55.95 13.4,55.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
-<text x="34" y="56.7" font-size="12" fill="#0b0b0b">7x7 (1 layer, 1 shape)</text>
-<polygon points="18,66.5 23,71.5 18,76.5 13,71.5" fill="none" stroke="#eda100" stroke-width="1.75"/>
-<text x="34" y="75.7" font-size="12" fill="#0b0b0b">FC (2 layers, 2 shapes)</text>
+<rect width="241.32" height="86" rx="3" fill="#ffffff" fill-opacity="0.92" stroke="#e6e5df"/>
+<circle cx="24" cy="14.5" r="4" fill="none" stroke="#2a78d6" stroke-width="1.75"/>
+<text x="50" y="18.7" font-size="12" fill="#0b0b0b">pointwise (70 layers, 34 shapes)</text>
+<rect x="20.4" y="29.9" width="7.2" height="7.2" fill="none" stroke="#eb6834" stroke-width="1.75"/>
+<text x="50" y="37.7" font-size="12" fill="#0b0b0b">3x3 (17 layers, 5 shapes)</text>
+<polygon points="24,47.9 28.6,55.95 19.4,55.95" fill="none" stroke="#1baf7a" stroke-width="1.75"/>
+<text x="50" y="56.7" font-size="12" fill="#0b0b0b">7x7 (1 layer, 1 shape)</text>
+<polygon points="24,66.5 29,71.5 24,76.5 19,71.5" fill="none" stroke="#eda100" stroke-width="1.75"/>
+<text x="50" y="75.7" font-size="12" fill="#0b0b0b">FC (2 layers, 2 shapes)</text>
 </g>
 </svg>

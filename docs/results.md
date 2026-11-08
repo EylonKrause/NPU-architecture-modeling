@@ -8,33 +8,37 @@ figure in [figures/](figures) are rewritten by that command; do not edit them by
 
 GEMM layers of each network on each design point, tiles, cache split and lowering from
 `npuperf.mapper`. Every point holds every tensor in DRAM; `edge-256` reaches it through one
-64-bit port at Vela's `Ethos_U65_Mid_End` DRAM figures, where Arm's Corstone-300 reference
-platform for the Ethos-U55 places the model and tensor arena by default
-([`platform.ld`, tag 26.08][corstone]).
+64-bit port at Vela's `Ethos_U65_Mid_End` DRAM figures in NPU cycles, where Arm's
+Corstone-300 reference platform for the Ethos-U55 places the model and tensor arena by
+default ([`platform.ld`, tag 26.08][corstone]).
 
 A convolution reads its NHWC input footprint (`npuperf.workloads` conv geometry): per input
 row the hull of the columns its output pixels need, once per reduction panel, not the
 materialised im2col matrix. A 1x1 convolution may instead run on its plain operand, whose
 rows are its input pixels, when the mapper finds that faster. Depthwise layers run on each
-point's depthwise datapath, at the rate S9 sizes. DRAM bytes count whole AXI beats: a
-partial beat moves, and is charged, in full. MAC utilisation divides by the array's peak,
-the depthwise layers' MACs included.
+point's depthwise datapath: on `edge-256` and `mobile-2k` at the 3x3 rate of Arm's
+performance model of the part, on the clusters at the rate S9 sizes. DRAM bytes count whole
+AXI beats: a partial beat moves, and is charged, in full. MAC utilisation divides by the
+array's peak, the depthwise layers' MACs included. A layer counts as compute-bound when its
+busiest core's compute-busy cycles exceed that core's memory time
+(`analytic.observed_bound`), whatever its MAC utilisation: on the clusters such a layer can
+have fewer work units than cores, and the idle cores keep its utilisation low.
 
 <!-- generated:s1-networks -->
 | Design point | Network | Weights (MB) | Latency (ms) | Inferences/s | Achieved TOP/s | MAC utilisation | DRAM MB/inference | Compute-bound layers | Memory-bound layers |
 |---|---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `edge-256` | MobileNetV2 | 3.47 | 10.5 | 95.5 | 0.0575 | 11.2% | 24.7 | 6% | 94% |
-| `edge-256` | ResNet-50 v1.5 | 25.5 | 66.5 | 15.0 | 0.123 | 24.0% | 184 | 0% | 100% |
-| `edge-256` | BERT-base layer | 7.08 | 13.7 | 72.7 | 0.135 | 26.5% | 35.4 | 0% | 100% |
-| `mobile-2k` | MobileNetV2 | 3.47 | 1.43 | 698 | 0.420 | 10.3% | 19.3 | 0% | 100% |
-| `mobile-2k` | ResNet-50 v1.5 | 25.5 | 4.34 | 231 | 1.89 | 46.0% | 64.4 | 22% | 78% |
+| `edge-256` | MobileNetV2 | 3.47 | 8.09 | 124 | 0.0743 | 14.5% | 25.1 | 0% | 100% |
+| `edge-256` | ResNet-50 v1.5 | 25.5 | 46.3 | 21.6 | 0.177 | 34.5% | 186 | 11% | 89% |
+| `edge-256` | BERT-base layer | 7.08 | 10.1 | 99.3 | 0.185 | 36.1% | 35.4 | 0% | 100% |
+| `mobile-2k` | MobileNetV2 | 3.47 | 1.40 | 714 | 0.430 | 10.5% | 18.8 | 0% | 100% |
+| `mobile-2k` | ResNet-50 v1.5 | 25.5 | 4.30 | 233 | 1.90 | 46.5% | 62.7 | 33% | 67% |
 | `mobile-2k` | BERT-base layer | 7.08 | 0.766 | 1,305 | 2.43 | 59.3% | 10.5 | 0% | 100% |
-| `client-16c` | MobileNetV2 | 3.47 | 0.276 | 3,629 | 2.18 | 5.6% | 23.4 | 0% | 100% |
-| `client-16c` | ResNet-50 v1.5 | 25.5 | 0.940 | 1,064 | 8.70 | 22.1% | 79.1 | 19% | 81% |
-| `client-16c` | BERT-base layer | 7.08 | 0.170 | 5,876 | 10.9 | 27.8% | 15.1 | 0% | 100% |
-| `workstation-32c` | MobileNetV2 | 3.47 | 0.123 | 8,139 | 4.90 | 6.2% | 31.4 | 0% | 100% |
-| `workstation-32c` | ResNet-50 v1.5 | 25.5 | 0.414 | 2,415 | 19.8 | 25.1% | 131 | 17% | 83% |
-| `workstation-32c` | BERT-base layer | 7.08 | 0.0671 | 14,911 | 27.8 | 35.3% | 31.2 | 0% | 100% |
+| `client-16c` | MobileNetV2 | 3.47 | 0.270 | 3,710 | 2.23 | 5.7% | 22.9 | 0% | 100% |
+| `client-16c` | ResNet-50 v1.5 | 25.5 | 0.916 | 1,091 | 8.93 | 22.7% | 76.3 | 19% | 81% |
+| `client-16c` | BERT-base layer | 7.08 | 0.170 | 5,886 | 11.0 | 27.9% | 15.1 | 0% | 100% |
+| `workstation-32c` | MobileNetV2 | 3.47 | 0.123 | 8,141 | 4.90 | 6.2% | 31.4 | 0% | 100% |
+| `workstation-32c` | ResNet-50 v1.5 | 25.5 | 0.406 | 2,464 | 20.1 | 25.6% | 130 | 22% | 78% |
+| `workstation-32c` | BERT-base layer | 7.08 | 0.0657 | 15,229 | 28.4 | 36.1% | 30.4 | 0% | 100% |
 <!-- end:s1-networks -->
 
 MobileNetV2 with and without its depthwise layers. Burst efficiency is payload bytes over
@@ -44,21 +48,24 @@ without the depthwise datapath, its depthwise layers on the array on their im2co
 <!-- generated:s1-depthwise -->
 | Design point | Depthwise MAC/cycle per core | MobileNetV2 latency (ms) | Depthwise share of cycles | Depthwise share of DRAM bytes | Depthwise read burst efficiency | Depthwise write burst efficiency | Latency without depthwise (ms) | MAC utilisation without depthwise |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `edge-256` | 8 | 10.5 | 39.3% | 43.6% | 100.0% | 100.0% | 6.36 | 17.2% |
-| `mobile-2k` | 128 | 1.43 | 36.6% | 40.9% | 100.0% | 97.3% | 0.909 | 15.1% |
-| `client-16c` | 128 | 0.276 | 32.0% | 33.0% | 100.0% | 97.3% | 0.187 | 7.6% |
+| `edge-256` | 24 | 8.09 | 35.2% | 43.2% | 100.0% | 100.0% | 5.24 | 20.9% |
+| `mobile-2k` | 192 | 1.40 | 35.4% | 39.2% | 100.0% | 97.3% | 0.905 | 15.1% |
+| `client-16c` | 128 | 0.270 | 32.6% | 32.7% | 100.0% | 97.3% | 0.182 | 7.8% |
 | `workstation-32c` | 128 | 0.123 | 27.5% | 35.7% | 100.0% | 97.3% | 0.0890 | 8.0% |
 <!-- end:s1-depthwise -->
 
-Llama-3.2-1B decode (KV length 129) and prefill (S = 128), batch 1.
+Llama-3.2-1B decode (KV length 129) and prefill (S = 128), batch 1. Two mapping checks stop
+the study: INT8 decode on a point may not run slower than with half its SRAM per core, whose
+every tiling the full SRAM also holds, and INT4 may not speed decode up by more than 2x, as it
+halves only the weight bytes.
 
 <!-- generated:s1-llm -->
 | Design point | Decode tokens/s INT8 | Decode tokens/s INT4 | INT4 speedup | Decode DRAM MB/token INT8 | Decode DRAM rate used INT8 | Prefill TTFT INT8 (ms) | Prefill TTFT INT4 (ms) | Prefill MAC utilisation INT8 |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `edge-256` | 2.83 | 5.70 | 2.02x | 1,241 | 87.8% | 1,990 | 1,015 | 24.7% |
+| `edge-256` | 5.05 | 9.85 | 1.95x | 1,241 | 78.3% | 1,453 | 746 | 33.8% |
 | `mobile-2k` | 17.1 | 33.5 | 1.96x | 1,241 | 88.4% | 107 | 79.6 | 57.6% |
-| `client-16c` | 70.2 | 150 | 2.14x | 1,244 | 72.8% | 22.9 | 14.2 | 27.9% |
-| `workstation-32c` | 447 | 746 | 1.67x | 1,250 | 69.8% | 5.02 | 4.34 | 63.7% |
+| `client-16c` | 89.4 | 169 | 1.89x | 1,246 | 92.8% | 21.8 | 13.5 | 29.3% |
+| `workstation-32c` | 449 | 755 | 1.68x | 1,250 | 70.2% | 5.02 | 4.34 | 63.7% |
 <!-- end:s1-llm -->
 
 ## S2. Roofline per design point
@@ -101,14 +108,14 @@ Speedup over one core for m and n partitions at the client and workstation DRAM 
 <!-- generated:s4-scaling -->
 | Layer | Partition | DRAM B/cycle | 2 cores | 4 cores | 8 cores | 16 cores | 32 cores | DRAM ceiling |
 |---|---|---:|---:|---:|---:|---:|---:|---:|
-| ResNet-50 res3 3x3 conv | m | 100 | 1.80 | 3.30 | 5.03 | 5.03 | 5.03 | 34.93 |
-| ResNet-50 res3 3x3 conv | n | 100 | 1.98 | 3.79 | 3.79 | 3.79 | 3.79 | 34.93 |
-| ResNet-50 res3 3x3 conv | m | 667 | 1.80 | 3.32 | 5.72 | 10.37 | 12.04 | 232.91 |
-| ResNet-50 res3 3x3 conv | n | 667 | 1.98 | 3.84 | 3.84 | 3.84 | 3.84 | 232.91 |
+| ResNet-50 res3 3x3 conv | m | 100 | 1.78 | 3.25 | 5.11 | 5.11 | 5.11 | 34.40 |
+| ResNet-50 res3 3x3 conv | n | 100 | 1.95 | 3.73 | 3.73 | 3.73 | 3.73 | 34.40 |
+| ResNet-50 res3 3x3 conv | m | 667 | 1.78 | 3.27 | 5.63 | 10.21 | 12.36 | 229.33 |
+| ResNet-50 res3 3x3 conv | n | 667 | 1.95 | 3.78 | 3.78 | 3.78 | 3.78 | 229.33 |
 | Llama-3.2-1B gate_proj GEMV INT4 | m | 100 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 6.35 |
-| Llama-3.2-1B gate_proj GEMV INT4 | n | 100 | 1.99 | 3.92 | 4.31 | 5.33 | 5.63 | 6.35 |
+| Llama-3.2-1B gate_proj GEMV INT4 | n | 100 | 1.99 | 3.92 | 5.44 | 5.71 | 5.87 | 6.35 |
 | Llama-3.2-1B gate_proj GEMV INT4 | m | 667 | 1.00 | 1.00 | 1.00 | 1.00 | 1.00 | 42.37 |
-| Llama-3.2-1B gate_proj GEMV INT4 | n | 667 | 1.99 | 3.94 | 7.71 | 15.00 | 26.99 | 42.37 |
+| Llama-3.2-1B gate_proj GEMV INT4 | n | 667 | 1.99 | 3.94 | 7.71 | 15.00 | 27.12 | 42.37 |
 <!-- end:s4-scaling -->
 
 ## S5. Dataflow
@@ -124,8 +131,8 @@ not in the table.
 <!-- generated:s5-dataflow -->
 | Layer type | Layers | Distinct shapes | MACs (M) | OS array utilisation | WS array utilisation | OS end-to-end | WS end-to-end |
 |---|---:|---:|---:|---:|---:|---:|---:|
-| pointwise | 70 | 34 | 2,387 | 86.6% | 93.4% | 75.4% | 79.9% |
-| 3x3 | 17 | 5 | 1,861 | 88.8% | 97.7% | 81.5% | 87.5% |
+| pointwise | 70 | 34 | 2,387 | 86.2% | 92.8% | 76.4% | 80.1% |
+| 3x3 | 17 | 5 | 1,861 | 89.1% | 97.7% | 81.7% | 87.5% |
 | 7x7 | 1 | 1 | 118 | 97.3% | 88.5% | 88.1% | 84.2% |
 | FC | 2 | 2 | 3.33 | 3.0% | 3.0% | 2.4% | 2.4% |
 <!-- end:s5-dataflow -->
@@ -144,9 +151,11 @@ points sit outside the dense set, with 500-cycle reads, 64 outstanding reads, an
 as an aggregate byte bound, so it misses the queueing of channels and cores on one DRAM
 timeline. On the design points the estimate falls below npu-sim on most layers and on every
 cluster layer. `schedule()` replays that queueing request by request and matches npu-sim on
-every run. `npuperf.mapper` ranks its candidates by the `analyze()` estimate and replays the
-four best with `schedule()`, keeping the fewest cycles; `tests/mapper_tests.py` holds its pick
-for ResNet-50 res3 3x3 on `mobile-2k`, caches off, within 10% of the fastest mapping of a
+every run. `npuperf.mapper` ranks its candidates by the `analyze()` estimate and replays them
+with `schedule()` in that order, skipping a candidate whose `analyze()` lower bound cannot
+beat the fewest cycles so far, so it keeps the fastest replay of its whole candidate set;
+`tests/mapper_tests.py` checks that on a GEMV and a convolution, and holds the pick for
+ResNet-50 res3 3x3 on `mobile-2k`, caches off, within 10% of the fastest mapping of a
 48-point npu-sim search.
 
 ![analytic vs SystemC](figures/s6-analytic.svg)
@@ -158,10 +167,10 @@ for ResNet-50 res3 3x3 on `mobile-2k`, caches off, within 10% of the fastest map
 | random axi | 83 | 0.0% | 14.2% | 26.8% | 40/83 | 82/83 | 83/83 | 83/83 |
 | random axi cluster | 37 | 0.5% | 20.9% | 44.8% | 28/37 | 36/37 | 37/37 | 37/37 |
 | random conv | 80 | 0.1% | 18.7% | 29.1% | 49/80 | 80/80 | 80/80 | 80/80 |
-| `edge-256` network layers | 82 | 0.1% | 27.9% | 35.0% | 44/82 | 82/82 | 82/82 | 82/82 |
-| `mobile-2k` network layers | 82 | 5.1% | 28.1% | 32.7% | 54/82 | 77/82 | 82/82 | 82/82 |
-| `client-16c` network layers | 82 | 23.8% | 34.3% | 39.5% | 82/82 | 80/82 | 82/82 | 82/82 |
-| `workstation-32c` network layers | 82 | 7.9% | 26.1% | 30.0% | 82/82 | 74/82 | 82/82 | 82/82 |
+| `edge-256` network layers | 82 | 0.0% | 31.9% | 36.5% | 38/82 | 82/82 | 82/82 | 82/82 |
+| `mobile-2k` network layers | 82 | 0.1% | 27.7% | 32.7% | 51/82 | 77/82 | 82/82 | 82/82 |
+| `client-16c` network layers | 82 | 19.2% | 33.2% | 37.8% | 82/82 | 78/82 | 82/82 | 82/82 |
+| `workstation-32c` network layers | 82 | 6.9% | 23.4% | 28.5% | 82/82 | 75/82 | 82/82 | 82/82 |
 <!-- end:s6-analytic -->
 
 ## S7. Weight compression for LLM decode
@@ -177,10 +186,10 @@ rows, which run each layer whole. The figure divides by dense INT4.
 <!-- generated:s7-compression -->
 | Design point | Dense INT8 | Dense INT4 | Palette, 4/cycle | Palette, 8/cycle | Palette, 16/cycle | Palette, 32/cycle | Palette, 64/cycle | Palette, 128/cycle | Palette, 256/cycle |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|---:|
-| `edge-256` | 2.83 | 5.70 | 3.22 | 5.46 | 5.69 | 5.69 | 5.69 | 5.69 | 5.69 |
+| `edge-256` | 5.05 | 9.84 | 3.23 | 6.43 | 9.83 | 9.83 | 9.83 | 9.83 | 9.83 |
 | `mobile-2k` | 17.1 | 33.4 | 3.23 | 6.45 | 12.9 | 25.5 | 33.4 | 33.4 | 33.4 |
-| `client-16c` | 70.5 | 157 | 61.0 | 120 | 155 | 156 | 156 | 156 | 156 |
-| `workstation-32c` | 441 | 721 | 117 | 230 | 443 | 716 | 716 | 716 | 716 |
+| `client-16c` | 89.1 | 168 | 61.0 | 120 | 159 | 167 | 167 | 167 | 167 |
+| `workstation-32c` | 443 | 728 | 117 | 230 | 443 | 726 | 726 | 726 | 726 |
 <!-- end:s7-compression -->
 
 ## S8. Mapping search Pareto front
@@ -216,42 +225,56 @@ footprint, where tile_k is 0 or whole kernel rows (3 x 128 = 384 B).
 
 ## S9. Depthwise datapath rate
 
-No public figure gives a depthwise datapath's rate, so this study sizes it. MobileNetV2 runs on
-each point with the rate swept over powers of two from 1 MAC/cycle per core to the core's
-array MACs, tiles from the mapper at every rate; the first row runs the depthwise layers as
-grouped GEMMs on the array on their im2col operand instead, the lowering the studies used
-before the datapath existed. The rule: each point takes the smallest swept rate at which
-MobileNetV2 runs within 5% of its latency at the array-wide rate. The configs set the picked
-rate, and the study stops when one disagrees. Cells give latency in ms and, in brackets, the
-depthwise layers' share of cycles.
+Arm's performance models give the depthwise rate of the parts `edge-256` and `mobile-2k` are
+sized from. Vela 5.2.0 runs the Ethos-U55-256's depthwise on its 2x2x8 output microblock, and
+its Regor compiler the Ethos-U85-2048's on its 4x4x16 one; both take 4 cycles per microblock
+for each step of 4 kernel taps ([`npu_performance.py`][vela-perf],
+[`ethos_u85_performance.cpp`][regor-perf]). That is 32 and 256 MAC/cycle, and 24 and 192 for
+a 3x3 kernel, whose 9 taps take 3 steps; the two points take the 3x3 rates, since npu-sim's
+datapath has no kernel step and every depthwise layer of the workloads is 3x3. Apple
+publishes no Neural Engine microarchitecture, so this study sizes the clusters' rate by a
+latency rule, and reports the same rule on the Arm-sized points beside their Arm-model rate.
+
+MobileNetV2 runs on each point with the rate swept over powers of two from 1 MAC/cycle per
+core to the core's array MACs, and at the configured rate, tiles from the mapper at every
+rate; the first row runs the depthwise layers as grouped GEMMs on the array on their im2col
+operand instead, the lowering the studies used before the datapath existed. The rule: the
+smallest swept rate at which MobileNetV2 runs within 5% of its latency at the array-wide
+rate, the narrowest datapath that costs the network little on the point's own memory system.
+Arm's models give a rate only for Arm's microblocks; the rule needs no microarchitecture, so
+it serves the clusters. The configs set the Arm-model rate where there is one and the rule's
+rate on the clusters, and the study stops when one disagrees. Cells give latency in ms and,
+in brackets, the depthwise layers' share of cycles.
 
 ![depthwise rate](figures/s9-depthwise.svg)
 
 <!-- generated:s9-depthwise -->
 | Depthwise MAC/cycle per core | `edge-256` | `mobile-2k` | `client-16c` | `workstation-32c` |
 |---|---:|---:|---:|---:|
-| none: grouped GEMM on the array, im2col | 109 (94%) | 22.2 (96%) | 1.88 (90%) | 0.721 (88%) |
-| 1 | 27.1 (77%) | 21.6 (96%) | 1.34 (86%) | 0.712 (87%) |
-| 2 | 16.8 (62%) | 11.3 (92%) | 0.776 (76%) | 0.408 (78%) |
-| 4 | 11.8 (46%) | 6.11 (85%) | 0.504 (63%) | 0.256 (65%) |
-| 8 | 10.5 (39%) | 3.52 (74%) | 0.363 (48%) | 0.182 (51%) |
-| 16 | 10.3 (38%) | 2.23 (59%) | 0.314 (40%) | 0.148 (40%) |
-| 32 | 10.2 (38%) | 1.68 (46%) | 0.291 (36%) | 0.133 (33%) |
-| 64 | 10.1 (37%) | 1.48 (39%) | 0.280 (33%) | 0.127 (30%) |
-| 128 | 10.0 (37%) | 1.43 (37%) | 0.276 (32%) | 0.123 (28%) |
-| 256 | 10.0 (36%) | 1.40 (35%) | 0.270 (31%) | 0.121 (26%) |
-| 512 |  | 1.39 (34%) | 0.267 (30%) | 0.119 (25%) |
-| 1,024 |  | 1.37 (34%) | 0.266 (30%) | 0.119 (25%) |
-| 2,048 |  | 1.37 (34%) |  |  |
+| none: grouped GEMM on the array, im2col | 107 (95%) | 22.2 (96%) | 1.80 (90%) | 0.721 (88%) |
+| 1 | 26.0 (80%) | 21.6 (96%) | 1.33 (86%) | 0.712 (87%) |
+| 2 | 15.6 (66%) | 11.3 (92%) | 0.770 (76%) | 0.408 (78%) |
+| 4 | 10.5 (50%) | 6.11 (85%) | 0.490 (63%) | 0.256 (65%) |
+| 8 | 8.45 (38%) | 3.52 (74%) | 0.357 (49%) | 0.182 (51%) |
+| 16 | 8.15 (36%) | 2.22 (59%) | 0.306 (41%) | 0.148 (40%) |
+| 24 | 8.09 (35%) |  |  |  |
+| 32 | 8.06 (35%) | 1.64 (45%) | 0.284 (36%) | 0.133 (33%) |
+| 64 | 7.94 (34%) | 1.46 (38%) | 0.274 (34%) | 0.127 (30%) |
+| 128 | 7.88 (33%) | 1.41 (36%) | 0.270 (33%) | 0.123 (28%) |
+| 192 |  | 1.40 (35%) |  |  |
+| 256 | 7.84 (33%) | 1.39 (35%) | 0.264 (31%) | 0.120 (26%) |
+| 512 |  | 1.37 (34%) | 0.261 (30%) | 0.119 (25%) |
+| 1,024 |  | 1.35 (33%) | 0.259 (30%) | 0.118 (25%) |
+| 2,048 |  | 1.35 (33%) |  |  |
 <!-- end:s9-depthwise -->
 
 <!-- generated:s9-choice -->
-| Design point | Rule's rate (MAC/cycle per core) | MobileNetV2 latency (ms) | Depthwise share of cycles | Array-wide rate | Latency at the array-wide rate (ms) | Latency without the datapath (ms) | Speedup over no datapath |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| `edge-256` | 8 | 10.5 | 39.3% | 256 | 10.0 | 109 | 10.4x |
-| `mobile-2k` | 128 | 1.43 | 36.6% | 2,048 | 1.37 | 22.2 | 15.5x |
-| `client-16c` | 128 | 0.276 | 32.0% | 1,024 | 0.266 | 1.88 | 6.8x |
-| `workstation-32c` | 128 | 0.123 | 27.5% | 1,024 | 0.119 | 0.721 | 5.9x |
+| Design point | Configured rate (MAC/cycle per core) | Source | Rule's rate | Latency at the configured rate (ms) | Latency at the rule's rate (ms) | Depthwise share of cycles | Array-wide rate | Latency at the array-wide rate (ms) | Latency without the datapath (ms) | Speedup over no datapath |
+|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| `edge-256` | 24 | Vela 5.2.0 3x3 rate | 16 | 8.09 | 8.15 | 35.2% | 256 | 7.84 | 107 | 13.2x |
+| `mobile-2k` | 192 | Regor (Vela 5.2.0) 3x3 rate | 128 | 1.40 | 1.41 | 35.4% | 2,048 | 1.35 | 22.2 | 15.9x |
+| `client-16c` | 128 | S9 rule | 128 | 0.270 | 0.270 | 32.6% | 1,024 | 0.259 | 1.80 | 6.7x |
+| `workstation-32c` | 128 | S9 rule | 128 | 0.123 | 0.123 | 27.5% | 1,024 | 0.118 | 0.721 | 5.9x |
 <!-- end:s9-choice -->
 
 ## S10. Per-core SRAM of the cluster core
@@ -269,13 +292,13 @@ Cells give MAC utilisation and, in brackets, latency.
 <!-- generated:s10-sram -->
 | SRAM per core (KiB) | `client-16c` ResNet-50 v1.5 | `client-16c` MobileNetV2 | `workstation-32c` ResNet-50 v1.5 | `workstation-32c` MobileNetV2 |
 |---|---:|---:|---:|---:|
-| 64 | 9.6% (2.16 ms) | 4.9% (0.311 ms) | 13.6% (0.762 ms) | 5.7% (0.134 ms) |
-| 128 | 14.6% (1.42 ms) | 5.4% (0.283 ms) | 20.2% (0.516 ms) | 6.2% (0.124 ms) |
-| 256 | 22.1% (0.940 ms) | 5.6% (0.276 ms) | 25.1% (0.414 ms) | 6.2% (0.123 ms) |
-| 512 | 22.4% (0.930 ms) | 5.6% (0.275 ms) | 25.1% (0.414 ms) | 6.2% (0.123 ms) |
-| 1,024 | 22.2% (0.936 ms) | 5.6% (0.275 ms) | 25.1% (0.415 ms) | 6.2% (0.123 ms) |
-| 2,048 | 22.2% (0.936 ms) | 5.6% (0.275 ms) | 25.1% (0.415 ms) | 6.2% (0.123 ms) |
-| 4,096 | 22.2% (0.936 ms) | 5.6% (0.275 ms) | 25.1% (0.415 ms) | 6.2% (0.123 ms) |
+| 64 | 9.7% (2.14 ms) | 5.0% (0.307 ms) | 13.7% (0.761 ms) | 5.7% (0.134 ms) |
+| 128 | 15.4% (1.35 ms) | 5.5% (0.279 ms) | 20.4% (0.511 ms) | 6.2% (0.124 ms) |
+| 256 | 22.7% (0.916 ms) | 5.7% (0.270 ms) | 25.6% (0.406 ms) | 6.2% (0.123 ms) |
+| 512 | 23.2% (0.895 ms) | 5.7% (0.269 ms) | 25.8% (0.403 ms) | 6.2% (0.123 ms) |
+| 1,024 | 23.3% (0.893 ms) | 5.7% (0.269 ms) | 25.8% (0.403 ms) | 6.2% (0.123 ms) |
+| 2,048 | 23.3% (0.893 ms) | 5.7% (0.269 ms) | 25.8% (0.403 ms) | 6.2% (0.123 ms) |
+| 4,096 | 23.3% (0.893 ms) | 5.7% (0.269 ms) | 25.8% (0.403 ms) | 6.2% (0.123 ms) |
 <!-- end:s10-sram -->
 
 <!-- generated:s10-choice -->
@@ -286,3 +309,5 @@ Cells give MAC utilisation and, in brackets, latency.
 <!-- end:s10-choice -->
 
 [corstone]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-core-platform/-/blob/26.08/targets/corstone-300/platform.ld
+[vela-perf]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-vela/-/blob/5.2.0/ethosu/vela/npu_performance.py
+[regor-perf]: https://gitlab.arm.com/artificial-intelligence/ethos-u/ethos-u-vela/-/blob/5.2.0/ethosu/regor/architecture/ethosu85/ethos_u85_performance.cpp

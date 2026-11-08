@@ -156,9 +156,11 @@ so under that default mapping a GEMM whose operands the caches do not hold is DR
 every point: the SRAM sets T, and no point's SRAM holds the two slots of a tile wide enough
 to reach its ridge. A convolution on its input footprint reads an input pixel once per
 reduction panel whose kernel rows touch it, where the im2col matrix holds it once per kernel
-tap, and the activation cache lets the column tiles of a row tile share its panels; with
-them `npuperf.mapper`'s tilings, which the results use, reach the compute roof on some
-layers, which the S1 table of [results.md](results.md) counts.
+tap, and the activation cache lets the column tiles of a row tile share its panels. With
+them some of `npuperf.mapper`'s tilings, which the results use, are compute-bound: the
+busiest core computes for longer than it waits on memory, the count in the S1 table's
+compute-bound column of [results.md](results.md). On the clusters some of those layers have
+fewer work units than cores, so their MAC utilisation stays low.
 
 ## Sources
 
