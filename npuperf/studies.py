@@ -409,9 +409,26 @@ def depthwise_row(point: Point, calls: Sequence[Call],
     return row, record
 
 
+def half_sram_decode(ctx: Context, points: Sequence[Point]) -> dict[str, Totals]:
+    """INT8 decode totals of every LLM point with half its SRAM per core."""
+    plans = {point.name: plan_calls(point, DECODE, "Llama decode", 8,
+                                    sram_bytes=point.design.sram_bytes // 2)
+             for point in points if point.runs_llm}
+    planned = resolve(ctx, plans)
+    results = iter(ctx.run_all([call.flags for calls in planned.values() for call in calls]))
+    out = {}
+    for name, calls in planned.items():
+        chunk = [next(results) for _ in calls]
+        for call, result in zip(calls, chunk):
+            check_result(result, f"{name} half-SRAM decode {call.layer['name']}")
+        out[name] = totals(calls, chunk)
+    return out
+
+
 def s1_networks(ctx: Context) -> StudyOutput:
     points = design_points()
     runs = run_networks(ctx, points)
+    half = half_sram_decode(ctx, points)
     out = StudyOutput()
     rows, llm, depthwise, raw = [], [], [], []
     weights = {network: network_weight_bytes(name) for name, network in NETWORKS.items()}
@@ -453,12 +470,25 @@ def s1_networks(ctx: Context) -> StudyOutput:
         for bits in (8, 4):
             require(gbps[bits] <= peak_gbps * (1 + 1e-9),
                     f"{point.name} decode INT{bits}: {gbps[bits]} GB/s above {peak_gbps}")
+        # Mapping checks. Every candidate tiling of half the SRAM exists with the full SRAM,
+        # its caches larger, and the mapper keeps the fastest replay of its candidates; INT4
+        # halves only the weight bytes of a decode that streams them.
+        require(decode[8].cycles <= half[point.name].cycles,
+                f"{point.name} decode INT8: {decode[8].cycles} cycles, slower than "
+                f"{half[point.name].cycles} with half the SRAM")
+        require(decode[8].cycles <= 2 * decode[4].cycles,
+                f"{point.name} decode: INT4 speedup {decode[8].cycles / decode[4].cycles:.3f}"
+                f"x above the 2x of halving the weight bytes")
         llm.append([f"`{point.name}`", fmt(tps[8]), fmt(tps[4]), f"{tps[4] / tps[8]:.2f}x",
                     fmt(decode[8].dram_bytes / 1e6), pct(gbps[8] / peak_gbps),
                     fmt(prefill[8].latency_ms(point.frequency_mhz)),
                     fmt(prefill[4].latency_ms(point.frequency_mhz)),
                     pct(prefill[8].macs / (prefill[8].cycles
                                            * point.design.array_macs_per_cycle))])
+        raw.append({"point": point.name, "network": "Llama decode, half the SRAM",
+                    "weight_bits": 8, "sram_bytes": point.design.sram_bytes // 2,
+                    "cycles": half[point.name].cycles,
+                    "dram_bytes": half[point.name].dram_bytes})
         for kind, table in (("decode", decode), ("prefill", prefill)):
             for bits, t in table.items():
                 raw.append({"point": point.name, "network": f"Llama {kind}",
@@ -1090,6 +1120,9 @@ def s7_compression(ctx: Context) -> StudyOutput:
             dense[f"INT{bits}"] = speed
             raw.append({"point": point.name, "weights": f"dense INT{bits}", "cycles": cycles,
                         "tokens_per_s": speed})
+        # The S1 mapping check on the same pieces: INT4 halves only the weight bytes.
+        require(dense["INT4"] <= 2 * dense["INT8"],
+                f"S7 {point.name}: INT4 speedup {dense['INT4'] / dense['INT8']:.3f}x above 2x")
         palette = []
         for rate in S7_DECODER_RATES:
             runs = []
