@@ -5,9 +5,9 @@
 
 namespace npu {
 
-// Compare both existing filesystem identities (including hard links) and paths
-// whose final file has not been created yet. Weak canonicalization resolves
-// symlinked parent directories while retaining a nonexistent final component.
+// True when both name one file: the same filesystem object (hard links
+// included), or the same weakly canonical path, which also matches a final
+// component that does not exist yet.
 inline bool same_file_path(const std::filesystem::path& left, const std::filesystem::path& right) {
     std::error_code error;
     if (std::filesystem::equivalent(left, right, error)) return true;

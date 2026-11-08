@@ -1,5 +1,5 @@
-# Pinned SystemC release. CMakeLists.txt (FetchContent) and cmake/BuildSystemC.cmake (CI cache
-# prefix) both read these values, so the two build paths cannot drift apart.
+# Pinned SystemC release, read by CMakeLists.txt (FetchContent) and cmake/BuildSystemC.cmake
+# (CI cache prefix).
 set(NPU_SYSTEMC_VERSION 3.0.2)
 set(NPU_SYSTEMC_URL
   "https://codeload.github.com/accellera-official/systemc/tar.gz/refs/tags/${NPU_SYSTEMC_VERSION}")

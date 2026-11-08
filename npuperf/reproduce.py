@@ -8,9 +8,8 @@
 Writes results/studies/<study>.json (raw simulator records, git-ignored),
 docs/figures/<figure>.svg, and the table between ``<!-- generated:NAME -->`` and
 ``<!-- end:NAME -->`` in docs/results.md; the text around the markers is left alone.
-Every number is computed from npu-sim runs (npuperf.studies). The quick subset is the
-studies marked quick; they run the same configurations in both modes, so --check
-compares the tables a full run committed. --check writes no docs.
+The quick subset is the studies marked quick; they run the same configurations in both
+modes, so --check compares the tables a full run committed. --check writes no docs.
 """
 
 from __future__ import annotations

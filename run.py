@@ -36,7 +36,7 @@ def cmake_executable() -> str:
     binary = shutil.which("cmake")
     if binary is None:
         raise RuntimeError(
-            "CMake 3.24 or newer is required; install it as described in docs/usage.md, section 1."
+            "CMake 3.24 or newer is required; install it as described in docs/usage.md, section 1"
         )
     version = subprocess.run(
         [binary, "--version"], capture_output=True, text=True, timeout=15, check=False
@@ -44,7 +44,7 @@ def cmake_executable() -> str:
     match = re.search(r"cmake version (\d+)\.(\d+)", version.stdout)
     if version.returncode or match is None or tuple(map(int, match.groups())) < (3, 24):
         raise RuntimeError(
-            "CMake 3.24 or newer is required; check the CMake on PATH (docs/usage.md, section 1)."
+            "CMake 3.24 or newer is required; check the CMake on PATH (docs/usage.md, section 1)"
         )
     return binary
 
@@ -88,7 +88,7 @@ def find_binary(build_dir: Path) -> Path:
     try:
         return binaries.find_in(build_dir, "npu-sim")
     except binaries.BinaryNotFound as error:
-        # Still BinaryNotFound, so the exit status is 2 like every other npuperf tool.
+        # Re-raised as BinaryNotFound so the exit status is 2, as for the npuperf tools.
         hint = f"{error}; run without --skip-build to build it"
         raise binaries.BinaryNotFound(hint) from error
 

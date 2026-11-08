@@ -49,7 +49,7 @@ class SimError(RuntimeError):
 
 
 class CheckError(RuntimeError):
-    """A simulator result failed an independent check."""
+    """A simulator result failed a validation or reference check."""
 
 
 class LiveError(RuntimeError):

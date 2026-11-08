@@ -203,8 +203,8 @@ ColumnCosts encoded_column_costs(const Config& config,
 // the core's column panels as one cycle repeated once per row tile it runs, so
 // after the first pass the cacheable panels all hit when their bytes fit the
 // cache together and all miss otherwise. Its activation cache sees one row
-// tile's panels repeated once per column tile it runs, with the same outcome;
-// read bytes are exact for these reasons. Compute cycles add the column costs,
+// tile's panels repeated once per column tile it runs, with the same outcome,
+// so read bytes are exact. Compute cycles add the column costs,
 // so they equal each core's compute busy cycles.
 struct CoreEstimate {
     std::uint64_t tiles = 0, macs = 0, compute_cycles = 0;

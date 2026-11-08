@@ -4,10 +4,9 @@
 #   cmake -DNPU_SYSTEMC_PREFIX=<install dir> [-DNPU_SYSTEMC_WORK=<scratch dir>]
 #         [-DCMAKE_BUILD_TYPE=Release] [-DCMAKE_GENERATOR=Ninja] -P cmake/BuildSystemC.cmake
 #
-# Download URL, SHA256 and dependency options come from SystemCSource.cmake, the MSVC fix from
-# PatchSystemCMsvc.cmake, so the result matches what FetchContent builds. The compilers are
-# taken from CC/CXX as in any first CMake configure; the C++ standard is the project's (17),
-# which the SystemC library ABI encodes.
+# Download URL, SHA256 and dependency options come from SystemCSource.cmake and the MSVC fix
+# from PatchSystemCMsvc.cmake, as in the FetchContent build. Compilers come from CC/CXX; the
+# C++ standard is fixed at 17 because it is part of the SystemC library ABI.
 cmake_minimum_required(VERSION 3.24)
 
 if(NOT NPU_SYSTEMC_PREFIX)

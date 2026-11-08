@@ -8,7 +8,7 @@ checkout with ``python -m npuperf.<tool>``:
     analytic       closed-form traffic, busy-cycle and bound model, and a request-level replay
     mapper         per-layer tile, slot, panel-depth and cache-split search
     roofline       roofline points and plots
-    designs        the configs/ design points, their headline figures and sizing rules
+    designs        the configs/ design points, their summary figures and sizing rules
     workloads      canonical network layer tables lowered to (grouped) GEMMs
     studies        the studies of docs/results.md; reproduce regenerates its tables and figures
     svg            dependency-free SVG plotting

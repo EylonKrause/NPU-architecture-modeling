@@ -195,7 +195,7 @@ class DesignPoints(unittest.TestCase):
                     self.assertEqual(lookup(described, path), value, path)
                 self.assertEqual(described["arch"]["memory"]["model"], "axi")
 
-    def test_headline_figures_follow_the_derivation(self):
+    def test_summary_figures_follow_the_derivation(self):
         # Rounding the published figures: the brief's 512 GOP/s and "4 TOP/s", M4's 38,
         # 120 GB/s exactly, and the smallest integer rate reaching "over 800GB/s" and
         # Vela's 7.5 B/cycle (its 3.75 GB/s at 500 MHz).

@@ -283,7 +283,7 @@ class MobilePlatformTests(unittest.TestCase):
         self.assertEqual(completed.returncode, 2)
         self.assertTrue(
             completed.stderr.startswith(
-                "npu-mobile-demo: job 2 output differs from the independent scalar reference"
+                "npu-mobile-demo: job 2 output differs from the scalar reference"
             ),
             completed.stderr,
         )

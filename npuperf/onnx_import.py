@@ -94,7 +94,7 @@ def _input_spec(spec, shape, scale, zero):
 
 def import_model(model, supplied_inputs):
     """Graph-runtime document of ``model`` with ``supplied_inputs`` bound. The model is
-    parsed and checked, never executed."""
+    parsed and checked only."""
     onnx, np = dependencies()
     if model.ByteSize() > MAX_MODEL_BYTES:
         raise ValueError("ONNX model exceeds 32 MiB limit")

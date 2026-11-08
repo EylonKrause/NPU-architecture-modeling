@@ -1,5 +1,5 @@
 """Run an INT8 graph on the NPU model: Dense/MatMul/Conv2D/DepthwiseConv2D on the accelerator
-(convolutions via im2col; depthwise as one grouped call when npu-sim has --groups),
+(convolutions via im2col; depthwise as one grouped call),
 Add/ReLU/pooling/Flatten on the host. Every accelerator result is checked against a scalar
 Python reference before the next node runs.
 """
@@ -568,7 +568,7 @@ def compute_node(node, operands, binary, work, identifier, architecture, timeout
                 actual_acc[start : start + n] = result["accumulators"][row * n : (row + 1) * n]
     if actual_acc != expected_acc or actual != expected:
         raise sim.CheckError(
-            node["name"] + ": lowered simulator result disagrees with independent scalar reference"
+            node["name"] + ": lowered simulator result disagrees with the scalar reference"
         )
     output = Tensor(output_shape, actual, "int8", q["output_scale"], q["output_zero"])
     return output, {
@@ -890,7 +890,7 @@ def run_graph(document, binary, architecture=None, timeout=60):
             )
     for name, expected in golden.items():
         if live[name].data != expected:
-            raise sim.CheckError("graph output differs from independent golden: " + name)
+            raise sim.CheckError("graph output differs from expected_outputs: " + name)
     return {
         "schema_version": 1,
         "workload": document.get("name", "graph"),

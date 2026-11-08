@@ -11,9 +11,8 @@
 
 namespace npu {
 
-// Every closed set is an enum class. Strings exist only at the CLI, config-file
-// and JSON edges; EnumNames<E>::names is indexed by the enumerator value and is
-// the single spelling used for parsing and printing.
+// EnumNames<E>::names, indexed by enumerator value, is the one spelling of
+// each enum that CLI flags, config files and JSON results parse and print.
 enum class Rounding : std::uint8_t { HalfAwayFromZero, HalfToEven };
 enum class RescaleMode : std::uint8_t { Native, TosaSingle, TosaDouble };
 enum class WeightEncoding : std::uint8_t { Dense, Palette, Sparse };

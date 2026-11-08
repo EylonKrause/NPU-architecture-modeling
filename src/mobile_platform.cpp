@@ -864,8 +864,7 @@ int sc_main(int argc, char* argv[]) {
         report(platform);
         for (const auto& job : platform.jobs)
             require(job.numerical_match,
-                    "job " + std::to_string(job.id) +
-                        " output differs from the independent scalar reference");
+                    "job " + std::to_string(job.id) + " output differs from the scalar reference");
         return 0;
     } catch (const std::exception& error) {
         std::cerr << "npu-mobile-demo: " << error.what() << '\n';

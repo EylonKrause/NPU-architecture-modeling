@@ -353,7 +353,7 @@ class GraphRuntimeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "declared tensor scales"):
             self.execute(document)
 
-    def test_add_cannot_silently_broadcast_or_rescale(self):
+    def test_add_rejects_broadcast_and_rescale(self):
         document = single("Add", {"a": tensor([1], [1]), "b": tensor([1, 1], [1])}, ["a", "b"], [2])
         with self.assertRaisesRegex(ValueError, "identical shapes"):
             self.execute(document)
@@ -396,14 +396,14 @@ class GraphRuntimeTests(unittest.TestCase):
 
         with (
             patch.object(graph.sim, "run", side_effect=corrupt),
-            self.assertRaisesRegex(sim.CheckError, "independent scalar reference"),
+            self.assertRaisesRegex(sim.CheckError, "scalar reference"),
         ):
             self.execute(document)
 
-    def test_wrong_golden_is_a_failure(self):
+    def test_wrong_expected_output_fails(self):
         document = self.example("residual_mlp.json")
         document["expected_outputs"]["output"] = [0, 0, 0]
-        with self.assertRaisesRegex(sim.CheckError, "independent golden"):
+        with self.assertRaisesRegex(sim.CheckError, "expected_outputs"):
             self.execute(document)
 
     def test_declared_even_rounding_changes_halfway_cases(self):

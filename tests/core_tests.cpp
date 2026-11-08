@@ -200,7 +200,7 @@ void check_per_channel_quantization() {
     q.shifts = {0, 1, 2};
     q.relu = false;
     require(npu::requantize(-1, q, 1) == 4 && npu::requantize(-2, q, 2) == 4,
-            "independently optional per-channel shifts and negative ties");
+            "per-channel shifts without per-channel multipliers; negative ties");
     q.multipliers = {0, INT32_MAX, 2};
     q.shifts = {0, 0, 31};
     require(npu::requantize(INT32_MIN, q, 0) == 5 && npu::requantize(INT32_MAX, q, 1) == 127 &&
@@ -442,9 +442,9 @@ void check_random_edges() {
         for (const auto& tile : tiles) npu::compute_tile(p, c.quant, tile, tiled);
         require(
             tiled.accumulators == reference.accumulators && tiled.quantized == reference.quantized,
-            "independent K-major tiled/reference agreement trial " + std::to_string(trial));
+            "K-major tiles match the reference, trial " + std::to_string(trial));
         require(npu::output_hash(tiled) == npu::output_hash(reference),
-                "complete output hash agreement");
+                "tiled and reference hashes match");
         require(p.activations == original_a && p.weights == original_b && p.bias == original_bias,
                 "computing never mutates input fixtures");
     }
@@ -917,7 +917,8 @@ void check_validation() {
     npu::validate(slow);  // The minimal mapping costs eight serial cycles.
 }
 
-// AXI bursts, the DRAM timeline and the address map, from first principles.
+// next_burst against its limits, DramTimeline against an unmerged model, and
+// the address map.
 void check_memory_map() {
     npu::AxiConfig axi;
     axi.data_bytes = 16;
@@ -1254,7 +1255,7 @@ void check_cluster_plan() {
         }
     }
 
-    // A wide DRAM bound and the tie rule.
+    // auto_partition: the smaller bound wins, then fewer bytes, then n.
     npu::ClusterEstimate m, n;
     m.bound_cycles = n.bound_cycles = 10;
     m.read_bytes = n.read_bytes = 5;
@@ -1280,8 +1281,6 @@ void check_cluster_plan() {
     p.arch.memory.model = npu::MemoryModel::Serial;
     rejects_with([&] { npu::validate(p); }, "more than one core requires --memory-model axi");
 }
-
-// --------------------------------------------------- convolution and depthwise --
 
 // A deterministic draw in [low, high].
 struct Draw {

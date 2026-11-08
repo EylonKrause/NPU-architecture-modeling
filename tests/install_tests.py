@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""Install layout: the npu component holds the tools alone, and a fetched SystemC installs its
-documentation under its own directory, never under this project's."""
+"""Install layout: the npu component installs only the tools, and a fetched SystemC installs its
+documentation under its own docdir."""
 
 import argparse
 import subprocess

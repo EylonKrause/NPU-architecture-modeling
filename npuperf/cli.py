@@ -1,4 +1,4 @@
-"""Shared command-line plumbing: one parser style, one error policy.
+"""Argument parsing and error reporting shared by the npuperf tools.
 
 Exit status: 0 success; 1 the run failed (simulator error, failed check, timeout, I/O);
 2 the tool rejected its arguments or input (bad flag, invalid file, missing binary,

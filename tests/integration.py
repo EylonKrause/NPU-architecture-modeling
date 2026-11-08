@@ -329,7 +329,7 @@ def schedule(
             break
         next_events = [event[0] for event in (dma, compute) if event is not None]
         if not next_events:
-            raise AssertionError("independent timing scheduler deadlocked")
+            raise AssertionError("oracle scheduler deadlocked")
         time = min(next_events)
     return {
         "cycles": time,
@@ -484,7 +484,7 @@ class SimulatorIntegration(unittest.TestCase):
             {key: value if key == "stage" else int(value) for key, value in row.items()}
             for row in records
         ]
-        self.assertEqual(parsed, oracle["trace"], "independent schedule trace differs")
+        self.assertEqual(parsed, oracle["trace"], "trace differs from the oracle schedule")
         self.check_trace(path.read_text(), c, actual)
         return actual
 
@@ -538,7 +538,7 @@ class SimulatorIntegration(unittest.TestCase):
         )
         return result
 
-    def test_independent_arithmetic_and_edge_tiles(self):
+    def test_outputs_and_edge_tiles_match_the_oracle(self):
         cases = [
             {},
             {"m": 1, "n": 1, "k": 1, "tile_m": 9, "tile_n": 7, "seed": 0},
@@ -642,7 +642,7 @@ class SimulatorIntegration(unittest.TestCase):
                     self.assertEqual(event_trace.read_text(), cycle_trace.read_text())
                     self.check_trace(event_trace.read_text(), c, event)
 
-    def test_independent_multislot_round_robin_timing(self):
+    def test_multislot_timing_matches_the_oracle_schedule(self):
         cases = [
             {
                 "m": 4,
@@ -678,7 +678,7 @@ class SimulatorIntegration(unittest.TestCase):
                         {**DEFAULTS, **overrides}, Path(directory) / f"case{index}.csv"
                     )
 
-    def test_double_buffered_panels_match_the_independent_schedule(self):
+    def test_double_buffered_panels_match_the_oracle_schedule(self):
         cases = [
             {
                 "m": 5,
@@ -832,7 +832,7 @@ class SimulatorIntegration(unittest.TestCase):
                 self.assert_rejected(proc, f"--panel-buffers {value}")
                 self.assertIn(fragment, proc.stderr.strip().splitlines()[-1])
 
-    def test_array_dataflows_match_the_independent_schedule(self):
+    def test_array_dataflows_match_the_oracle_schedule(self):
         rng = random.Random(5150)
         cases = [
             {

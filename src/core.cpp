@@ -1874,11 +1874,9 @@ std::uint64_t tile_compute_cycles(const Config& config, const Tile& tile) {
 std::uint64_t output_hash(const Output& output) {
     require(output.accumulators.size() == output.quantized.size(),
             "hash requires equal accumulator and quantized vector sizes");
-    // FNV-1a 64: offset=14695981039346656037, prime=1099511628211.
-    // Serialize every row-major INT32 accumulator as four little-endian bytes,
-    // then every row-major INT8 output as its unsigned byte representation.
-    // There are no length prefixes, separators, native padding or host-endian
-    // dependencies. Unsigned multiplication wraps modulo 2^64 by definition.
+    // FNV-1a 64 (offset 14695981039346656037, prime 1099511628211) over each
+    // INT32 accumulator as four little-endian bytes, then each INT8 output as
+    // one byte, both row-major, with no length prefix or separator.
     std::uint64_t hash = UINT64_C(14695981039346656037);
     const auto append = [&hash](std::uint8_t byte) {
         hash ^= byte;

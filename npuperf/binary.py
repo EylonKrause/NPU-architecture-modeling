@@ -5,8 +5,8 @@ Search order for ``find_simulator(name)``:
   2. ``build_dir`` when given,
   3. ROOT/build-live (run.py), ROOT/build, then every ROOT/build/<preset>/ in name order.
 Each directory is tried with and without a ``Release/`` subdirectory (multi-config
-generators), and with the ``.exe`` suffix on Windows. Paths resolve against the repository
-root, never the current directory.
+generators), and with the ``.exe`` suffix on Windows. Relative paths resolve against the
+repository root.
 """
 
 from __future__ import annotations

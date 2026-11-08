@@ -36,7 +36,6 @@ struct Register {
 // write-only register or a write of a read-only one returns
 // TLM_COMMAND_ERROR_RESPONSE. Every access is refused while reset_n is low.
 inline constexpr std::array<Register, 8> register_map{{
-    // offset          name          access               reset   description
     {reg_m, "M", Access::read_only, gemm_m, "output rows"},
     {reg_n, "N", Access::read_only, gemm_n, "output columns"},
     {reg_k, "K", Access::read_only, gemm_k, "reduction depth"},

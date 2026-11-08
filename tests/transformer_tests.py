@@ -428,7 +428,7 @@ class TransformerTests(unittest.TestCase):
                     left, right, delta=3e-6 * max(1, abs(right)), msg=f"output[{row}][{col}]"
                 )
 
-    def test_full_independent_float_oracle_all_precisions_and_head_groups(self):
+    def test_outputs_match_the_float_oracle_in_every_precision_and_kv_grouping(self):
         for precision in ("fp32", "fp16", "bf16"):
             for kv_heads in (1, 2, 4):
                 with self.subTest(precision=precision, kv_heads=kv_heads):

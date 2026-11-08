@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Independent integer oracles for requantization, per-channel scales, INT4 weights
+"""Integer oracles for requantization, per-channel scales, INT4 weights
 and grouped GEMM.
 
 The TOSA rescale modes are checked against TFLite MultiplyByQuantizedMultiplier
@@ -322,7 +322,7 @@ class QuantizationChecks(unittest.TestCase):
         )
         self.assert_rejected(proc, "--rescale: expected native|tosa-single|tosa-double")
 
-    def test_random_independent_oracle(self):
+    def test_random_per_channel_gemms_match_the_oracle(self):
         rng = random.Random(361)
         for trial in range(18):
             m, n, k = rng.randint(1, 6), rng.randint(1, 7), rng.randint(1, 11)

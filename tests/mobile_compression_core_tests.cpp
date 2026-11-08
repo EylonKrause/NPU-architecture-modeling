@@ -21,7 +21,7 @@ void rejects(Operation operation, const char* message) {
     require(threw, message);
 }
 
-void independent_storage(npu::WeightEncoding codec) {
+void encoded_panels_only(npu::WeightEncoding codec) {
     npu::Config c;
     c.shape.m = 3;
     c.shape.n = 3;
@@ -42,48 +42,48 @@ void independent_storage(npu::WeightEncoding codec) {
     p.bias = {19, -27, 31};
     const auto expected = npu::reference(p, c.quant);
     const auto encoded = npu::encode_weights(c, p);
-    require(encoded.size() == 4, "encoding contains each column/K panel exactly once");
-    // Overwriting the expanded weights changes the scalar reference; the encoded datapath
-    // must still match the original result, so it can read only the encoded panels.
+    require(encoded.size() == 4, "one encoded panel per column panel and K panel");
+    // Overwrite the expanded weights: the reference result changes and the encoded
+    // datapath's must not.
     std::fill(p.weights.begin(), p.weights.end(), static_cast<std::int8_t>(7));
     require(npu::reference(p, c.quant).accumulators != expected.accumulators,
-            "expanded weight mutation must materially change the scalar result");
+            "overwritten weights change the reference result");
     npu::Output actual;
     const auto tiles = npu::make_tiles(c);
     for (const auto& tile : tiles) npu::compute_tile_encoded(p, c, encoded, tile, actual);
     require(actual.accumulators == expected.accumulators && actual.quantized == expected.quantized,
-            "encoded datapath must be independent of expanded reference weights");
+            "encoded datapath reads only the encoded panels");
 
     auto corrupted = encoded;
     corrupted.front().buffer.clear();
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-            "truncated encoded header must be rejected");
+            "truncated header");
     corrupted = encoded;
     corrupted.front().buffer[3] = 1;
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-            "nonzero reserved header must be rejected");
+            "nonzero reserved header byte");
     corrupted = encoded;
     corrupted.front().buffer.push_back(0);
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-            "extra payload bytes must be rejected");
+            "trailing payload bytes");
     corrupted = encoded;
     corrupted.front().buffer[2] = 7;
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-            "incorrect codec bit width must be rejected");
+            "wrong codec bit width");
     corrupted = encoded;
     ++corrupted.front().k_start;
     rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-            "misaligned encoded panel must be rejected");
+            "misaligned panel");
     corrupted = encoded;
     if (codec == npu::WeightEncoding::Sparse) {
         ++corrupted.front().retained_values;
         rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-                "sparse retained count must match bitmap and payload");
+                "retained count disagrees with the bitmap");
     } else {
         corrupted.front().buffer[0] = 0;
         corrupted.front().buffer[1] = 0;
         rejects([&] { npu::compute_tile_encoded(p, c, corrupted, tiles.front(), actual); },
-                "empty palette must be rejected");
+                "empty palette");
     }
 }
 
@@ -101,25 +101,25 @@ void complete_int8_palette() {
         p.weights.at(static_cast<std::size_t>(value + 128)) = static_cast<std::int8_t>(value);
     const auto encoded = npu::encode_weights(c, p);
     require(encoded.front().buffer[0] == 0 && encoded.front().buffer[1] == 1,
-            "256-entry LUT count must occupy two header bytes");
+            "256-entry LUT count in two header bytes");
     require(encoded.front().buffer.size() == 4 + 256 + 256,
-            "full INT8 palette must account for header, LUT and packed indices");
+            "256-value palette: 4-byte header, 256-byte LUT, 256 packed indices");
     npu::Output actual;
     npu::compute_tile_encoded(p, c, encoded, npu::make_tiles(c).front(), actual);
     require(actual.accumulators == npu::reference(p, c.quant).accumulators,
-            "all signed INT8 values must round-trip through LUT");
+            "every signed INT8 value round-trips through the LUT");
 }
 }  // namespace
 
 int main() {
     try {
-        independent_storage(npu::WeightEncoding::Palette);
-        independent_storage(npu::WeightEncoding::Sparse);
+        encoded_panels_only(npu::WeightEncoding::Palette);
+        encoded_panels_only(npu::WeightEncoding::Sparse);
         complete_int8_palette();
-        std::cout << "Compressed storage, corruption guards and full INT8 LUT verified\n";
+        std::cout << "compression core tests: all checks passed\n";
         return 0;
     } catch (const std::exception& error) {
-        std::cerr << error.what() << '\n';
+        std::cerr << "compression core tests FAILED: " << error.what() << '\n';
         return 1;
     }
 }

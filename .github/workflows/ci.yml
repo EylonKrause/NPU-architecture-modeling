@@ -89,8 +89,8 @@ jobs:
           name: junit-${{ matrix.name }}
           path: junit-${{ matrix.name }}.xml
           if-no-files-found: ignore
-      # The one-command path from the README: a fresh FetchContent build, then reuse of it.
-      - name: Launcher builds from scratch and reuses the build
+      # run.py as the README gives it: a fresh FetchContent build, then reuse of it.
+      - name: run.py, clean and incremental build
         if: runner.os != 'Linux'
         run: |
           python run.py --build-only --jobs 4
@@ -186,7 +186,7 @@ jobs:
           cmake --preset release -DNPU_FETCH_SYSTEMC=OFF
           -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
       - run: cmake --build --preset release --target npu-sim
-      - name: Committed generated tables match a fresh run
+      - name: Check generated tables against a fresh run
         run: python -m npuperf.reproduce --quick --check --build-dir build/release
 
   onnx:

@@ -1,3 +1,3 @@
-# Optional importer and independent backend validation; core simulator needs neither.
+# Optional: the npuperf ONNX importer and the onnx.ort-differential test. npu-sim needs neither.
 onnx==1.19.1
 onnxruntime==1.23.2

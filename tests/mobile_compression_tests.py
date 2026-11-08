@@ -136,7 +136,7 @@ class CompressionChecks(unittest.TestCase):
         self.assertEqual(result["executed_macs"] + result["skipped_macs"], m * n * k)
         return result
 
-    def test_every_palette_width_random_independent_oracle(self):
+    def test_every_palette_width_matches_the_oracle(self):
         rng = random.Random(122)
         for width in (1, 2, 4, 8):
             for source_bits in (4, 8):

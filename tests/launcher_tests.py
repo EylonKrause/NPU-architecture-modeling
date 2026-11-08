@@ -165,7 +165,7 @@ class LauncherTests(unittest.TestCase):
                         break
                     time.sleep(0.05)
                 else:
-                    self.fail(f"No validated inference completed: {state}")
+                    self.fail(f"no validated job completed: {state}")
                 self.assertIsNone(launcher.process.poll(), launcher.diagnostics())
             finally:
                 launcher.close()
@@ -187,7 +187,7 @@ class LauncherTests(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 self.assert_clean_failure(self.run_launcher(arguments), 2, term)
 
-    def test_missing_binary_has_actionable_error(self):
+    def test_missing_binary_points_to_a_rebuild(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-binary-") as directory:
             result = self.run_launcher(
                 ["--skip-build", "--build-dir", directory, "--port", "0", "--no-browser"]
@@ -245,7 +245,7 @@ class LauncherTests(unittest.TestCase):
         second = live.DashboardServer(("127.0.0.1", port))
         second.server_close()
 
-    def test_missing_cmake_has_setup_guidance(self):
+    def test_missing_cmake_points_to_the_usage_guide(self):
         with tempfile.TemporaryDirectory(prefix="npu-no-cmake-") as directory:
             environment = dict(os.environ, PATH="")
             result = self.run_launcher(
@@ -253,7 +253,7 @@ class LauncherTests(unittest.TestCase):
                 env=environment,
             )
             self.assert_clean_failure(result, 1, "cmake")
-            self.assertRegex(result.stderr.lower(), r"install|prerequisite|require|not found")
+            self.assertIn("docs/usage.md", result.stderr)
 
 
 if __name__ == "__main__":

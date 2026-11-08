@@ -1,8 +1,7 @@
 """Serve the live dashboard on localhost and drive npu-sim over its --live-stdio protocol.
 
-The HTTP API selects built-in workload profiles only; it never accepts a command, path,
-executable or address. GET /api/state returns the last published snapshot and never waits
-on the simulator process.
+The HTTP API accepts only the name of a built-in workload profile. GET /api/state returns
+the last published snapshot and never waits on the simulator process.
 """
 
 from __future__ import annotations

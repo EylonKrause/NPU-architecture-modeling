@@ -246,7 +246,7 @@ class ArchitectureChecks(unittest.TestCase):
         self.assertLessEqual(actual["peak_inflight_tiles"], c["buffer_slots"])
 
     def assert_schedule(self, c, actual, trace, expected):
-        """Exact cycles, waits and spans from the independent timestamp scheduler."""
+        """Cycles, waits and spans from the timestamp scheduler of integration.py."""
         blocks = expected["reduction_blocks"]
         panels = [
             [
@@ -259,7 +259,7 @@ class ArchitectureChecks(unittest.TestCase):
         oracle = schedule(panels, stores, c["buffer_slots"], panel_buffers(c))
         for key in ("cycles", "peak_inflight_tiles", "slot_wait_cycles", "panel_wait_cycles"):
             self.assertEqual(actual[key], oracle[key], key)
-        self.assertEqual(trace, oracle["trace"], "independent schedule trace differs")
+        self.assertEqual(trace, oracle["trace"], "trace differs from the oracle schedule")
 
     def test_serial_exact_integer_oracle(self):
         rng = random.Random(8921)

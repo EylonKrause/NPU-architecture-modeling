@@ -148,10 +148,7 @@ private:
 
 // One core pipeline: load, compute and store threads over the core's own
 // slots, panel buffers, weight cache and activation cache, issuing requests on
-// its memory port.
-// Each issuing thread owns its memory request as a member, so a simulation
-// stopped while a transfer is in flight releases it with the module. The
-// cluster's observer drives the core's signals.
+// its memory port. The cluster's observer drives the core's signals.
 class Core final : public sc_core::sc_module {
 public:
     Core(sc_core::sc_module_name name, std::uint64_t index, const Config& config,

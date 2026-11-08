@@ -99,7 +99,7 @@ private:
             if (reads_.empty() && writes_.empty()) sc_core::wait(ready_);
             // The load and store threads enqueue within two delta cycles of the
             // cycle they wake in, so waiting two deltas sees both queues before
-            // the choice. Delta cycles take no simulated time.
+            // the choice.
             sc_core::wait(sc_core::SC_ZERO_TIME);
             sc_core::wait(sc_core::SC_ZERO_TIME);
             if (reads_.empty() && writes_.empty()) continue;
