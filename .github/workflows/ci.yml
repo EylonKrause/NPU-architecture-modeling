@@ -150,7 +150,8 @@ jobs:
           cmake --preset coverage -DNPU_FETCH_SYSTEMC=OFF
           -DCMAKE_PREFIX_PATH="${{ steps.systemc.outputs.prefix }}"
       - run: cmake --build --preset coverage
-      - run: ctest --preset coverage
+      # The tools suites exercise the Python mapper and studies; the build-test jobs run them.
+      - run: ctest --preset coverage -LE tools
       - name: Line coverage of src/ and include/
         run: |
           mkdir -p coverage
